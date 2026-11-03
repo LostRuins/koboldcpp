@@ -75,6 +75,7 @@ set(TINYLIBWEBP_SOURCES
 add_library(tinylibwebp STATIC ${TINYLIBWEBP_SOURCES})
 target_compile_features(tinylibwebp PUBLIC c_std_11)
 target_compile_definitions(tinylibwebp PRIVATE HAVE_CONFIG_H WEBP_DISABLE_SIMD)
+target_link_libraries(tinylibwebp PUBLIC Threads::Threads)
 target_include_directories(tinylibwebp
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

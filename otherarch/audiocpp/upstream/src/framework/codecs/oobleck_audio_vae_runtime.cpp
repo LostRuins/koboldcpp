@@ -691,6 +691,10 @@ OobleckAudioVaeRuntime & OobleckAudioVaeRuntime::operator=(OobleckAudioVaeRuntim
 void OobleckAudioVaeRuntime::prepare_encode(int64_t frames) {
     const auto & weights = impl_->require_weights();
     if (!impl_->encode_graph || !impl_->encode_graph->matches(frames)) {
+        // Destroy the old allocation before building a differently sized graph.
+        // Assigning make_unique directly keeps the old graph alive until the new
+        // graph is fully constructed, temporarily doubling peak backend memory.
+        impl_->encode_graph.reset();
         impl_->encode_graph = std::make_unique<Impl::EncodeGraph>(*impl_->execution, impl_->config, impl_->options, weights, frames);
     }
 }
@@ -698,6 +702,9 @@ void OobleckAudioVaeRuntime::prepare_encode(int64_t frames) {
 void OobleckAudioVaeRuntime::prepare_decode(int64_t batch, int64_t latent_frames) {
     const auto & weights = impl_->require_weights();
     if (!impl_->decode_graph || !impl_->decode_graph->matches(batch, latent_frames)) {
+        // Edge and interior tiles commonly have different frame counts. Release
+        // the previous graph first so their large backend buffers never overlap.
+        impl_->decode_graph.reset();
         impl_->decode_graph = std::make_unique<Impl::DecodeGraph>(*impl_->execution, impl_->config, impl_->options, weights, batch, latent_frames);
     }
 }

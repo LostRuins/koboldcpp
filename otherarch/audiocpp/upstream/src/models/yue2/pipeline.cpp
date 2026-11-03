@@ -213,13 +213,22 @@ public:
         if (codec.empty()) {
             throw std::runtime_error("Yue2 semantic generation produced no codec tokens");
         }
-        ensure_nar();
+        // Semantic generation is complete. Keep only the AR backbone needed
+        // for NAR prefix-state prefill and free its generation-only VRAM first.
         ensure_ar();
+        ar->release_generation_resources();
+        ensure_nar();
         return nar->synthesize(
             semantic.plan.prefix,
             codec,
             [this](const std::vector<int32_t> & tokens) {
-                return ar->prefill_device_state(tokens);
+                ensure_ar();
+                auto state = ar->prefill_device_state(tokens);
+                // The returned state owns its K/V buffer. AR weights and the
+                // prefill graph are no longer needed while NAR solves this
+                // chunk, so release several GiB before its graph allocation.
+                ar.reset();
+                return state;
             },
             noise,
             seed,
@@ -303,6 +312,10 @@ public:
     }
 
     Yue2RunResult run(const Yue2Request & request) {
+        // A completed or failed prior request may have left the VAE weights
+        // resident. They are not used during AR/NAR and can prevent the large
+        // AR prefix-state cache from fitting on the next request.
+        vae.reset();
         if (engine::debug::trace_log_enabled()) {
             std::ostringstream settings;
             settings << "seed=" << request.seed
@@ -366,9 +379,9 @@ public:
         const auto vae_start = Clock::now();
         auto audio = decode_audio(latents, frames);
         engine::debug::timing_log_scalar("yue2.vae_decode_ms", engine::debug::elapsed_ms(vae_start, Clock::now()));
-        if (vae) {
-            vae->release_runtime_graphs();
-        }
+        // YuE2's phases are mutually exclusive. Release both the VAE graph and
+        // weights so the next request starts with enough room for its AR cache.
+        vae.reset();
         out.audio = std::move(audio);
         return out;
     }

@@ -1916,12 +1916,12 @@ bool ModelManager::ensure_compute_backend_capacity(
     };
     size_t last_eviction_count   = 0;
     auto release_eviction_states = [&]() {
-        if (eviction_states.size() == last_eviction_count) {
-            return false;
+        if (eviction_states.size() != last_eviction_count) {
+            last_eviction_count = eviction_states.size();
+            release_compute_staging_blocks(false, &eviction_states);
+            release_params_storage_blocks(false, &eviction_states);
         }
-        last_eviction_count = eviction_states.size();
-        release_compute_staging_blocks(false, &eviction_states);
-        release_params_storage_blocks(false, &eviction_states);
+        // Device memory reports can lag behind releases even when no new candidates are added.
         return fits();
     };
 

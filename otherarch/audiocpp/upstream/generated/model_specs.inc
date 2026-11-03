@@ -1842,7 +1842,7 @@
           "prefix": "language_model"
         },
         "s3gen": {
-          "source": "weights:",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(          "source": "weights:",
           "prefix": "s3gen"
         },
         "speaker": {
@@ -1861,7 +1861,7 @@
         "lm_config": "model:lm/config.json",
         "tokenizer_config": "model:lm/tokenizer_config.json",
         "tokenizer_json": "model:lm/tokenizer.json",
-)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "default_voices": "model:cpp/default/voices.json"
+        "default_voices": "model:cpp/default/voices.json"
       },
       "tensors": {
         "language_model": "model:lm/model.safetensors",
@@ -3111,7 +3111,7 @@
       },
       "files": {
         "config": "model:config.json",
-        "tokenizer_json": "model:tokenizer.json",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "tokenizer_json": "model:tokenizer.json",
         "tokenizer_config": "model:tokenizer_config.json",
         "audio_tokenizer_config": "model:audio_tokenizer/config.json",
         "audio_tokenizer_preprocessor": "model:audio_tokenizer/preprocessor_config.json"
@@ -3120,7 +3120,7 @@
         "chat_template": "model:chat_template.jinja"
       },
       "tensors": {
-)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "weights": "model:model.safetensors",
+        "weights": "model:model.safetensors",
         "audio_tokenizer_weights": "model:audio_tokenizer/model.safetensors"
       }
     }
@@ -3525,7 +3525,7 @@
       "display_name": "PocketTTS Italian BF16 GGUF",
       "format": "gguf",
       "precision": "bf16",
-      "target_directory": "PocketTTS-GGUF/italian",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(      "target_directory": "PocketTTS-GGUF/italian",
       "files": [
         "PocketTTS-GGUF/italian/pocket-tts-italian-bf16.gguf"
       ],
@@ -3537,7 +3537,7 @@
       "format": "gguf",
       "precision": "q8_0",
       "target_directory": "PocketTTS-GGUF/portuguese",
-)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(      "files": [
+      "files": [
         "PocketTTS-GGUF/portuguese/pocket-tts-portuguese-q8_0.gguf"
       ],
       "strip_prefix": "PocketTTS-GGUF/portuguese"
@@ -4004,7 +4004,7 @@
       },
       {
         "name": "speech_decoder_constant_context_mb",
-        "type": "int",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "type": "int",
         "description": "Speech decoder constant tensor context size in MiB; default 4.",
         "required": false,
         "min": 1,
@@ -4022,7 +4022,7 @@
     "recommended_package": "qwen3_tts_1_7b_base_q8_0",
     "tags": [
       "TTS",
-)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(      "Clone",
+      "Clone",
       "Design",
       "GGUF"
     ],
@@ -4224,6 +4224,134 @@
       "tensors": {
         "model_weights": "model:model.safetensors",
         "speech_tokenizer_weights": "model:speech_tokenizer/model.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"sheetsage2", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "sheetsage2",
+  "display_name": "SheetSage2",
+  "description": "SheetSage2 audio-to-symbolic transcription. This native path consumes an input recording from a self-contained GGUF and emits an ABC score artifact.",
+  "category": "audio_tools",
+  "status": "supported",
+  "tasks": [
+    "midi"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "music"
+  ],
+  "runtime": {
+    "tags": [
+      "gguf",
+      "cuda"
+    ]
+  },
+  "capabilities": {
+    "midi": [
+      "midi_artifact"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum total decoder sequence length; default follows the embedded model context. Omitted uses checkpoint max_output_seq_len.",
+        "required": false,
+        "min": 1
+      }
+    ],
+    "session": [
+      {
+        "name": "attention_tile_rows",
+        "type": "int",
+        "description": "Query rows per encoder attention tile on any backend; 0 disables tiling. Use 1024 to bound each score tensor below 512 MiB for the 300-second window.",
+        "required": false,
+        "min": 0,
+        "default": 0
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Encoder and decoder weight storage override.",
+        "required": false,
+        "default": "native",
+        "values": [
+          "native",
+          "f32",
+          "f16",
+          "bf16",
+          "q4_0",
+          "q4_k"
+        ]
+      },
+      {
+        "name": "weight_context_mb",
+        "type": "int",
+        "description": "Weight context arena size in MiB; default 1024.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "decoder_graph_arena_mb",
+        "type": "int",
+        "description": "Encoder/decoder graph arena size in MiB; default 1536.",
+        "required": false,
+        "min": 1,
+        "default": 1536
+      }
+    ],
+    "load": []
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/SheetSage2-GGUF",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "sheetsage2_orig",
+      "display_name": "SheetSage2 Original-Dtype GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "orig",
+      "target_directory": "SheetSage2-GGUF",
+      "files": [
+        "sheetsage2-orig.gguf"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "sheetsage2_orig",
+    "tags": [
+      "Music",
+      "MIDI",
+      "GGUF"
+    ],
+    "docs": []
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json"
+      },
+      "tensors": {
+        "weights": "weights:"
       }
     }
   ]
@@ -5689,7 +5817,7 @@
       "id": "voxcpm2_vocalrender_pro",
       "display_name": "VocalRender-Pro (VoxCPM2) Original-Dtype GGUF",
       "format": "gguf",
-      "precision": "orig",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(      "precision": "orig",
       "target_directory": "VoxCPM2-GGUF",
       "files": [
         "VoxCPM2-GGUF/finetune/vocalrender-pro-orig.gguf"
@@ -5704,7 +5832,7 @@
       "target_directory": "VoxCPM2",
       "files": [
         "config.json",
-)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "model.safetensors",
+        "model.safetensors",
         "tokenizer.json",
         "tokenizer_config.json"
       ],

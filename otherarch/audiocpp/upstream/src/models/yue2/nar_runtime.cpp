@@ -467,13 +467,20 @@ struct Yue2NARRuntime::Impl {
         int64_t attention_tile_rows)
         : execution(execution),
           assets(std::move(assets)),
+          weight_type(weight_type),
+          weight_context_bytes(weight_context_bytes),
           graph_arena_bytes(graph_arena_bytes),
           allow_flash_attention(allow_flash_attention),
           attention_tile_rows(attention_tile_rows) {
         if (!this->assets) {
             throw std::runtime_error("Yue2 NAR runtime requires assets");
         }
-        weights = load_nar_weights(*this->assets, execution, weight_context_bytes, weight_type);
+    }
+
+    void ensure_weights() {
+        if (!weights) {
+            weights = load_nar_weights(*assets, execution, weight_context_bytes, weight_type);
+        }
     }
 
     struct Graph {
@@ -483,10 +490,14 @@ struct Yue2NARRuntime::Impl {
             const Yue2ARDevicePrefixState & ar_state)
             : owner(&owner),
               frames(frames),
-              ar_length(ar_state.current_end) {
+              ar_length(ar_state.current_end),
+              ar_storage(ar_state.storage) {
             const auto & config = owner.assets->config.model;
             if (frames <= 0 || ar_length <= 0) {
                 throw std::runtime_error("Yue2 NAR graph requires positive shapes");
+            }
+            if (!ar_storage) {
+                throw std::runtime_error("Yue2 NAR graph requires owned AR prefix state");
             }
             if (static_cast<int64_t>(ar_state.keys.size()) != config.layers ||
                 static_cast<int64_t>(ar_state.values.size()) != config.layers) {
@@ -639,6 +650,7 @@ struct Yue2NARRuntime::Impl {
         int64_t ar_length = 0;
         int64_t nar_length = 0;
         int64_t total_length = 0;
+        std::shared_ptr<void> ar_storage;
         std::unique_ptr<ggml_context, GgmlContextDeleter> input_ctx;
         std::unique_ptr<ggml_context, GgmlContextDeleter> ctx;
         ggml_cgraph * graph = nullptr;
@@ -679,6 +691,13 @@ struct Yue2NARRuntime::Impl {
         auto state = noise;
         const auto & config = assets->config.model;
         const int64_t frames = static_cast<int64_t>(state.size()) / config.latent_dim;
+        // Prefix-state preparation has released AR by this point. Only now
+        // upload NAR weights, avoiding both model stacks occupying VRAM while
+        // the large prefix cache is allocated.
+        ensure_weights();
+        // The last chunk's graph can be hundreds of MiB. Release it before a
+        // differently-sized final chunk allocates its replacement.
+        graph.reset();
         graph = std::make_unique<Graph>(*this, frames, ar_state);
         auto & chunk_graph = *graph;
         const float dt = 1.0F / static_cast<float>(ode_steps);
@@ -729,6 +748,10 @@ struct Yue2NARRuntime::Impl {
         double prefill_ms = 0.0;
         double solve_ms = 0.0;
         for (const auto & [begin, end] : ranges) {
+            // For context-forced multi-chunk songs, unload the previous NAR
+            // weights before AR is recreated for the next prefix prefill.
+            graph.reset();
+            weights.reset();
             std::vector<int32_t> ar_tokens = prefix;
             ar_tokens.reserve(prefix.size() + static_cast<size_t>(end - begin) + 1);
             for (int64_t i = begin; i < end; ++i) {
@@ -747,6 +770,9 @@ struct Yue2NARRuntime::Impl {
             const auto solve_start = Clock::now();
             auto chunk = solve_chunk(ar_state, noise, ode_steps);
             solve_ms += engine::debug::elapsed_ms(solve_start);
+            // Drop this graph (and its retained prefix cache) before preparing
+            // another context-forced chunk.
+            graph.reset();
             out.insert(out.end(), chunk.begin(), chunk.end());
         }
         engine::debug::timing_log_scalar("yue2.nar.synthesize.prefill_state_ms", prefill_ms);
@@ -757,6 +783,8 @@ struct Yue2NARRuntime::Impl {
 
     core::ExecutionContext & execution;
     std::shared_ptr<const Yue2Assets> assets;
+    assets::TensorStorageType weight_type;
+    size_t weight_context_bytes = 0;
     size_t graph_arena_bytes = 0;
     bool allow_flash_attention = true;
     int64_t attention_tile_rows = 0;

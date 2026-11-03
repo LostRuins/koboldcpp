@@ -77,6 +77,7 @@ jobs:
           . "./kcpp_src/packaging/create_ver_file.sh"
           mkdir -p dist
           cp './koboldcpp_default.so' dist
+          cp './koboldcpp_common.so' dist
           ls
 
       - name: Install QEMU
@@ -101,6 +102,7 @@ jobs:
               pip install customtkinter pyinstaller tk jinja2 && \
               cd /src && \
               pyinstaller --noconfirm --onefile --collect-all customtkinter --collect-all jinja2 --collect-all psutil \
+              --add-data './koboldcpp_common.so:.' \
               --add-data './koboldcpp_default.so:.' \
               --add-data './kcpp_adapters:./kcpp_adapters' \
               --add-data './koboldcpp.py:.' \

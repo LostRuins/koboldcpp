@@ -168,6 +168,7 @@ struct SDContextParams {
     std::string model_args;
     bool auto_fit = true;
     std::string rpc_servers;
+    bool list_devices = false;
     std::string effective_backend;
     std::string effective_params_backend;
     bool enable_mmap            = false;
@@ -179,6 +180,7 @@ struct SDContextParams {
     bool sage_attn             = false;
     bool diffusion_conv_direct = false;
     bool vae_conv_direct       = false;
+    bool taesd_preview_only    = false;
 
     prediction_t prediction           = PREDICTION_COUNT;
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AUTO;
@@ -189,13 +191,14 @@ struct SDContextParams {
 
     float flow_shift = INFINITY;
     ArgOptions get_options();
+    bool print_devices() const;
     void build_embedding_map();
     void prepare_backend_assignments();
     bool resolve(SDMode mode);
     bool validate(SDMode mode);
     bool resolve_and_validate(SDMode mode);
     std::string to_string() const;
-    sd_ctx_params_t to_sd_ctx_params_t(bool taesd_preview);
+    sd_ctx_params_t to_sd_ctx_params_t();
 };
 
 struct SDGenerationParams {

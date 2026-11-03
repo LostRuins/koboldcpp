@@ -109,7 +109,7 @@ std::vector<int> gpttype_get_token_arr(const std::string & input, bool addbos);
 std::string gpttype_detokenize(const std::vector<int> & input, bool render_special);
 const std::vector<TopPicksData> gpttype_get_top_picks_data();
 
-bool host_rpc_server(std::string endpoint, std::string devices);
+bool host_rpc_server(std::string endpoint, std::string devices, std::string cache_dir);
 
 bool sdtype_load_model(const sd_load_model_inputs inputs);
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs);
@@ -121,9 +121,11 @@ void sdtype_abort_generation();
 
 bool whispertype_load_model(const whisper_load_model_inputs inputs);
 whisper_generation_outputs whispertype_generate(const whisper_generation_inputs inputs);
+bool whispertype_is_speech_model_loaded();
 
 bool ttstype_load_model(const tts_load_model_inputs inputs);
 tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs);
+bool ttstype_requires_reference_text(const tts_generation_inputs inputs);
 
 bool embeddingstype_load_model(const embeddings_load_model_inputs inputs);
 embeddings_generation_outputs embeddingstype_generate(const embeddings_generation_inputs inputs);

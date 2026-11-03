@@ -569,7 +569,39 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/extensions/pulid_extension.cpp
             otherarch/sdcpp/src/model_loader.cpp
             otherarch/sdcpp/src/model_loader_files.cpp
+            otherarch/sdcpp/src/model_registry.cpp
             otherarch/sdcpp/src/model/adapter/lora_ops.cpp
+            otherarch/sdcpp/src/model/integrations/anima.cpp
+            otherarch/sdcpp/src/model/integrations/boogu_image.cpp
+            otherarch/sdcpp/src/model/integrations/ernie_image.cpp
+            otherarch/sdcpp/src/model/integrations/fibo2.cpp
+            otherarch/sdcpp/src/model/integrations/flux.cpp
+            otherarch/sdcpp/src/model/integrations/flux2.cpp
+            otherarch/sdcpp/src/model/integrations/flux3.cpp
+            otherarch/sdcpp/src/model/integrations/hidream_o1.cpp
+            otherarch/sdcpp/src/model/integrations/hunyuan_video.cpp
+            otherarch/sdcpp/src/model/integrations/ideogram4.cpp
+            otherarch/sdcpp/src/model/integrations/iris.cpp
+            otherarch/sdcpp/src/model/integrations/krea2.cpp
+            otherarch/sdcpp/src/model/integrations/lens.cpp
+            otherarch/sdcpp/src/model/integrations/lingbot_video.cpp
+            otherarch/sdcpp/src/model/integrations/llada_image.cpp
+            otherarch/sdcpp/src/model/integrations/longcat.cpp
+            otherarch/sdcpp/src/model/integrations/ltxav.cpp
+            otherarch/sdcpp/src/model/integrations/mage_flow.cpp
+            otherarch/sdcpp/src/model/integrations/ming_image.cpp
+            otherarch/sdcpp/src/model/integrations/minimax_h3.cpp
+            otherarch/sdcpp/src/model/integrations/minit2i.cpp
+            otherarch/sdcpp/src/model/integrations/moss_image.cpp
+            otherarch/sdcpp/src/model/integrations/pid.cpp
+            otherarch/sdcpp/src/model/integrations/pixart.cpp
+            otherarch/sdcpp/src/model/integrations/qwen_image.cpp
+            otherarch/sdcpp/src/model/integrations/sd.cpp
+            otherarch/sdcpp/src/model/integrations/sd3.cpp
+            otherarch/sdcpp/src/model/integrations/sensenova_u1.cpp
+            otherarch/sdcpp/src/model/integrations/wan.cpp
+            otherarch/sdcpp/src/model/integrations/z_image.cpp
+            otherarch/sdcpp/src/model/integrations/z_image_l2p.cpp
             otherarch/sdcpp/src/extensions/photomaker_extension.cpp
             otherarch/sdcpp/src/runtime/sample-cache.cpp
             otherarch/sdcpp/src/runtime/tiling.cpp
@@ -628,14 +660,14 @@ target_compile_features(sdtype_adapter PUBLIC cxx_std_17) # don't bump
 target_link_libraries(sdtype_adapter PRIVATE common2 ggml tinylibwebp ${LLAMA_EXTRA_LIBS})
 set_target_properties(sdtype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_subdirectory(otherarch/audiocpp)
+
 add_library(whisper_adapter
             otherarch/whispercpp/whisper_adapter.cpp)
 target_include_directories(whisper_adapter PUBLIC . ./kcpp_src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/whispercpp ./tools ./common)
 target_compile_features(whisper_adapter PUBLIC cxx_std_17) # don't bump
-target_link_libraries(whisper_adapter PRIVATE common2 ggml ${LLAMA_EXTRA_LIBS})
+target_link_libraries(whisper_adapter PRIVATE common2 ggml audiocpp ${LLAMA_EXTRA_LIBS})
 set_target_properties(whisper_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-add_subdirectory(otherarch/audiocpp)
 
 add_library(music_adapter
             otherarch/acestep/music_adapter.cpp)
@@ -665,7 +697,7 @@ add_library(gpttype_adapter
             src/llama-model.cpp)
 target_include_directories(gpttype_adapter PUBLIC . ./kcpp_src ./src ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
 target_compile_features(gpttype_adapter PUBLIC cxx_std_17) # don't bump
-target_link_libraries(gpttype_adapter PRIVATE common2 ggml ggml_v1 ggml_v2 ggml_v3 ${LLAMA_EXTRA_LIBS})
+target_link_libraries(gpttype_adapter PRIVATE common2 ggml ggml_v1 ggml_v2 ggml_v3 tinylibwebp ${LLAMA_EXTRA_LIBS})
 set_target_properties(gpttype_adapter PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (LLAMA_CUBLAS)

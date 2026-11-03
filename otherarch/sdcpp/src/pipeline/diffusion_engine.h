@@ -34,8 +34,6 @@ namespace Wav2Vec2 {
     class Wav2Vec2ModelRunner;
 }
 
-extern const char* model_version_to_str[];
-
 static inline bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
            sd_version_is_flux2(version) ||

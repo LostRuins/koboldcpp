@@ -27,6 +27,7 @@ struct mtmd_helper_video_init_params {
     float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
     const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
     int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
+    bool no_soundtrack;          // frames only, also for models that hear the soundtrack of a video (LFM3-Omni)
     // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
 };
 
@@ -242,9 +243,8 @@ struct mtmd_helper_gen_audio_inp {
     int32_t n_past;
     enum mtmd_helper_gen_audio_out_mode out_mode; // n_past > 0 only (default: auto)
 
-    mtmd_bitmap * speaker_ref; // optional, can be NULL
+    mtmd_bitmap * speaker_ref; // optional, can be NULL: audio to clone, or a voice bitmap
     const char * lang; // optional, can be NULL
-    const char * voice; // optional, can be NULL, model-dependent
 
     int32_t  top_k;
     float    top_p;
@@ -344,7 +344,6 @@ struct gen_audio {
         mtmd_helper_gen_audio_inp data = mtmd_helper_gen_audio_inp_default();
         std::string prompt_str;
         std::string lang_str;
-        std::string voice_str;
         mtmd::bitmap_ptr speaker_ref_ptr;
 
         inp()                             = default;
@@ -355,7 +354,6 @@ struct gen_audio {
 
         void set_prompt     (std::string p)        { prompt_str = std::move(p); }
         void set_lang       (std::string l)        { lang_str   = std::move(l); }
-        void set_voice      (std::string v)        { voice_str  = std::move(v); }
         void set_speaker_ref(mtmd::bitmap_ptr bmp) { speaker_ref_ptr = std::move(bmp); }
 
         // pointers are only valid as long as *this is alive
@@ -363,7 +361,6 @@ struct gen_audio {
             data.prompt      = prompt_str.c_str();
             data.prompt_len  = prompt_str.size();
             data.lang        = lang_str.empty() ? nullptr : lang_str.c_str();
-            data.voice       = voice_str.empty() ? nullptr : voice_str.c_str();
             data.speaker_ref = speaker_ref_ptr.get();
             return &data;
         }

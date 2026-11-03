@@ -161,8 +161,8 @@ if [ "$FORCE_REBUILD" = true ]; then
     make clean
     echo "[*] Rebuilding KoboldCPP now..."
     make -j 2
-elif [ -f "$KOBOLDCPP_DIR/koboldcpp_default.so" ]; then
-    echo "[*] Found koboldcpp_default.so — skipping build step."
+elif [ -f "$KOBOLDCPP_DIR/koboldcpp_default.so" ] && [ -f "$KOBOLDCPP_DIR/koboldcpp_common.so" ]; then
+    echo "[*] Found koboldcpp_default.so and koboldcpp_common.so — skipping build step."
 else
     echo "[*] Building KoboldCPP now..."
     make -j 2

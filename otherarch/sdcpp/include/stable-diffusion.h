@@ -94,6 +94,9 @@ enum prediction_t {
     SEFI_FLOW_PRED,
     MINIT2I_FLOW_PRED,
     SENSENOVA_U1_FLOW_PRED,
+    FLUX3_FLOW_PRED,
+    H3_AV_FLOW_PRED,
+    MING_IMAGE_FLOW_PRED,
     PREDICTION_COUNT
 };
 
@@ -457,6 +460,7 @@ typedef struct {
     bool circular_x;
     bool circular_y;
     sd_image_preprocess_params_t image_preprocess;
+    const char* ref_image_args;
 } sd_vid_gen_params_t;
 
 typedef struct sd_ctx_t sd_ctx_t;
@@ -638,6 +642,11 @@ SD_API const char* sd_version(void);
 // assignment specs. Returns the number of bytes required, excluding the null
 // terminator. Passing nullptr or buffer_size 0 only queries the required size.
 SD_API size_t sd_list_devices(char* buffer, size_t buffer_size);
+
+// Register comma-separated RPC endpoints (host:port) before listing devices.
+// Repeated endpoints are safe; nullptr or an empty string is a no-op.
+// Returns false if RPC is unavailable or an endpoint has no usable devices.
+SD_API bool sd_add_rpc_servers(const char* servers);
 
 // for C API, caller needs to call free_sd_images to free the memory after use
 // This helps avoid CRT problems on Windows when memory is allocated in the library but freed in the caller, which may use a different CRT.

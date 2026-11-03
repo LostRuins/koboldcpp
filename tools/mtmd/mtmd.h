@@ -58,6 +58,13 @@ enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_COUNT, // for validation
 };
 
+// how the frames and timestamps of a video are laid out in the prompt
+enum mtmd_video_template {
+    MTMD_VIDEO_TEMPLATE_DEFAULT,   // "Video:" prefix, then a "[XmY.YYs]" timestamp every N ms
+    MTMD_VIDEO_TEMPLATE_LFM3,      // "<X.X seconds>" before every group of 2 frames
+    MTMD_VIDEO_TEMPLATE_LFM3_OMNI, // same as LFM3, then the soundtrack of each group, as an audio bitmap after its frames
+};
+
 // opaque types
 struct mtmd_context;
 struct mtmd_bitmap;
@@ -156,6 +163,20 @@ MTMD_API bool mtmd_support_audio(const mtmd_context * ctx);
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_sample_rate(const mtmd_context * ctx);
 
+// recommended video input for the current model, given the source video
+// fields set to 0 mean "no preference, use the caller's default"
+struct mtmd_video_config {
+    enum mtmd_video_template tmpl;
+    float   fps;          // frame sampling rate
+    int32_t n_frames;     // number of frames to sample
+    int32_t frame_width;  // size to resize the frames to
+    int32_t frame_height;
+};
+// src_n_frames and src_fps can be <= 0 if unknown
+MTMD_API struct mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
+                                                        int32_t src_width, int32_t src_height,
+                                                        int32_t src_n_frames, float src_fps);
+
 // get the current marker string
 MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 
@@ -166,10 +187,12 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 //     the data is in RGBRGBRGB... format
 //     note: some video-capable models (i.e. qwen-vl) can merge consecutive bitmaps
 //           into one chunk; mtmd_tokenize() handles this, but remember to set
-//           mtmd_bitmap_set_mergeable(true) for every frame
+//           mtmd_bitmap_set_mergeable(true) and mtmd_bitmap_set_is_video(true) for every frame
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
+// if bitmap is voice (see mtmd_gen_audio_get_voice()):
+//     nx = n_embd, ny = number of rows, data is F32 rows (can be empty), id is the voice name
 //
 // if data == nullptr:
 //     the bitmap is considered "empty", and will be treated as a placeholder for counting tokens
@@ -182,6 +205,7 @@ MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitma
 MTMD_API const unsigned char * mtmd_bitmap_get_data   (const mtmd_bitmap * bitmap);
 MTMD_API size_t                mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap);
 MTMD_API bool                  mtmd_bitmap_is_audio   (const mtmd_bitmap * bitmap);
+MTMD_API bool                  mtmd_bitmap_is_voice   (const mtmd_bitmap * bitmap);
 MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 // bitmap ID is optional, but useful for KV cache tracking
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
@@ -189,6 +213,10 @@ MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
 MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 // if true, this bitmap can be merged (temporal merge) with an adjacent mergeable bitmap by certain video input models
 MTMD_API void         mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable);
+// on a frame: video frames must be both mergeable and is_video
+// on a lazy bitmap: the expanded chunks are one video, wrapped by the model's video begin/end tokens
+//                   with MTMD_VIDEO_TEMPLATE_LFM3_OMNI, its audio bitmaps are the pieces of one soundtrack, in order
+MTMD_API void         mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video);
 
 // mtmd_bitmap lazy
 //
@@ -443,9 +471,17 @@ struct mtmd_gen_audio_info {
     enum mtmd_gen_audio_type type;
     int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
     const char * model_variant; // name of the weight variant, can be nullptr if not applicable
+    int32_t n_voices; // predefined voices, see mtmd_gen_audio_voice_name()
 };
 
 MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
+
+// name of the idx-th predefined voice, nullptr when idx is out of range
+MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
+
+// predefined voice with this name as a voice bitmap, to pass as speaker reference
+// returns nullptr if there is no such voice, the caller must free it
+MTMD_API mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name);
 
 
 enum mtmd_gen_process_type {

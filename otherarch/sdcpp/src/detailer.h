@@ -27,30 +27,32 @@ enum ADetailerSort {
 };
 
 struct ADetailerParams {
-    const char* prompt            = nullptr;
-    const char* negative_prompt   = nullptr;
-    int input_size                = 640;
-    float confidence              = 0.3f;
-    float nms_threshold           = 0.45f;
-    int max_detections            = 100;
-    int mask_k_largest            = 0;
-    float mask_min_ratio          = 0.f;
-    float mask_max_ratio          = 1.f;
-    int dilate_erode              = 4;
-    int x_offset                  = 0;
-    int y_offset                  = 0;
-    bool merge_masks              = false;
-    bool invert_mask              = false;
-    int mask_blur                 = 4;
-    int inpaint_padding           = 32;
-    int inpaint_width             = 512;
-    int inpaint_height            = 512;
-    float denoising_strength      = 0.4f;
-    int steps                     = 0;
-    float cfg_scale               = -1.f;
-    sample_method_t sample_method = SAMPLE_METHOD_COUNT;
-    scheduler_t scheduler         = SCHEDULER_COUNT;
-    ADetailerSort sort_by         = ADETAILER_SORT_NONE;
+    const char* prompt             = nullptr;
+    const char* negative_prompt    = nullptr;
+    int input_size                 = 640;
+    float confidence               = 0.3f;
+    float nms_threshold            = 0.45f;
+    int max_detections             = 100;
+    int mask_k_largest             = 0;
+    bool mask_filter_by_confidence = false;
+    float mask_min_ratio           = 0.f;
+    float mask_max_ratio           = 1.f;
+    int dilate_erode               = 4;
+    int x_offset                   = 0;
+    int y_offset                   = 0;
+    bool merge_masks               = false;
+    bool invert_mask               = false;
+    int mask_blur                  = 4;
+    int inpaint_padding            = 32;
+    bool inpaint_only_masked       = true;
+    int inpaint_width              = 512;
+    int inpaint_height             = 512;
+    float denoising_strength       = 0.4f;
+    int steps                      = 0;
+    float cfg_scale                = -1.f;
+    sample_method_t sample_method  = SAMPLE_METHOD_COUNT;
+    scheduler_t scheduler          = SCHEDULER_COUNT;
+    ADetailerSort sort_by          = ADETAILER_SORT_NONE;
 };
 
 struct ADetailerGGML {

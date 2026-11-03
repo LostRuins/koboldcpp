@@ -295,6 +295,10 @@ bool add_rpc_devices(const std::string& servers) {
     }
     ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
     if (!rpc_reg) {
+        ggml_backend_load_all();
+        rpc_reg = ggml_backend_reg_by_name("RPC");
+    }
+    if (!rpc_reg) {
         LOG_ERROR("RPC backend not found, cannot add RPC servers");
         return false;
     }
@@ -307,10 +311,17 @@ bool add_rpc_devices(const std::string& servers) {
     for (const auto& server : rpc_servers) {
         LOG_INFO("Adding RPC server: %s", server.c_str());
         auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
-        // no return value to check for success but should print errors from the RPC backend if it fails to add the server
+        if (!reg) {
+            LOG_ERROR("failed to add RPC server: %s", server.c_str());
+            return false;
+        }
         ggml_backend_register(reg);
     }
     return true;
+}
+
+bool sd_add_rpc_servers(const char* servers) {
+    return add_rpc_devices(servers ? servers : "");
 }
 
 static void ggml_backend_load_all_once() {
