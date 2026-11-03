@@ -120,9 +120,11 @@ void sdtype_abort_generation();
 
 bool whispertype_load_model(const whisper_load_model_inputs inputs);
 whisper_generation_outputs whispertype_generate(const whisper_generation_inputs inputs);
+bool whispertype_is_speech_model_loaded();
 
 bool ttstype_load_model(const tts_load_model_inputs inputs);
 tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs);
+bool ttstype_requires_reference_text(const tts_generation_inputs inputs);
 
 bool embeddingstype_load_model(const embeddings_load_model_inputs inputs);
 embeddings_generation_outputs embeddingstype_generate(const embeddings_generation_inputs inputs);

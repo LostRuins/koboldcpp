@@ -239,6 +239,10 @@ extern "C"
     {
         return whispertype_generate(inputs);
     }
+    bool whisper_is_speech_model_loaded()
+    {
+        return whispertype_is_speech_model_loaded();
+    }
 
     bool tts_load_model(const tts_load_model_inputs inputs)
     {
@@ -247,6 +251,10 @@ extern "C"
     tts_generation_outputs tts_generate(const tts_generation_inputs inputs)
     {
         return ttstype_generate(inputs);
+    }
+    bool tts_requires_reference_text(const tts_generation_inputs inputs)
+    {
+        return ttstype_requires_reference_text(inputs);
     }
 
     bool embeddings_load_model(const embeddings_load_model_inputs inputs)

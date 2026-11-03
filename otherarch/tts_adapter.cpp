@@ -17,6 +17,7 @@
 #include <regex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "src/llama-context.h"
@@ -56,6 +57,7 @@
 #include "coreml_code_predictor_stub.cpp"
 
 #include "engine/framework/io/json.h"
+#include "engine/framework/runtime/options.h"
 
 // Audio.cpp selective integration. The sync script generates this include
 // list from the model slices present in the vendored tree; the adapter below
@@ -1436,6 +1438,91 @@ static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inp
     }
 }
 
+static const std::map<std::string, std::string> & kitten_tts_voice_aliases()
+{
+    static const std::map<std::string, std::string> aliases = {
+        {"kobo", "Frank"},
+        {"cheery", "Rosie"},
+        {"sleepy", "Willow"},
+        {"shouty", "Otis"},
+        {"chatty", "Iris"},
+    };
+    return aliases;
+}
+
+static void parse_audiocpp_request_options(
+    const tts_generation_inputs & inputs,
+    std::unordered_map<std::string, std::string> & options,
+    std::string * requested_voice = nullptr)
+{
+    const std::string json = inputs.audiocpp_extra_params_json != nullptr
+        ? inputs.audiocpp_extra_params_json : "";
+    if (json.empty()) {
+        return;
+    }
+    const auto parsed = engine::io::json::parse(json);
+    if (!parsed.is_object()) {
+        throw std::runtime_error("Audio.cpp request options must be a JSON object");
+    }
+    for (const auto & [key, value] : parsed.as_object()) {
+        if (key == "__kcpp_voice") {
+            if (requested_voice != nullptr && value.is_string()) {
+                *requested_voice = value.as_string();
+            }
+        } else if (value.is_string()) {
+            options[key] = value.as_string();
+        } else if (value.is_number()) {
+            options[key] = engine::io::json::stringify_number(value.as_number());
+        } else if (value.is_bool()) {
+            options[key] = value.as_bool() ? "true" : "false";
+        }
+    }
+}
+
+static bool audiocpp_requires_reference_text(const tts_generation_inputs & inputs)
+{
+    if (!is_audiocpp_tts || inputs.reference_audio == nullptr || inputs.reference_audio[0] == '\0' ||
+        (inputs.reference_text != nullptr && inputs.reference_text[0] != '\0') ||
+        (inputs.custom_speaker_text != nullptr && inputs.custom_speaker_text[0] != '\0')) {
+        return false;
+    }
+
+    std::unordered_map<std::string, std::string> options;
+    std::string requested_voice;
+    parse_audiocpp_request_options(inputs, options, &requested_voice);
+
+    if (audiocpp_tts_family == "kitten_tts2") {
+        std::transform(requested_voice.begin(), requested_voice.end(), requested_voice.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+        if (kitten_tts_voice_aliases().find(requested_voice) != kitten_tts_voice_aliases().end()) {
+            return false;
+        }
+    }
+    if (audiocpp_tts_family == "breeze_tts" || audiocpp_tts_family == "fish_audio" ||
+        audiocpp_tts_family == "kitten_tts2" || audiocpp_tts_family == "omnivoice") {
+        return true;
+    }
+    if (audiocpp_tts_family == "cosyvoice3") {
+        const auto mode = options.find("template_name");
+        return mode != options.end() && mode->second == "zero_shot";
+    }
+    if (audiocpp_tts_family == "qwen3_tts") {
+        const auto mode = options.find("x_vector_only_mode");
+        return mode != options.end() &&
+            !engine::runtime::parse_bool_option(mode->second, "x_vector_only_mode");
+    }
+    return false;
+}
+
+bool ttstype_requires_reference_text(const tts_generation_inputs inputs)
+{
+    try {
+        return audiocpp_requires_reference_text(inputs);
+    } catch (...) {
+        return false;
+    }
+}
+
 static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inputs inputs)
 {
     tts_generation_outputs output;
@@ -1474,29 +1561,7 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
         std::string audiocpp_requested_voice;
         bool audiocpp_named_voice_alias = false;
         std::string audiocpp_applied_instruction;
-        const std::string audiocpp_extra_params_json = inputs.audiocpp_extra_params_json != nullptr
-            ? inputs.audiocpp_extra_params_json : "";
-        if (!audiocpp_extra_params_json.empty()) {
-            const auto options = engine::io::json::parse(audiocpp_extra_params_json);
-            if (!options.is_object()) {
-                throw std::runtime_error("Audio.cpp request options must be a JSON object");
-            }
-            for (const auto & [key, value] : options.as_object()) {
-                if (key == "__kcpp_voice") {
-                    if (value.is_string()) {
-                        audiocpp_requested_voice = value.as_string();
-                    }
-                    continue;
-                }
-                if (value.is_string()) {
-                    request.options[key] = value.as_string();
-                } else if (value.is_number()) {
-                    request.options[key] = engine::io::json::stringify_number(value.as_number());
-                } else if (value.is_bool()) {
-                    request.options[key] = value.as_bool() ? "true" : "false";
-                }
-            }
-        }
+        parse_audiocpp_request_options(inputs, request.options, &audiocpp_requested_voice);
 
         if (audiocpp_tts_family == "fish_audio") {
             std::string instruction = inputs.speaker_instruction != nullptr
@@ -1682,21 +1747,14 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
             }
         } else if (audiocpp_tts_family == "kitten_tts2") {
             std::string voice = std::move(audiocpp_requested_voice);
-            static const std::map<std::string, std::string> kcpp_voice_aliases = {
-                {"kobo", "Frank"},
-                {"cheery", "Rosie"},
-                {"sleepy", "Willow"},
-                {"shouty", "Otis"},
-                {"chatty", "Iris"},
-            };
             static const std::vector<std::string> generic_voice_aliases = {
                 "", "alloy", "onyx", "echo", "nova", "shimmer", "random", "instruct",
             };
             std::string normalized_voice = voice;
             std::transform(normalized_voice.begin(), normalized_voice.end(), normalized_voice.begin(),
                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-            if (const auto alias = kcpp_voice_aliases.find(normalized_voice);
-                alias != kcpp_voice_aliases.end()) {
+            const auto & aliases = kitten_tts_voice_aliases();
+            if (const auto alias = aliases.find(normalized_voice); alias != aliases.end()) {
                 voice = alias->second;
                 // These names also exist in KoboldCpp's embedded Qwen voice
                 // bank. For Kitten they select prepared voices, not the
@@ -1743,17 +1801,9 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                 if (reference_text.empty() && inputs.custom_speaker_text != nullptr) {
                     reference_text = inputs.custom_speaker_text;
                 }
-                if (audiocpp_tts_family == "breeze_tts" && reference_text.empty()) {
+                if (reference_text.empty() && audiocpp_requires_reference_text(inputs)) {
                     throw std::runtime_error(
-                        "BreezeTTS 2 voice cloning requires the exact reference transcript in reference_text");
-                }
-                if (audiocpp_tts_family == "fish_audio" && reference_text.empty()) {
-                    reference_text = "but that is what it is"; //turns out random text here works fine too
-                    // throw std::runtime_error("Fish Audio voice cloning requires reference_text");
-                }
-                if (audiocpp_tts_family == "kitten_tts2" && reference_text.empty()) {
-                    reference_text = "that's right, let's cheat! You see that pelican? You're running, right? And on your other shoe, you have a lemon. What are you doing? I'm squeezing lemon into your wound! Sweet baby!"; //turns out random text here works fine too
-                    // throw std::runtime_error("Kitten TTS 2 voice cloning requires reference_text");
+                        audiocpp_tts_family + " voice cloning requires reference_text");
                 }
                 if (audiocpp_tts_family == "cosyvoice3") {
                     const auto template_option = request.options.find("template_name");
@@ -1765,10 +1815,6 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
                         // cloning template instead.
                         request.options["template_name"] = reference_text.empty()
                             ? "cross_lingual" : "zero_shot";
-                    } else if (template_option->second == "zero_shot" && reference_text.empty()) {
-                        throw std::runtime_error(
-                            "CosyVoice3 zero_shot requires the reference audio transcript in reference_text; "
-                            "omit template_name or use cross_lingual for transcript-free cloning");
                     }
                 }
                 if (audiocpp_tts_family == "qwen3_tts" && reference_text.empty() &&

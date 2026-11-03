@@ -38,6 +38,11 @@ static std::unique_ptr<engine::runtime::IVoiceTaskSession> sheetsage2_session;
 
 int total_transcribe_gens = 0;
 
+bool whispertype_is_speech_model_loaded()
+{
+    return whisper_ctx != nullptr && !is_audiocpp_sheetsage2;
+}
+
 
 static bool read_audio(const std::string & b64data, int sample_rate, std::vector<float>& pcmf32)
 {
