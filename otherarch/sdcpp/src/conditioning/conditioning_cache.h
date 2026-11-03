@@ -48,7 +48,8 @@ class ConditioningCache {
             return std::tie(p.text, p.clip_skip, p.width, p.height, p.zero_out_masked,
                             r.pass_to_vlm, r.pass_to_dit, r.ref_index_mode,
                             r.force_ref_timestep_zero, r.resize_before_vae, r.vae_input_max_pixels,
-                            r.vlm_resize_mode, r.vlm_min_size, r.vlm_max_size, r.resize_vae_to_target);
+                            r.vlm_resize_mode, r.vlm_min_size, r.vlm_max_size, r.resize_vae_to_target,
+                            r.ref_image_size);
         };
         if (fields(a) != fields(b) ||
             (a.ref_images == nullptr) != (b.ref_images == nullptr) ||
