@@ -11839,17 +11839,21 @@ Current version indicated by LITEVER below.
 			let old_notes = personal_notes;
 			let old_newlineaftermemory = newlineaftermemory;
 
-			let old_extrastopseq = localsettings.extrastopseq;
-			let old_regexreplace_data = localsettings.regexreplace_data;
-			let old_tokenbans = localsettings.tokenbans;
-			let old_placeholder_tags_data = localsettings.placeholder_tags_data;
-			let old_logitbiasdict = localsettings.logitbiasdict;
-			let old_thinking_action = localsettings.thinking_action;
-			let old_start_thinking_tag = localsettings.start_thinking_tag;
-			let old_stop_thinking_tag = localsettings.stop_thinking_tag;
-			let old_think_injected = localsettings.think_injected;
-			let old_strip_thinking_mode = localsettings.strip_thinking_mode;
-			let old_hide_think_stream = localsettings.hide_think_stream;
+			const copy_token_regex_settings = function(target, source) {
+				if(source.extrastopseq !== undefined) target.extrastopseq = source.extrastopseq;
+				if(source.regexreplace_data !== undefined) target.regexreplace_data = source.regexreplace_data;
+				if(source.tokenbans !== undefined) target.tokenbans = source.tokenbans;
+				if(source.placeholder_tags_data !== undefined) target.placeholder_tags_data = source.placeholder_tags_data;
+				if(source.logitbiasdict !== undefined) target.logitbiasdict = source.logitbiasdict;
+				if(source.thinking_action !== undefined) target.thinking_action = source.thinking_action;
+				if(source.start_thinking_tag !== undefined) target.start_thinking_tag = source.start_thinking_tag;
+				if(source.stop_thinking_tag !== undefined) target.stop_thinking_tag = source.stop_thinking_tag;
+				if(source.think_injected !== undefined) target.think_injected = source.think_injected;
+				if(source.strip_thinking_mode !== undefined) target.strip_thinking_mode = source.strip_thinking_mode;
+				if(source.hide_think_stream !== undefined) target.hide_think_stream = source.hide_think_stream;
+			};
+			const old_token_regex_settings = {};
+			copy_token_regex_settings(old_token_regex_settings, localsettings);
 
 			//determine if oldui file or newui file format
 			restart_new_game(false);
@@ -12069,19 +12073,14 @@ Current version indicated by LITEVER below.
 						}
 
 					}
+					else if(loadstopseq)
+					{
+						// Token and regex settings can be loaded independently of general settings.
+						copy_token_regex_settings(localsettings, storyobj.savedsettings);
+					}
 					if(!loadstopseq)
 					{
-						localsettings.extrastopseq = old_extrastopseq;
-						localsettings.regexreplace_data = old_regexreplace_data;
-						localsettings.tokenbans = old_tokenbans;
-						localsettings.placeholder_tags_data = old_placeholder_tags_data;
-						localsettings.logitbiasdict = old_logitbiasdict;
-						localsettings.thinking_action = old_thinking_action;
-						localsettings.start_thinking_tag = old_start_thinking_tag;
-						localsettings.stop_thinking_tag = old_stop_thinking_tag;
-						localsettings.think_injected = old_think_injected;
-						localsettings.strip_thinking_mode = old_strip_thinking_mode;
-						localsettings.hide_think_stream = old_hide_think_stream;
+						copy_token_regex_settings(localsettings, old_token_regex_settings);
 					}
 
 					restore_protected_fields(localsettings,tmp_essentials);
