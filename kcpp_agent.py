@@ -2608,6 +2608,7 @@ def run_agent(
     max_agent_steps: int = MAX_AGENT_STEPS,
     load_session: Path | None = None,
     reasoning_effort: str | None = None,
+    request_timeout_override: int | None = None,
 ) -> None:
     global MAX_TOOL_RESULT_CHARS
 
@@ -2625,7 +2626,11 @@ def run_agent(
         confirmation_mode = session["confirmation_mode"]
         tool_confirmation = session["tool_confirmation"]
         no_color = session["no_color"]
-        request_timeout = session["request_timeout"]
+        request_timeout = (
+            session["request_timeout"]
+            if request_timeout_override is None
+            else request_timeout_override
+        )
         MAX_TOOL_RESULT_CHARS = session["max_tool_result_chars"]
         configure_colors(disabled=no_color)
     else:
@@ -3493,6 +3498,10 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
     args = parse_args()
+    request_timeout_explicit = any(
+        value == "--request-timeout" or value.startswith("--request-timeout=")
+        for value in sys.argv[1:]
+    )
     MAX_TOOL_RESULT_CHARS = args.max_tool_result_chars
     configure_colors(disabled=args.no_color)
     try:
@@ -3510,6 +3519,9 @@ def main() -> None:
             request_timeout=args.request_timeout,
             no_color=args.no_color,
             load_session=args.load_session,
+            request_timeout_override=(
+                args.request_timeout if request_timeout_explicit else None
+            ),
         )
     except KeyboardInterrupt:
         print("\nExiting.")
