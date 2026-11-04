@@ -2581,7 +2581,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     {
         for (int i = 0; i < generated_num_results; i++)
         {
-            sd_image_t& result_image = img_result->items[i].image;
+            sd_image_t& result_image = is_vid_model ? vid_result->frames[i] : img_result->items[i].image;
             if (result_image.data == NULL) {
                 continue;
             }
@@ -2598,8 +2598,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             jsoninfo["all_prompts"][i] = params.prompt;
             jsoninfo["all_negative_prompts"][i] = params.negative_prompt;
         }
-        free_sd_image_generation_result(img_result);
-        img_result = nullptr;
+        if (is_vid_model) {
+            free_sd_video_generation_result(vid_result);
+            vid_result = nullptr;
+        } else {
+            free_sd_image_generation_result(img_result);
+            img_result = nullptr;
+        }
     }
 
     if (input_audio.data) {

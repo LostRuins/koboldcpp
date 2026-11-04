@@ -562,6 +562,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/segment_weight_pipeline.cpp
             otherarch/sdcpp/examples/cli/image_metadata.cpp
             otherarch/sdcpp/src/detailer.cpp
+            otherarch/sdcpp/src/generation_info.cpp
             otherarch/sdcpp/src/model_manager.cpp
             otherarch/sdcpp/src/model_manager_files.cpp
             otherarch/sdcpp/src/model_manager.h
