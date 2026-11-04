@@ -486,8 +486,8 @@ namespace Qwen {
             }
             QwenImage21PrefixCache cache;
             if (prefix_cache_enabled && !prefix_cache_disabled && extra != nullptr && extra->prefix_id != 0 && layout.prefix_length > 0) {
-                cache.name = "qwen_image_2_1.prefix." + std::to_string(extra->prefix_id) +
-                             ".circular." + std::to_string(circular_x_enabled) + std::to_string(circular_y_enabled);
+                cache.name          = "qwen_image_2_1.prefix." + std::to_string(extra->prefix_id) +
+                                      ".circular." + std::to_string(circular_x_enabled) + std::to_string(circular_y_enabled);
                 cache.prefix_length = layout.prefix_length;
                 if (prefix_cache_type != GGML_TYPE_COUNT) {
                     cache.type = prefix_cache_type;
@@ -536,7 +536,7 @@ namespace Qwen {
                 auto build = [&]() {
                     auto graph = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE * 2);
                     auto pe    = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2,
-                                                                layout.positions.size() - (cached ? layout.prefix_length : 0));
+                                                    layout.positions.size() - (cached ? layout.prefix_length : 0));
                     set_backend_tensor_data(pe, pe_data.data());
                     std::vector<ggml_tensor*> masks, ref_inputs;
                     for (const auto& mask : mask_data) {
@@ -549,7 +549,7 @@ namespace Qwen {
                     }
                     auto ctx = get_context(graph);
                     auto out = model.forward(&ctx, make_input(x), make_input(*inputs.timesteps), cached ? nullptr : make_input(context),
-                                                         ref_inputs, pe, layout, masks, checked_cache);
+                                             ref_inputs, pe, layout, masks, checked_cache);
                     if (!flash_attn_used) {
                         return static_cast<ggml_cgraph*>(nullptr);
                     }

@@ -15,8 +15,9 @@ enum class VAETemporalDirection {
 };
 
 struct VAETemporalTilingConfig {
-    int tile_frames = 1;
-    int overlap     = 0;
+    int tile_frames   = 1;
+    int overlap       = 0;
+    int decode_frames = 1;
 };
 
 struct VAETemporalTile {
@@ -43,7 +44,8 @@ inline VAETemporalTilingConfig resolve_vae_temporal_tiling_config(const sd_tilin
     config.overlap     = std::max(0, default_overlap);
 
     for (const auto& [key, value] : parse_key_value_args(params.extra_tiling_args, "VAE extra tiling arg")) {
-        if (key != "temporal_tile_frames" && key != "temporal_tile_size" && key != "temporal_tile_overlap") {
+        if (key != "temporal_tile_frames" && key != "temporal_tile_size" && key != "temporal_tile_overlap" &&
+            key != "temporal_decode_frames") {
             continue;
         }
 
@@ -52,6 +54,8 @@ inline VAETemporalTilingConfig resolve_vae_temporal_tiling_config(const sd_tilin
             LOG_WARN("ignoring invalid VAE extra tiling arg '%s=%s'", key.c_str(), value.c_str());
         } else if (key == "temporal_tile_overlap") {
             config.overlap = std::max(0, parsed);
+        } else if (key == "temporal_decode_frames") {
+            config.decode_frames = std::max(1, parsed);
         } else {
             config.tile_frames = std::max(1, parsed);
         }

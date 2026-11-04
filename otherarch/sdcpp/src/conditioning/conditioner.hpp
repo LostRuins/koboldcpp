@@ -141,6 +141,7 @@ struct ConditionerParams {
 };
 
 struct Conditioner {
+    virtual int resolve_clip_skip(int) const { return 0; }
     virtual ~Conditioner() = default;
 
 public:
@@ -172,6 +173,10 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
     std::vector<uint8_t> token_embed_custom;
     std::vector<uint8_t> token_embed_custom2;
     std::map<std::string, std::pair<int, int>> embedding_pos_map;
+
+    int resolve_clip_skip(int value) const override {
+        return value > 0 ? value : ((sd_version_is_sd2(version) || sd_version_is_sdxl(version)) ? 2 : 1);
+    }
 
     FrozenCLIPEmbedderWithCustomWords(ggml_backend_t backend,
                                       const String2TensorStorage& tensor_storage_map,
@@ -456,10 +461,6 @@ struct FrozenCLIPEmbedderWithCustomWords : public Conditioner {
         sd::Tensor<float> hidden_states;  // [n_token, hidden_size] or [n_token, hidden_size + hidden_size2]
         sd::Tensor<float> pooled;
 
-        if (clip_skip <= 0) {
-            clip_skip = (sd_version_is_sd2(version) || sd_version_is_sdxl(version)) ? 2 : 1;
-        }
-
         size_t chunk_len   = 77;
         size_t chunk_count = tokens.size() / chunk_len;
         for (int chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
@@ -650,6 +651,8 @@ struct SD3CLIPEmbedder : public Conditioner {
     std::shared_ptr<CLIPTextModelRunner> clip_l;
     std::shared_ptr<CLIPTextModelRunner> clip_g;
     std::shared_ptr<T5Runner> t5;
+
+    int resolve_clip_skip(int value) const override { return value > 0 ? value : 2; }
 
     SD3CLIPEmbedder(ggml_backend_t backend,
                     const String2TensorStorage& tensor_storage_map      = {},
@@ -898,10 +901,6 @@ struct SD3CLIPEmbedder : public Conditioner {
         auto& t5_tokens      = token_and_weights[2].first;
         auto& t5_weights     = token_and_weights[2].second;
 
-        if (clip_skip <= 0) {
-            clip_skip = 2;
-        }
-
         size_t chunk_len = 77;
         int64_t t0       = ggml_time_ms();
         sd::Tensor<float> hidden_states;
@@ -1096,6 +1095,8 @@ struct FluxCLIPEmbedder : public Conditioner {
     std::shared_ptr<CLIPTextModelRunner> clip_l;
     std::shared_ptr<T5Runner> t5;
     size_t chunk_len = 256;
+
+    int resolve_clip_skip(int value) const override { return value > 0 ? value : 2; }
 
     FluxCLIPEmbedder(ggml_backend_t backend,
                      const String2TensorStorage& tensor_storage_map      = {},
@@ -1292,10 +1293,6 @@ struct FluxCLIPEmbedder : public Conditioner {
         auto& clip_l_weights = token_and_weights[0].second;
         auto& t5_tokens      = token_and_weights[1].first;
         auto& t5_weights     = token_and_weights[1].second;
-
-        if (clip_skip <= 0) {
-            clip_skip = 2;
-        }
 
         int64_t t0 = ggml_time_ms();
         sd::Tensor<float> hidden_states;  // [N, n_token, 4096]
@@ -1833,11 +1830,11 @@ struct AnimaConditioner : public Conditioner {
                      std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
                      const TokenizerConfig& tokenizers                   = {}) {
         llm            = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::QWEN3,
-                                               backend,
-                                               tensor_storage_map,
-                                               "text_encoders.llm",
-                                               false,
-                                               weight_manager);
+                                                          backend,
+                                                          tensor_storage_map,
+                                                          "text_encoders.llm",
+                                                          false,
+                                                          weight_manager);
         qwen_tokenizer = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, 151643);
         if (!qwen_tokenizer) {
             qwen_tokenizer = std::make_shared<Qwen2Tokenizer>();
@@ -2026,11 +2023,11 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::QWEN3_5;
         }
         llm        = std::make_shared<LLM::LLMRunner>(arch,
-                                               backend,
-                                               tensor_storage_map,
-                                               "text_encoders.llm",
-                                               enable_vision,
-                                               weight_manager);
+                                                      backend,
+                                                      tensor_storage_map,
+                                                      "text_encoders.llm",
+                                                      enable_vision,
+                                                      weight_manager);
         int pad_id = 151643;
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
             pad_id = 11;
@@ -3312,7 +3309,7 @@ struct LLMEmbedder : public Conditioner {
             for (const auto& [index, image_embed] : image_embeds) {
                 int64_t begin = std::max<int64_t>(0, index - 1);
                 int64_t end   = std::min<int64_t>(static_cast<int64_t>(tags.size()),
-                                                index + image_embed.shape()[1] + 1);
+                                                  index + image_embed.shape()[1] + 1);
                 std::fill(tags.begin() + begin, tags.begin() + end, 0);
             }
             int64_t tag_count    = static_cast<int64_t>(tags.size());
@@ -3492,9 +3489,9 @@ struct LLaDAImageEmbedder : public Conditioner {
         // <|endoftext|> doubles as the pad token in LLaDA2's tokenizer.json.
         tokenizer       = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, 156892);
         query_former    = std::make_shared<LLaDAImageTE::QueryFormerRunner>(backend,
-                                                                         tensor_storage_map,
-                                                                         query_former_prefix,
-                                                                         weight_manager);
+                                                                            tensor_storage_map,
+                                                                            query_former_prefix,
+                                                                            weight_manager);
         text_projection = std::make_shared<LLaDAImageTE::TextProjectionRunner>(backend,
                                                                                tensor_storage_map,
                                                                                text_projection_prefix,
@@ -3696,20 +3693,20 @@ struct LTXAVEmbedder : public Conditioner {
         LLM::LLMArch arch = detect_gemma_arch(tensor_storage_map, llm_prefix);
         LOG_INFO("ltxav text encoder: %s", arch == LLM::LLMArch::GEMMA4_12B ? "gemma 4" : "gemma 3");
         llm       = std::make_shared<LLM::LLMRunner>(arch,
-                                               backend,
-                                               tensor_storage_map,
-                                               llm_prefix,
-                                               false,
-                                               weight_manager);
+                                                     backend,
+                                                     tensor_storage_map,
+                                                     llm_prefix,
+                                                     false,
+                                                     weight_manager);
         tokenizer = tokenizers.create(TokenizerConfig::MAIN, llm->config.vocab_size, 0, true);
         if (!tokenizer) {
             tokenizer = std::make_shared<GemmaTokenizer>();
         }
         dual_projection = tensor_storage_map.find(projector_prefix + ".video_aggregate_embed.weight") != tensor_storage_map.end();
         projector       = std::make_shared<LTXAVTextProjectionRunner>(backend,
-                                                                tensor_storage_map,
-                                                                projector_prefix,
-                                                                weight_manager);
+                                                                      tensor_storage_map,
+                                                                      projector_prefix,
+                                                                      weight_manager);
     }
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {

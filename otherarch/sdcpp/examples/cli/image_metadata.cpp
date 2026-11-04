@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <codecvt>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <locale>
 #include <map>
 #include <set>
 #include <sstream>
@@ -391,8 +393,39 @@ namespace {
                                json& report,
                                std::string& error);
 
+    json parse_exif_user_comment(const uint8_t* data, size_t size) {
+        if (size >= 8 && memcmp(data, "ASCII\0\0\0", 8) == 0) {
+            return trim_trailing_nuls(bytes_to_string(data + 8, data + size));
+        }
+        if (size < 8 || memcmp(data, "UNICODE\0", 8) != 0) {
+            return json{{"raw_hex_preview", hex_preview(data, size)}};
+        }
+        size_t offset = 8;
+        // WebUI's piexif writer uses big-endian UTF-16 without a BOM.
+        bool little_endian = false;
+        if (size >= 10 && ((data[8] == 0xfe && data[9] == 0xff) || (data[8] == 0xff && data[9] == 0xfe))) {
+            little_endian = data[8] == 0xff;
+            offset        = 10;
+        }
+        if ((size - offset) % 2 != 0) {
+            return json{{"error", "truncated UTF-16 UserComment"}, {"raw_hex_preview", hex_preview(data, size)}};
+        }
+        std::u16string text;
+        for (; offset < size; offset += 2) {
+            text.push_back(static_cast<char16_t>(little_endian ? data[offset] | (uint16_t(data[offset + 1]) << 8)
+                                                               : (uint16_t(data[offset]) << 8) | data[offset + 1]));
+        }
+        try {
+            std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> converter;
+            return trim_trailing_nuls(converter.to_bytes(text));
+        } catch (const std::range_error&) {
+            return json{{"error", "invalid UTF-16 UserComment"}, {"raw_hex_preview", hex_preview(data, size)}};
+        }
+    }
+
     json parse_exif_value(const std::vector<uint8_t>& data,
                           size_t value_offset,
+                          uint16_t tag,
                           uint16_t type,
                           uint32_t count,
                           bool little_endian,
@@ -466,8 +499,9 @@ namespace {
                 break;
             }
             case 7:
-                value = bytes_to_string(data.data() + value_offset,
-                                        data.data() + value_offset + count);
+                value = tag == 0x9286 ? parse_exif_user_comment(data.data() + value_offset, count)
+                                      : json(bytes_to_string(data.data() + value_offset,
+                                                             data.data() + value_offset + count));
                 break;
             case 9: {
                 if (count == 1) {
@@ -591,6 +625,7 @@ namespace {
 
             tag_json["value"] = parse_exif_value(data,
                                                  value_offset,
+                                                 tag,
                                                  type,
                                                  value_count,
                                                  little_endian,
@@ -1098,6 +1133,178 @@ namespace {
         return true;
     }
 
+    static bool parse_avi_chunks(const std::vector<uint8_t>& data, size_t offset, size_t end, bool info, bool include_raw, json& result, std::string& error) {
+        while (offset < end) {
+            if (end - offset < 8) {
+                error = "truncated AVI chunk header";
+                return false;
+            }
+            const auto name   = bytes_to_string(data.data() + offset, data.data() + offset + 4);
+            const size_t size = read_u32_le(data, offset + 4);
+            offset += 8;
+            if (size > end - offset || (size & 1u) > end - offset - size) {
+                error = "AVI chunk exceeds its container";
+                return false;
+            }
+            json entry = {{"entry_type", "chunk"}, {"name", name}, {"length", size}, {"metadata_like", info}};
+            if (name == "LIST") {
+                if (size < 4) {
+                    error = "truncated AVI LIST type";
+                    return false;
+                }
+                const auto type            = bytes_to_string(data.data() + offset, data.data() + offset + 4);
+                entry["data"]["list_type"] = type;
+                if (type == "INFO" && !info &&
+                    !parse_avi_chunks(data, offset + 4, offset + size, true, include_raw, result, error))
+                    return false;
+            } else if (info) {
+                entry["data"]["text"] = trim_trailing_nuls(bytes_to_string(data.data() + offset, data.data() + offset + size));
+            } else {
+                append_raw_preview(entry, data.data() + offset, size, include_raw);
+            }
+            result["entries"].push_back(std::move(entry));
+            offset += size + (size & 1u);
+        }
+        return true;
+    }
+
+    static bool parse_avi(const std::vector<uint8_t>& data, bool include_raw, json& result, std::string& error) {
+        result        = {{"format", "AVI"}, {"entries", json::array()}};
+        size_t offset = 0;
+        while (offset < data.size()) {
+            if (data.size() - offset < 12 || memcmp(data.data() + offset, "RIFF", 4) != 0 ||
+                memcmp(data.data() + offset + 8, offset == 0 ? "AVI " : "AVIX", 4) != 0) {
+                error = "invalid AVI RIFF header";
+                return false;
+            }
+            const size_t size = read_u32_le(data, offset + 4);
+            if (size < 4 || size > data.size() - offset - 8 ||
+                (size & 1u) > data.size() - offset - 8 - size) {
+                error = "AVI RIFF size exceeds file size";
+                return false;
+            }
+            if (!parse_avi_chunks(data, offset + 12, offset + 8 + size, false, include_raw, result, error))
+                return false;
+            offset += 8 + size + (size & 1u);
+        }
+        return true;
+    }
+
+    static bool read_ebml_uint(const std::vector<uint8_t>& data, size_t& offset, size_t end, bool id, uint64_t& value, bool& unknown) {
+        if (offset == end || data[offset] == 0)
+            return false;
+        uint8_t mask  = 0x80;
+        size_t length = 1;
+        while (!(data[offset] & mask)) {
+            mask >>= 1;
+            ++length;
+        }
+        if (length > (id ? 4u : 8u) || length > end - offset)
+            return false;
+        value = data[offset++] & (id ? 0xff : mask - 1);
+        for (size_t i = 1; i < length; ++i)
+            value = (value << 8) | data[offset++];
+        unknown = !id && value == (uint64_t(1) << (7 * length)) - 1;
+        return true;
+    }
+
+    static bool is_webm_segment_child(uint64_t id) {
+        return id == 0x114D9B74 || id == 0x1549A966 || id == 0x1654AE6B ||
+               id == 0x1F43B675 || id == 0x1C53BB6B || id == 0x1941A469 ||
+               id == 0x1043A770 || id == 0x1254C367;
+    }
+
+    static bool parse_webm_elements(const std::vector<uint8_t>& data, size_t& offset, size_t end, uint64_t parent, bool unknown_cluster, int depth, bool include_raw, json& result, std::string& error) {
+        if (depth > 16) {
+            error = "WebM tag nesting exceeds limit";
+            return false;
+        }
+        std::string tag_name;
+        std::string tag_text;
+        bool has_text = false;
+        while (offset < end) {
+            const auto start = offset;
+            uint64_t id, size;
+            bool unknown;
+            if (!read_ebml_uint(data, offset, end, true, id, unknown)) {
+                error = "invalid or truncated WebM element ID";
+                return false;
+            }
+            // An unknown-size Cluster ends at the next Segment-level element.
+            if (unknown_cluster && is_webm_segment_child(id)) {
+                offset = start;
+                return true;
+            }
+            if (!read_ebml_uint(data, offset, end, false, size, unknown) ||
+                (!unknown && size > end - offset)) {
+                error = "invalid or truncated WebM element size";
+                return false;
+            }
+            if (unknown && id != 0x18538067 && id != 0x1F43B675) {
+                error = "unsupported unknown-size WebM element";
+                return false;
+            }
+            const size_t stop    = unknown ? end : offset + static_cast<size_t>(size);
+            const bool container = (parent == 0 && (id == 0x1A45DFA3 || id == 0x18538067)) ||
+                                   (parent == 0x18538067 && (id == 0x1254C367 || (id == 0x1F43B675 && unknown))) ||
+                                   (parent == 0x1254C367 && id == 0x7373) ||
+                                   ((parent == 0x7373 || parent == 0x67C8) && id == 0x67C8);
+            if (parent == 0 && id == 0x18538067)
+                result["has_segment"] = true;
+            if (parent == 0x1A45DFA3 && id == 0x4282) {
+                const auto type = bytes_to_string(data.data() + offset, data.data() + stop);
+                if (type != "webm" && type != "matroska") {
+                    error = "EBML document is not WebM or Matroska";
+                    return false;
+                }
+                result["doc_type"] = type;
+                result["format"]   = type == "webm" ? "WEBM" : "MATROSKA";
+            }
+            if (parent == 0x67C8 && (id == 0x45A3 || id == 0x4487)) {
+                auto value = bytes_to_string(data.data() + offset, data.data() + stop);
+                if (id == 0x45A3)
+                    tag_name = std::move(value);
+                else {
+                    tag_text = std::move(value);
+                    has_text = true;
+                }
+            }
+            if (parent == 0 || parent == 0x18538067) {
+                std::ostringstream name;
+                name << "0x" << std::hex << std::uppercase << id;
+                json entry = {{"entry_type", "element"}, {"name", name.str()}, {"length", stop - offset}, {"metadata_like", false}};
+                if (unknown)
+                    entry["unknown_size"] = true;
+                append_raw_preview(entry, data.data() + offset, stop - offset, include_raw);
+                result["entries"].push_back(std::move(entry));
+            }
+            if (container) {
+                if (!parse_webm_elements(data, offset, stop, id, id == 0x1F43B675 && unknown,
+                                         depth + 1, include_raw, result, error))
+                    return false;
+            } else {
+                offset = stop;
+            }
+        }
+        if (parent == 0x67C8 && has_text) {
+            result["entries"].push_back({{"entry_type", "tag"}, {"name", tag_name}, {"metadata_like", true}, {"data", {{"text", tag_text}}}});
+        }
+        return true;
+    }
+
+    static bool parse_webm(const std::vector<uint8_t>& data, bool include_raw, json& result, std::string& error) {
+        result        = {{"format", "WEBM"}, {"entries", json::array()}};
+        size_t offset = 0;
+        if (!parse_webm_elements(data, offset, data.size(), 0, false, 0, include_raw, result, error))
+            return false;
+        if (!result.contains("doc_type") || !result.value("has_segment", false)) {
+            error = "missing WebM document type or Segment";
+            return false;
+        }
+        result.erase("has_segment");
+        return true;
+    }
+
     std::string abbreviate(const std::string& value, bool brief) {
         if (!brief || value.size() <= 240) {
             return value;
@@ -1116,7 +1323,7 @@ namespace {
             return;
         }
         if (value.is_primitive()) {
-            out << prefix << key << ": " << value.dump() << "\n";
+            out << prefix << key << ": " << value.dump(-1, ' ', false, json::error_handler_t::replace) << "\n";
             return;
         }
         if (value.is_array()) {
@@ -1125,7 +1332,7 @@ namespace {
                 if (item.is_string()) {
                     out << prefix << "  - " << abbreviate(item.get<std::string>(), brief) << "\n";
                 } else if (item.is_primitive()) {
-                    out << prefix << "  - " << item.dump() << "\n";
+                    out << prefix << "  - " << item.dump(-1, ' ', false, json::error_handler_t::replace) << "\n";
                 } else {
                     out << prefix << "  -\n";
                     for (auto it = item.begin(); it != item.end(); ++it) {
@@ -1158,10 +1365,12 @@ namespace {
         }
 
         for (const auto& entry : entries) {
-            const bool is_chunk    = entry.value("entry_type", "") == "chunk";
-            const std::string name = is_chunk ? entry.value("name", "unknown")
-                                              : entry.value("marker", "unknown");
-            out << (is_chunk ? "Chunk: " : "Segment: ") << name << "\n";
+            const auto type   = entry.value("entry_type", "");
+            const auto name   = entry.value("name", entry.value("marker", "unknown"));
+            const char* label = type == "chunk" ? "Chunk" : type == "tag"   ? "Tag"
+                                                        : type == "element" ? "Element"
+                                                                            : "Segment";
+            out << label << ": " << name << "\n";
             for (auto it = entry.begin(); it != entry.end(); ++it) {
                 if (it.key() == "entry_type" || it.key() == "name" || it.key() == "marker" ||
                     it.key() == "metadata_like") {
@@ -1211,7 +1420,13 @@ namespace {
             return parse_webp(data, include_raw, report, error);
         }
 
-        error = "unsupported image format; only PNG, JPEG, and WebP are supported";
+        if (data.size() >= 12 && memcmp(data.data(), "RIFF", 4) == 0 &&
+            memcmp(data.data() + 8, "AVI ", 4) == 0)
+            return parse_avi(data, include_raw, report, error);
+        if (data.size() >= 4 && read_u32_be(data, 0) == 0x1A45DFA3)
+            return parse_webm(data, include_raw, report, error);
+
+        error = "unsupported media format; only PNG, JPEG, WebP, AVI, WebM, and Matroska are supported";
         return false;
     }
 
@@ -1230,7 +1445,7 @@ bool print_image_metadata(const std::string& image_path,
 
     if (options.output_format == MetadataOutputFormat::JSON) {
         visible_report["file"] = image_path;
-        out << visible_report.dump(2) << "\n";
+        out << visible_report.dump(2, ' ', false, json::error_handler_t::replace) << "\n";
     } else {
         print_text_report(image_path, visible_report, options.include_structural, options.brief, out);
     }

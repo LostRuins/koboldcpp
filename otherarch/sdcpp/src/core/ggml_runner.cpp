@@ -896,7 +896,7 @@ std::optional<Tensor<float>> GGMLRunner::execute_graph(ggml_cgraph* graph, int n
         const bool last     = index + 1 == plan.segments.size();
         auto fail_segment   = [&](const char* phase) {
             LOG_ERROR("%s segment %zu/%zu (%s) failed during %s", get_desc().c_str(),
-                        index + 1, plan.segments.size(), segment.group_name.c_str(), phase);
+                      index + 1, plan.segments.size(), segment.group_name.c_str(), phase);
             return std::nullopt;
         };
         cut_cache_.prune(segment.live_cut_names);

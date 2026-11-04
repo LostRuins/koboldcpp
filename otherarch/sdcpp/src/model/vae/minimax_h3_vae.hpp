@@ -449,8 +449,8 @@ namespace MiniMaxH3VAE {
         MiniMaxH3VideoVAE() {
             blocks["encoder"]         = std::make_shared<Encoder>();
             blocks["quant_conv"]      = std::make_shared<Conv3d>(48,
-                                                            48,
-                                                            std::tuple{1, 1, 1});
+                                                                 48,
+                                                                 std::tuple{1, 1, 1});
             blocks["post_quant_conv"] = std::make_shared<Conv3d>(24,
                                                                  24,
                                                                  std::tuple{1, 1, 1});

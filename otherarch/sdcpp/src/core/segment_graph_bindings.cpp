@@ -112,7 +112,7 @@ namespace sd {
                 input_tensor->data                                          = cached_tensor->data == nullptr
                                                                                   ? nullptr
                                                                                   : static_cast<void*>(static_cast<char*>(cached_tensor->data) +
-                                                              input_tensor->view_offs);
+                                                                                                       input_tensor->view_offs);
                 input_tensor->extra                                         = cached_tensor->extra;
             } else {
                 input_tensor->buffer = cached_tensor->buffer;

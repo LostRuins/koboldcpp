@@ -9,16 +9,16 @@ static bool build_z_image_l2p(const sd::model_builders::Context& ctx, const Toke
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                       tensor_storage_map,
-                                                       version,
-                                                       "",
-                                                       false,
-                                                       weight_manager,
-                                                       tokenizers);
+                                                                   tensor_storage_map,
+                                                                   version,
+                                                                   "",
+                                                                   false,
+                                                                   weight_manager,
+                                                                   tokenizers);
     result.diffusion               = std::make_shared<ZImageL2P::ZImageL2PRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                    tensor_storage_map,
-                                                                    "model.diffusion_model",
-                                                                    weight_manager);
+                                                                                  tensor_storage_map,
+                                                                                  "model.diffusion_model",
+                                                                                  weight_manager);
     return true;
 }
 
