@@ -944,33 +944,30 @@ ifeq ($(OS),Windows_NT)
 else
 	@echo 'Now rebuilding vulkan shaders for Linux...'
 	@chmod +x vulkan-shaders-gen
-	@echo 'Checking if system glslc-linux binary is usable...'
+	@echo 'Checking for a usable glslc compiler...'
 	@GLSLC_BIN=$$( \
-		if [ -n "$$LLAMA_USE_BUNDLED_GLSLC" ]; then \
-			chmod +x ./kcpp_src/bin/glslc-linux; \
-			if [ -x ./kcpp_src/bin/glslc-linux ] && ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
+		BUNDLED_GLSLC=./kcpp_src/bin/glslc-linux; \
+		if [ -f "$$BUNDLED_GLSLC" ]; then chmod +x "$$BUNDLED_GLSLC" 2>/dev/null || true; fi; \
+		if [ -n "$(LLAMA_USE_BUNDLED_GLSLC)" ]; then \
+			if [ -x "$$BUNDLED_GLSLC" ] && "$$BUNDLED_GLSLC" --version >/dev/null 2>&1; then \
 				echo "./kcpp_src/bin/glslc-linux"; \
-			elif command -v glslc >/dev/null 2>&1; then \
+			elif command -v glslc >/dev/null 2>&1 && glslc --version >/dev/null 2>&1; then \
 				echo "glslc"; \
 			else \
 				echo ""; \
 			fi; \
 		else \
-			if command -v glslc >/dev/null 2>&1 && glslc --version 2>/dev/null | grep -q "glslang"; then \
+			if command -v glslc >/dev/null 2>&1 && glslc --version >/dev/null 2>&1; then \
 				echo "glslc"; \
-			elif [ -x ./kcpp_src/bin/glslc-linux ]; then \
-				chmod +x ./kcpp_src/bin/glslc-linux; \
-				if ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
-					echo "./kcpp_src/bin/glslc-linux"; \
-				else \
-					echo ""; \
-				fi; \
+			elif [ -x "$$BUNDLED_GLSLC" ] && "$$BUNDLED_GLSLC" --version >/dev/null 2>&1; then \
+				echo "./kcpp_src/bin/glslc-linux"; \
 			else \
 				echo ""; \
 			fi; \
 		fi); \
 	if [ -z "$$GLSLC_BIN" ]; then \
-		echo "Error: No usable glslc found. Vulkan shaders cannot be compiled!"; \
+		echo "Error: No usable glslc found. Vulkan shaders cannot be compiled!" >&2; \
+		exit 1; \
 	else \
 		echo "Using GLSLC: $$GLSLC_BIN"; \
 		./vulkan-shaders-gen --glslc "$$GLSLC_BIN" --input-dir ggml/src/ggml-vulkan/vulkan-shaders --target-hpp $(VKGEN_HPP) --target-cpp $(VKGEN_CPP) --output-dir vulkan-spv-tmp; \
@@ -988,33 +985,30 @@ ifeq ($(OS),Windows_NT)
 else
 	@echo 'Now rebuilding vulkan shaders (no extensions) for Linux...'
 	@chmod +x vulkan-shaders-gen-noext
-	@echo 'Checking if system glslc-linux binary is usable...'
+	@echo 'Checking for a usable glslc compiler...'
 	@GLSLC_BIN=$$( \
-		if [ -n "$$LLAMA_USE_BUNDLED_GLSLC" ]; then \
-			chmod +x ./kcpp_src/bin/glslc-linux; \
-			if [ -x ./kcpp_src/bin/glslc-linux ] && ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
+		BUNDLED_GLSLC=./kcpp_src/bin/glslc-linux; \
+		if [ -f "$$BUNDLED_GLSLC" ]; then chmod +x "$$BUNDLED_GLSLC" 2>/dev/null || true; fi; \
+		if [ -n "$(LLAMA_USE_BUNDLED_GLSLC)" ]; then \
+			if [ -x "$$BUNDLED_GLSLC" ] && "$$BUNDLED_GLSLC" --version >/dev/null 2>&1; then \
 				echo "./kcpp_src/bin/glslc-linux"; \
-			elif command -v glslc >/dev/null 2>&1; then \
+			elif command -v glslc >/dev/null 2>&1 && glslc --version >/dev/null 2>&1; then \
 				echo "glslc"; \
 			else \
 				echo ""; \
 			fi; \
 		else \
-			if command -v glslc >/dev/null 2>&1 && glslc --version 2>/dev/null | grep -q "glslang"; then \
+			if command -v glslc >/dev/null 2>&1 && glslc --version >/dev/null 2>&1; then \
 				echo "glslc"; \
-			elif [ -x ./kcpp_src/bin/glslc-linux ]; then \
-				chmod +x ./kcpp_src/bin/glslc-linux; \
-				if ./kcpp_src/bin/glslc-linux --version 2>/dev/null | grep -q "glslang"; then \
-					echo "./kcpp_src/bin/glslc-linux"; \
-				else \
-					echo ""; \
-				fi; \
+			elif [ -x "$$BUNDLED_GLSLC" ] && "$$BUNDLED_GLSLC" --version >/dev/null 2>&1; then \
+				echo "./kcpp_src/bin/glslc-linux"; \
 			else \
 				echo ""; \
 			fi; \
 		fi); \
 	if [ -z "$$GLSLC_BIN" ]; then \
-		echo "Error: No usable glslc found. Vulkan shaders (no extensions) cannot be compiled!"; \
+		echo "Error: No usable glslc found. Vulkan shaders (no extensions) cannot be compiled!" >&2; \
+		exit 1; \
 	else \
 		echo "Using GLSLC: $$GLSLC_BIN"; \
 		./vulkan-shaders-gen-noext --glslc "$$GLSLC_BIN" --input-dir ggml/src/ggml-vulkan/vulkan-shaders --target-hpp ggml/src/ggml-vulkan-shaders-noext.hpp --target-cpp ggml/src/ggml-vulkan-shaders-noext.cpp --output-dir vulkan-spv-noext-tmp; \
