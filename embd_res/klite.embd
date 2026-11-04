@@ -14287,38 +14287,88 @@ Current version indicated by LITEVER below.
 
 	function show_worker_details(workerIndex) {
 		let elem = worker_data_showonly[workerIndex];
-		if (!elem) { return; }
-
-		let tokenspersec = elem.performance.replace(" tokens per second", "");
-		if (tokenspersec.toLowerCase()=="no requests fulfilled yet")
-		{
-			tokenspersec = 0;
-		}
-
-		let acceptedJobs = [];
-		if (elem.accepts_chat_jobs) { acceptedJobs.push("Chat"); }
-		if (elem.accepts_prompt_jobs) { acceptedJobs.push("Prompt"); }
-		if (acceptedJobs.length==0) { acceptedJobs.push("None"); }
+		if (!elem || typeof elem!="object") { return; }
 
 		let kudosRate = "";
-		if(first_seen_workers.hasOwnProperty(elem.id))
+		if(elem.id!==undefined && elem.kudos_rewards!==undefined && first_seen_workers.hasOwnProperty(elem.id))
 		{
 			let firstseen = first_seen_workers[elem.id];
-			let kudosdiff = elem.kudos_rewards - firstseen.startkudos;
+			let kudosdiff = Number(elem.kudos_rewards) - Number(firstseen.startkudos);
 			if(kudosdiff>0)
 			{
 				let hrspassed = ((performance.now() - firstseen.timestamp) / 1000)/3600.0;
-				kudosRate = ` (${(kudosdiff/hrspassed).toFixed(0)}/hr)`;
+				if(hrspassed>0)
+				{
+					kudosRate = ` (${(kudosdiff/hrspassed).toFixed(0)}/hr)`;
+				}
 			}
 		}
 
-		let details =
-			`<b>Capabilities:</b> ${escape_html(String(elem.max_length))} / ${escape_html(String(elem.max_context_length))} (${escape_html(String(tokenspersec))} T/s)<br><br>` +
-			`<b>Jobs:</b> ${escape_html(acceptedJobs.join(", "))}<br><br>` +
-			`<b>Uptime:</b> ${escape_html(String(format_uptime(elem.uptime)))} (${escape_html(String(elem.requests_fulfilled))} jobs)<br><br>` +
-			`<b>Kudos:</b> ${escape_html(elem.kudos_rewards.toFixed(0) + kudosRate)}`;
+		const displayOnlyFields = new Set(["tokenspersec", "jobtypes", "defaultmodel"]);
+		const labelFor = function(key) {
+			let label = String(key).replace(/_/g, " ");
+			return label.charAt(0).toUpperCase() + label.slice(1);
+		};
+		const valueToHtml = function(value, fieldName, seen, isTopLevel=false) {
+			if(value===null)
+			{
+				return '<span style="color:gray">None</span>';
+			}
+			if(typeof value=="boolean")
+			{
+				return value ? "Yes" : "No";
+			}
+			if(typeof value=="string")
+			{
+				return value=="" ? '<span style="color:gray">Empty</span>' : escape_html(value);
+			}
+			if(typeof value=="number" || typeof value=="bigint")
+			{
+				let displayValue = String(value);
+				if(isTopLevel && fieldName=="uptime" && typeof value=="number" && Number.isFinite(value))
+				{
+					displayValue = `${format_uptime(value)} (${value} seconds)`;
+				}
+				if(isTopLevel && fieldName=="kudos_rewards")
+				{
+					displayValue += kudosRate;
+				}
+				return escape_html(displayValue);
+			}
+			if(Array.isArray(value))
+			{
+				if(value.length==0) { return '<span style="color:gray">Empty list</span>'; }
+				if(seen.has(value)) { return '<span style="color:gray">Circular reference</span>'; }
+				seen.add(value);
+				let simpleValues = value.every(item => item===null || typeof item!="object");
+				let list = simpleValues
+					? value.map(item => valueToHtml(item, "", seen)).join(", ")
+					: `<div style="margin-left:1em">${value.map(item => `<div>${valueToHtml(item, "", seen)}</div>`).join("")}</div>`;
+				seen.delete(value);
+				return list;
+			}
+			if(typeof value=="object")
+			{
+				if(seen.has(value)) { return '<span style="color:gray">Circular reference</span>'; }
+				seen.add(value);
+				let properties = Object.keys(value).filter(key => value[key]!==undefined);
+				let nested = properties.length==0
+					? '<span style="color:gray">Empty object</span>'
+					: properties.map(key => `<div><b>${escape_html(labelFor(key))}:</b> ${valueToHtml(value[key], key, seen)}</div>`).join("");
+				seen.delete(value);
+				return `<div style="margin-left:1em">${nested}</div>`;
+			}
+			return escape_html(String(value));
+		};
 
-		msgbox(details, `Worker Details - ${elem.name.substring(0, 40)}`, true, false, hide_msgbox);
+		let fields = Object.keys(elem).filter(key => elem[key]!==undefined && !displayOnlyFields.has(key));
+		let detailsContent = fields.length==0
+			? '<span style="color:gray">No worker details provided.</span>'
+			: fields.map(key => `<div style="margin-bottom:0.6em"><b>${escape_html(labelFor(key))}:</b> ${valueToHtml(elem[key], key, new WeakSet(), true)}</div>`).join("");
+		let details = `<div style="box-sizing:border-box; padding:0.75em 1em; text-align:left; line-height:1.4">${detailsContent}</div>`;
+		let workerName = (typeof elem.name=="string" && elem.name!="") ? ` - ${elem.name.substring(0, 40)}` : "";
+
+		msgbox(details, `Worker Details${workerName}`, true, false, hide_msgbox);
 	}
 
 	function show_workers() {
