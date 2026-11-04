@@ -2436,8 +2436,9 @@ def generate(genparams, stream_flag=False):
         estimated_input_tokens = (estimated_input_tokens + memory_token_count) if memory_token_count >= 0 else -1
     if images or audio:
         estimated_input_tokens = -1
+    softlimit_pct = max(min(90, args.warninglimit), 10) / 100
     min_remain_hardlimit = calculate_min_remain_hardlimit(max_context_length, estimated_input_tokens)
-    min_remain_softlimit = max(min(max_context_length-4, 16),int(max_context_length*0.45))
+    min_remain_softlimit = max(min(max_context_length-4, 16),int(max_context_length*softlimit_pct))
     if args.genlimit > 0 and max_length > args.genlimit:
         max_length = args.genlimit
     if max_length >= (max_context_length-min_remain_softlimit):
@@ -14602,6 +14603,7 @@ if __name__ == '__main__':
     advparser.add_argument("--visionmaxres", metavar=('[max px]'), help="Clamp MMProj vision maximum allowed resolution. Allowed values are between 512 to 2048 px (default 1024).", type=int, default=default_visionmaxres)
     advparser.add_argument("--visionmaxtokens","--image-max-tokens", metavar=('[tokens]'), help="Override the maximum tokens for the MMProj embedding (default -1).", type=int, default=-1)
     advparser.add_argument("--visionmintokens","--image-min-tokens", metavar=('[tokens]'), help="Override the minimum tokens for the MMProj embedding (default -1).", type=int, default=-1)
+    advparser.add_argument("--warninglimit","--softlimitpct", help="Set the threshold for the soft-maximum warning about response length using too much context (default 45).", type=int, default=45)
     advparser.add_argument("--websearch", help="Enable the local search engine proxy so Web Searches can be done.", action='store_true')
     compatgroup2 = advparser.add_mutually_exclusive_group()
     compatgroup2.add_argument("--showgui", help="Always show the GUI instead of launching the model right away when loading settings from a .kcpps file.", action='store_true')
