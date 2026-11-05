@@ -294,17 +294,16 @@ namespace ZImage {
         }
     };
 
-    __STATIC_INLINE__ ggml_tensor* modulate(ggml_context* ctx,
+    __STATIC_INLINE__ ggml_tensor* modulate(GGMLRunnerContext* ctx,
                                             ggml_tensor* x,
                                             ggml_tensor* scale) {
         // x: [N, L, C]
         // scale: [N, C], or [N, L, C] when the caller modulates per token (LLaDA-Image editing
         // feeds a per-token timestep embedding so each segment carries its own modulation).
         if (scale->ne[1] != x->ne[1]) {
-            scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
+            scale = ggml_reshape_3d(ctx->ggml_ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
         }
-        x = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
-        return x;
+        return ggml_ext_modulate(ctx, x, nullptr, scale);
     }
 
     struct JointTransformerBlock : public GGMLBlock {
@@ -361,14 +360,14 @@ namespace ZImage {
                 auto gate_mlp  = mods[3];
 
                 auto residual = x;
-                x             = modulate(ctx->ggml_ctx, attention_norm1->forward(ctx, x), scale_msa);
+                x             = modulate(ctx, attention_norm1->forward(ctx, x), scale_msa);
                 x             = attention->forward(ctx, x, pe, mask);
                 x             = attention_norm2->forward(ctx, x);
                 x             = ggml_mul(ctx->ggml_ctx, x, ggml_tanh(ctx->ggml_ctx, gate_msa));
                 x             = ggml_add(ctx->ggml_ctx, x, residual);
 
                 residual = x;
-                x        = modulate(ctx->ggml_ctx, ffn_norm1->forward(ctx, x), scale_mlp);
+                x        = modulate(ctx, ffn_norm1->forward(ctx, x), scale_mlp);
                 x        = feed_forward->forward(ctx, x);
                 x        = ffn_norm2->forward(ctx, x);
                 x        = ggml_mul(ctx->ggml_ctx, x, ggml_tanh(ctx->ggml_ctx, gate_mlp));
@@ -505,14 +504,14 @@ namespace ZImage {
             auto gate_mlp  = mods[3];
 
             auto residual = c;
-            c             = modulate(ctx->ggml_ctx, attention_norm1->forward(ctx, c), scale_msa);
+            c             = modulate(ctx, attention_norm1->forward(ctx, c), scale_msa);
             c             = forward_attention(ctx, c, pe);
             c             = attention_norm2->forward(ctx, c);
             c             = ggml_mul(ctx->ggml_ctx, c, ggml_tanh(ctx->ggml_ctx, gate_msa));
             c             = ggml_add(ctx->ggml_ctx, c, residual);
 
             residual = c;
-            c        = modulate(ctx->ggml_ctx, ffn_norm1->forward(ctx, c), scale_mlp);
+            c        = modulate(ctx, ffn_norm1->forward(ctx, c), scale_mlp);
             c        = feed_forward->forward(ctx, c);
             c        = ffn_norm2->forward(ctx, c);
             c        = ggml_mul(ctx->ggml_ctx, c, ggml_tanh(ctx->ggml_ctx, gate_mlp));
@@ -544,7 +543,7 @@ namespace ZImage {
 
             auto scale = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, hidden_size]
             x          = norm_final->forward(ctx, x);
-            x          = modulate(ctx->ggml_ctx, x, scale);
+            x          = modulate(ctx, x, scale);
             x          = linear->forward(ctx, x);
 
             return x;

@@ -103,9 +103,9 @@ namespace Ideogram4 {
         return ggml_reshape_3d(ctx, x, hidden_size * LLM_HIDDEN_STATE_LAYERS, token_count, batch_count);
     }
 
-    __STATIC_INLINE__ ggml_tensor* modulate(ggml_context* ctx, ggml_tensor* x, ggml_tensor* scale) {
-        scale = to_token_modulation(ctx, scale);
-        return ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+    __STATIC_INLINE__ ggml_tensor* modulate(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* scale) {
+        scale = to_token_modulation(ctx->ggml_ctx, scale);
+        return ggml_ext_modulate(ctx, x, nullptr, scale);
     }
 
     __STATIC_INLINE__ ggml_tensor* patchify(ggml_context* ctx, ggml_tensor* x, const Ideogram4Config& config) {
@@ -285,13 +285,13 @@ namespace Ideogram4 {
             auto gate_mlp  = to_token_modulation(ctx->ggml_ctx, ggml_tanh(ctx->ggml_ctx, mods[3]));
 
             auto attn_out = attention_norm1->forward(ctx, x);
-            attn_out      = modulate(ctx->ggml_ctx, attn_out, scale_msa);
+            attn_out      = modulate(ctx, attn_out, scale_msa);
             attn_out      = attention->forward(ctx, attn_out, pe, mask);
             attn_out      = attention_norm2->forward(ctx, attn_out);
             x             = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
 
             auto ffn_out = ffn_norm1->forward(ctx, x);
-            ffn_out      = modulate(ctx->ggml_ctx, ffn_out, scale_mlp);
+            ffn_out      = modulate(ctx, ffn_out, scale_mlp);
             ffn_out      = feed_forward->forward(ctx, ffn_out);
             ffn_out      = ffn_norm2->forward(ctx, ffn_out);
             x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, ffn_out, gate_mlp));
@@ -337,7 +337,7 @@ namespace Ideogram4 {
 
             auto scale = adaln_modulation->forward(ctx, ggml_silu(ctx->ggml_ctx, c));
             x          = norm_final->forward(ctx, x);
-            x          = modulate(ctx->ggml_ctx, x, scale);
+            x          = modulate(ctx, x, scale);
             x          = linear->forward(ctx, x);
             return x;
         }

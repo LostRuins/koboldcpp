@@ -83,7 +83,7 @@ namespace Flux3 {
             int64_t offset     = 0;
             for (size_t i = 0; i < lengths.size(); ++i) {
                 auto part = token_slice(gc, x, offset, lengths[i]);
-                part      = Flux::modulate(gc, ggml_norm(gc, part, 1e-6f), mods[i].shift, mods[i].scale);
+                part      = Flux::modulate(ctx, ggml_norm(gc, part, 1e-6f), mods[i].shift, mods[i].scale);
                 x_mod     = x_mod ? ggml_concat(gc, x_mod, part, 1) : part;
                 offset += lengths[i];
             }

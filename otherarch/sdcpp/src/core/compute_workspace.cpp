@@ -6,9 +6,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core/ggml_compat.h"
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
-#include "ggml-impl.h"
 
 namespace sd {
     ComputeWorkspace::~ComputeWorkspace() {
@@ -69,7 +69,7 @@ namespace sd {
 
     bool ComputeWorkspace::allocate(ggml_cgraph* graph, const AssignNodes& assign_nodes) {
         GGML_ASSERT(!active_);
-        const size_t capacity = static_cast<size_t>(graph->n_nodes + graph->n_leafs) + 8;
+        const size_t capacity = static_cast<size_t>(ggml_graph_n_nodes(graph) + ggml_graph_n_leafs(graph)) + 8;
         if (scheduler_ == nullptr || capacity > scheduler_capacity_) {
             release();
             scheduler_          = make_scheduler(capacity);
@@ -101,11 +101,11 @@ namespace sd {
                 tensors.push_back(tensor);
             }
         };
-        for (int i = 0; i < graph->n_nodes; ++i) {
-            visit(graph->nodes[i]);
+        for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+            visit(ggml_graph_node(graph, i));
         }
-        for (int i = 0; i < graph->n_leafs; ++i) {
-            visit(graph->leafs[i]);
+        for (int i = 0; i < ggml_graph_n_leafs(graph); ++i) {
+            visit(ggml_graph_leaf(graph, i));
         }
         for (size_t i = 0; i < tensors.size(); ++i) {
             visit(tensors[i]->view_src);
@@ -120,9 +120,8 @@ namespace sd {
                 const auto* bytes = reinterpret_cast<const uint8_t*>(&value);
                 key.insert(key.end(), bytes, bytes + sizeof(value));
             };
-            append(graph->n_nodes);
-            append(graph->n_leafs);
-            append(graph->order);
+            append(ggml_graph_n_nodes(graph));
+            append(ggml_graph_n_leafs(graph));
             for (auto tensor : tensors) {
                 append(tensor);
                 append(tensor->type);
@@ -147,11 +146,11 @@ namespace sd {
                         append(usage);
                         append(type);
                     }
+                } else {
+                    const auto alignment_offset = reinterpret_cast<uintptr_t>(tensor->data) % ggml_backend_get_alignment(external);
+                    append(alignment_offset);
                 }
-                const size_t index = ggml_hash_find(&graph->visited_hash_set, tensor);
-                const int32_t uses = index != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, index)
-                                         ? graph->use_counts[index]
-                                         : 0;
+                const int32_t uses = ggml_graph_use_count(graph, tensor);
                 append(uses);
             }
             // Match the full allocation metadata, including topology and external placement.
@@ -187,28 +186,18 @@ namespace sd {
                     ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                 }
                 copy->buffer = buffer;
-                copy->data   = reinterpret_cast<void*>(static_cast<uintptr_t>(1));
-                copy->extra  = nullptr;
+                // Capability checks inspect alignment even before weights are resident.
+                copy->data  = source->data ? source->data : reinterpret_cast<void*>(ggml_backend_get_alignment(external));
+                copy->extra = nullptr;
             }
         }
-        auto copy_graph     = ggml_new_graph_custom(context, graph_size, false);
-        copy_graph->n_nodes = graph->n_nodes;
-        copy_graph->n_leafs = graph->n_leafs;
-        for (int i = 0; i < graph->n_nodes; ++i) {
-            copy_graph->nodes[i] = copies.at(graph->nodes[i]);
-        }
-        for (int i = 0; i < graph->n_leafs; ++i) {
-            copy_graph->leafs[i] = copies.at(graph->leafs[i]);
-        }
-        copy_graph->order = graph->order;
-        // Preserve fusion metadata, including uses outside a graph view, without rebuilding its node order.
-        for (const auto& entry : copies) {
-            const size_t source_index = ggml_hash_find(&graph->visited_hash_set, entry.first);
-            if (source_index != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, source_index)) {
-                const size_t copy_index            = ggml_hash_insert(&copy_graph->visited_hash_set, entry.second);
-                copy_graph->use_counts[copy_index] = graph->use_counts[source_index];
-            }
-        }
+        auto copy_graph = ggml_new_graph_custom(context, graph_size, false);
+        auto map_tensor = [](const ggml_tensor* tensor, void* user_data) -> ggml_tensor* {
+            const auto& mapped = *static_cast<const std::unordered_map<const ggml_tensor*, ggml_tensor*>*>(user_data);
+            const auto found   = mapped.find(tensor);
+            return found == mapped.end() ? nullptr : found->second;
+        };
+        GGML_ASSERT(ggml_graph_cpy_mapped(graph, copy_graph, map_tensor, &copies));
         Measurement result;
         auto scheduler = make_scheduler(graph_size);
         if (scheduler != nullptr) {
