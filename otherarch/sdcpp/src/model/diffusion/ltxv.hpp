@@ -38,12 +38,12 @@ namespace LTXV {
         return mod;
     }
 
-    __STATIC_INLINE__ ggml_tensor* modulate(ggml_context* ctx,
+    __STATIC_INLINE__ ggml_tensor* modulate(GGMLRunnerContext* ctx,
                                             ggml_tensor* x,
                                             ggml_tensor* shift,
                                             ggml_tensor* scale) {
-        shift = align_token_modulation(ctx, x, shift);
-        scale = align_token_modulation(ctx, x, scale);
+        shift = align_token_modulation(ctx->ggml_ctx, x, shift);
+        scale = align_token_modulation(ctx->ggml_ctx, x, scale);
         return Flux::modulate(ctx, x, shift, scale, true);
     }
 
@@ -821,7 +821,7 @@ namespace LTXV {
             auto gate_mlp  = mods[5];
 
             auto x_norm = rms_norm(ctx->ggml_ctx, x);
-            x_norm      = LTXV::modulate(ctx->ggml_ctx, x_norm, shift_msa, scale_msa);
+            x_norm      = LTXV::modulate(ctx, x_norm, shift_msa, scale_msa);
             auto msa    = attn1->forward(ctx, x_norm, nullptr, self_attention_mask, pe);
             x           = ggml_add(ctx->ggml_ctx, x, apply_gate(ctx->ggml_ctx, msa, gate_msa));
 
@@ -831,12 +831,12 @@ namespace LTXV {
                 auto gate_q  = mods[8];
 
                 auto q = rms_norm(ctx->ggml_ctx, x);
-                q      = LTXV::modulate(ctx->ggml_ctx, q, shift_q, scale_q);
+                q      = LTXV::modulate(ctx, q, shift_q, scale_q);
 
                 auto context_mod = context;
                 if (prompt_timestep != nullptr) {
                     auto prompt_mods = get_prompt_scale_shift_values(ctx, prompt_timestep);
-                    context_mod      = LTXV::modulate(ctx->ggml_ctx, context_mod, prompt_mods[0], prompt_mods[1]);
+                    context_mod      = LTXV::modulate(ctx, context_mod, prompt_mods[0], prompt_mods[1]);
                 }
 
                 auto mca = attn2->forward(ctx, q, context_mod, attention_mask, nullptr, nullptr);
@@ -847,7 +847,7 @@ namespace LTXV {
             }
 
             auto y       = rms_norm(ctx->ggml_ctx, x);
-            y            = LTXV::modulate(ctx->ggml_ctx, y, shift_mlp, scale_mlp);
+            y            = LTXV::modulate(ctx, y, shift_mlp, scale_mlp);
             auto mlp_out = ff->forward(ctx, y);
             x            = ggml_add(ctx->ggml_ctx, x, apply_gate(ctx->ggml_ctx, mlp_out, gate_mlp));
             return x;
@@ -1199,11 +1199,11 @@ namespace LTXV {
             if (cross_attention_adaln) {
                 auto q_mods      = get_ada_values(ctx, table, timestep, dim, 9, 6, 3);
                 auto q           = rms_norm(ctx->ggml_ctx, x);
-                q                = LTXV::modulate(ctx->ggml_ctx, q, q_mods[0], q_mods[1]);
+                q                = LTXV::modulate(ctx, q, q_mods[0], q_mods[1]);
                 auto context_mod = context;
                 if (prompt_timestep != nullptr && prompt_table != nullptr) {
                     auto p_mods = get_ada_values(ctx, prompt_table, prompt_timestep, dim, 2);
-                    context_mod = LTXV::modulate(ctx->ggml_ctx, context_mod, p_mods[0], p_mods[1]);
+                    context_mod = LTXV::modulate(ctx, context_mod, p_mods[0], p_mods[1]);
                 }
                 auto out = attn->forward(ctx, q, context_mod, attention_mask, nullptr, nullptr);
                 return apply_gate(ctx->ggml_ctx, out, q_mods[2]);
@@ -1250,7 +1250,7 @@ namespace LTXV {
 
             auto v_mods = get_ada_values(ctx, v_table, v_timestep, v_dim, cross_attention_adaln ? 9 : 6);
             auto v_norm = rms_norm(ctx->ggml_ctx, vx);
-            v_norm      = LTXV::modulate(ctx->ggml_ctx, v_norm, v_mods[0], v_mods[1]);
+            v_norm      = LTXV::modulate(ctx, v_norm, v_mods[0], v_mods[1]);
             auto v_sa   = attn1->forward(ctx, v_norm, nullptr, self_attention_mask, v_pe);
             vx          = ggml_add(ctx->ggml_ctx, vx, apply_gate(ctx->ggml_ctx, v_sa, v_mods[2]));
             auto v_txt  = apply_text_cross_attention(ctx,
@@ -1268,7 +1268,7 @@ namespace LTXV {
             if (run_ax) {
                 auto a_mods = get_ada_values(ctx, a_table, a_timestep, a_dim, cross_attention_adaln ? 9 : 6);
                 auto a_norm = rms_norm(ctx->ggml_ctx, ax);
-                a_norm      = LTXV::modulate(ctx->ggml_ctx, a_norm, a_mods[0], a_mods[1]);
+                a_norm      = LTXV::modulate(ctx, a_norm, a_mods[0], a_mods[1]);
                 auto a_sa   = audio_attn1->forward(ctx, a_norm, nullptr, nullptr, a_pe);
                 ax          = ggml_add(ctx->ggml_ctx, ax, apply_gate(ctx->ggml_ctx, a_sa, a_mods[2]));
                 auto a_txt  = apply_text_cross_attention(ctx,
@@ -1291,8 +1291,8 @@ namespace LTXV {
                     auto a2v_video_table = ggml_ext_slice(ctx->ggml_ctx, params["scale_shift_table_a2v_ca_video"], 1, 0, 4);
                     auto a2v_audio       = get_ada_values(ctx, a2v_audio_table, a_cross_scale_shift_timestep, a_dim, 4);
                     auto a2v_video       = get_ada_values(ctx, a2v_video_table, v_cross_scale_shift_timestep, v_dim, 4);
-                    auto vx_scaled       = LTXV::modulate(ctx->ggml_ctx, vx_norm3, a2v_video[1], a2v_video[0]);
-                    auto ax_scaled       = LTXV::modulate(ctx->ggml_ctx, ax_norm3, a2v_audio[1], a2v_audio[0]);
+                    auto vx_scaled       = LTXV::modulate(ctx, vx_norm3, a2v_video[1], a2v_video[0]);
+                    auto ax_scaled       = LTXV::modulate(ctx, ax_norm3, a2v_audio[1], a2v_audio[0]);
                     auto a2v_out         = audio_to_video_attn->forward(ctx, vx_scaled, ax_scaled, nullptr, v_cross_pe, a_cross_pe);
                     auto a2v_gate_table  = ggml_ext_slice(ctx->ggml_ctx, params["scale_shift_table_a2v_ca_video"], 1, 4, 5);
                     auto a2v_gate        = get_ada_values(ctx, a2v_gate_table, v_cross_gate_timestep, v_dim, 1)[0];
@@ -1304,8 +1304,8 @@ namespace LTXV {
                     auto v2a_video_table = ggml_ext_slice(ctx->ggml_ctx, params["scale_shift_table_a2v_ca_video"], 1, 0, 4);
                     auto v2a_audio       = get_ada_values(ctx, v2a_audio_table, a_cross_scale_shift_timestep, a_dim, 4);
                     auto v2a_video       = get_ada_values(ctx, v2a_video_table, v_cross_scale_shift_timestep, v_dim, 4);
-                    auto ax_scaled       = LTXV::modulate(ctx->ggml_ctx, ax_norm3, v2a_audio[3], v2a_audio[2]);
-                    auto vx_scaled       = LTXV::modulate(ctx->ggml_ctx, vx_norm3, v2a_video[3], v2a_video[2]);
+                    auto ax_scaled       = LTXV::modulate(ctx, ax_norm3, v2a_audio[3], v2a_audio[2]);
+                    auto vx_scaled       = LTXV::modulate(ctx, vx_norm3, v2a_video[3], v2a_video[2]);
                     auto v2a_out         = video_to_audio_attn->forward(ctx, ax_scaled, vx_scaled, nullptr, a_cross_pe, v_cross_pe);
                     auto v2a_gate_table  = ggml_ext_slice(ctx->ggml_ctx, params["scale_shift_table_a2v_ca_audio"], 1, 4, 5);
                     auto v2a_gate        = get_ada_values(ctx, v2a_gate_table, a_cross_gate_timestep, a_dim, 1)[0];
@@ -1313,14 +1313,14 @@ namespace LTXV {
                 }
                 auto a_ff_mods = get_ada_values(ctx, a_table, a_timestep, a_dim, cross_attention_adaln ? 9 : 6, 3, 3);
                 auto ax_scaled = rms_norm(ctx->ggml_ctx, ax);
-                ax_scaled      = LTXV::modulate(ctx->ggml_ctx, ax_scaled, a_ff_mods[0], a_ff_mods[1]);
+                ax_scaled      = LTXV::modulate(ctx, ax_scaled, a_ff_mods[0], a_ff_mods[1]);
                 auto a_ff_out  = audio_ff->forward(ctx, ax_scaled);
                 ax             = ggml_add(ctx->ggml_ctx, ax, apply_gate(ctx->ggml_ctx, a_ff_out, a_ff_mods[2]));
             }
 
             auto v_ff_mods = get_ada_values(ctx, v_table, v_timestep, v_dim, cross_attention_adaln ? 9 : 6, 3, 3);
             auto vx_scaled = rms_norm(ctx->ggml_ctx, vx);
-            vx_scaled      = LTXV::modulate(ctx->ggml_ctx, vx_scaled, v_ff_mods[0], v_ff_mods[1]);
+            vx_scaled      = LTXV::modulate(ctx, vx_scaled, v_ff_mods[0], v_ff_mods[1]);
             auto v_ff_out  = ff->forward(ctx, vx_scaled);
             vx             = ggml_add(ctx->ggml_ctx, vx, apply_gate(ctx->ggml_ctx, v_ff_out, v_ff_mods[2]));
 
@@ -1720,14 +1720,14 @@ namespace LTXV {
 
             auto v_shift_scale = get_output_scale_shift(ctx, params["scale_shift_table"], v_embedded_time, config.hidden_size);
             vx                 = norm_out->forward(ctx, vx);
-            vx                 = LTXV::modulate(ctx->ggml_ctx, vx, v_shift_scale[0], v_shift_scale[1]);
+            vx                 = LTXV::modulate(ctx, vx, v_shift_scale[0], v_shift_scale[1]);
             vx                 = proj_out->forward(ctx, vx);
             vx                 = unpatchify_video(ctx, vx, width, height, frames);
 
             if (ax != nullptr && audio_time > 0) {
                 auto a_shift_scale = get_output_scale_shift(ctx, params["audio_scale_shift_table"], a_embedded_time, config.audio_hidden_size);
                 ax                 = audio_norm_out->forward(ctx, ax);
-                ax                 = LTXV::modulate(ctx->ggml_ctx, ax, a_shift_scale[0], a_shift_scale[1]);
+                ax                 = LTXV::modulate(ctx, ax, a_shift_scale[0], a_shift_scale[1]);
                 ax                 = audio_proj_out->forward(ctx, ax);
                 ax                 = unpatchify_audio(ctx, ax, audio_time);
             }

@@ -17,6 +17,7 @@
 #include "model/te/llada_image_te.hpp"
 #include "model/te/llm.hpp"
 #include "model/te/ming_image_te.hpp"
+#include "model/te/ph3_image_connector.hpp"
 #include "model/te/t5.hpp"
 #include "model_loader.h"
 #include "tokenizers/sensenova_u1_tokenizer.h"
@@ -1976,6 +1977,7 @@ struct LLMEmbedder : public Conditioner {
     std::shared_ptr<Tokenizer> tokenizer;
     std::shared_ptr<LLM::LLMRunner> llm;
     std::shared_ptr<T5Runner> byt5;
+    std::shared_ptr<PH3ImageTextConnectorRunner> ph3_connector;
 
     LLMEmbedder(ggml_backend_t backend,
                 const String2TensorStorage& tensor_storage_map      = {},
@@ -2022,12 +2024,18 @@ struct LLMEmbedder : public Conditioner {
         } else if (version == VERSION_MOSS_IMAGE) {
             arch = LLM::LLMArch::QWEN3_5;
         }
-        llm        = std::make_shared<LLM::LLMRunner>(arch,
-                                                      backend,
-                                                      tensor_storage_map,
-                                                      "text_encoders.llm",
-                                                      enable_vision,
-                                                      weight_manager);
+        llm = std::make_shared<LLM::LLMRunner>(arch,
+                                               backend,
+                                               tensor_storage_map,
+                                               "text_encoders.llm",
+                                               enable_vision,
+                                               weight_manager);
+        if (version == VERSION_P_H3_IMAGE) {
+            if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
+                throw std::runtime_error("P-H3-Image requires the Qwen3-VL-4B text encoder");
+            }
+            ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
+        }
         int pad_id = 151643;
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
             pad_id = 11;
@@ -2063,6 +2071,9 @@ struct LLMEmbedder : public Conditioner {
 
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) override {
         llm->get_param_tensors(tensors, "text_encoders.llm");
+        if (ph3_connector) {
+            ph3_connector->get_param_tensors(tensors);
+        }
         if (byt5) {
             byt5->get_param_tensors(tensors, "text_encoders.t5xxl.transformer");
         }
@@ -2074,6 +2085,9 @@ struct LLMEmbedder : public Conditioner {
 
     void set_max_graph_vram_bytes(size_t max_vram_bytes) override {
         llm->set_max_graph_vram_bytes(max_vram_bytes);
+        if (ph3_connector) {
+            ph3_connector->set_max_graph_vram_bytes(max_vram_bytes);
+        }
         if (byt5) {
             byt5->set_max_graph_vram_bytes(max_vram_bytes);
         }
@@ -2081,6 +2095,9 @@ struct LLMEmbedder : public Conditioner {
 
     void set_runtime_backends(const std::vector<ggml_backend_t>& backends) override {
         llm->set_runtime_backends(backends);
+        if (ph3_connector) {
+            ph3_connector->set_runtime_backends(backends);
+        }
         if (byt5) {
             byt5->set_runtime_backends(backends);
         }
@@ -2113,6 +2130,9 @@ struct LLMEmbedder : public Conditioner {
 
     void set_flash_attention_enabled(bool enabled) override {
         llm->set_flash_attention_enabled(enabled);
+        if (ph3_connector) {
+            ph3_connector->set_flash_attention_enabled(enabled);
+        }
         if (byt5) {
             byt5->set_flash_attention_enabled(enabled);
         }
@@ -2120,12 +2140,18 @@ struct LLMEmbedder : public Conditioner {
 
     void set_scale_overrides(float linear_scale, float attn_scale) override {
         llm->set_scale_overrides(linear_scale, attn_scale);
+        if (ph3_connector) {
+            ph3_connector->set_scale_overrides(linear_scale, attn_scale);
+        }
         if (byt5) {
             byt5->set_scale_overrides(linear_scale, attn_scale);
         }
     }
 
     void set_weight_adapter(const std::shared_ptr<WeightAdapter>& adapter) override {
+        if (ph3_connector) {
+            ph3_connector->set_weight_adapter(adapter);
+        }
         if (llm) {
             llm->set_weight_adapter(adapter);
         }
@@ -2135,6 +2161,9 @@ struct LLMEmbedder : public Conditioner {
     }
 
     void runner_end() override {
+        if (ph3_connector) {
+            ph3_connector->runner_end();
+        }
         if (llm) {
             llm->runner_end();
         }
@@ -2311,6 +2340,12 @@ struct LLMEmbedder : public Conditioner {
             LOG_ERROR("LLM prompt encoding failed");
             return {};
         }
+        if (ph3_connector) {
+            hidden_states = ph3_connector->compute(n_threads, hidden_states);
+            if (hidden_states.empty()) {
+                return {};
+            }
+        }
         hidden_states = apply_token_weights(std::move(hidden_states), weights);
         GGML_ASSERT(hidden_states.shape()[1] > prompt_template_encode_start_idx);
 
@@ -2457,8 +2492,9 @@ struct LLMEmbedder : public Conditioner {
 
         if (sd_version_is_minimax_h3(version)) {
             prompt_template_encode_start_idx = 0;
-            out_layers                       = {50};
-            prompt_attn_range                = {0, 0};
+            // The final tap is normalized; LLMRunner exposes it at num_layers + 1.
+            out_layers        = version == VERSION_P_H3_IMAGE ? std::set<int>{13, 19, 25, 31, 37} : std::set<int>{50};
+            prompt_attn_range = {0, 0};
 
             if (llm->enable_vision) {
                 const int patch_size = llm->config.vision.patch_size;
@@ -2564,7 +2600,17 @@ struct LLMEmbedder : public Conditioner {
                     }
                 }
             }
-            prompt += conditioner_params.text;
+            auto text = conditioner_params.text;
+            if (version == VERSION_P_H3_IMAGE && !image_embeds.empty()) {
+                // Preserve explicit picture targets and structured briefs from the upstream upsampler.
+                static const std::regex verbatim(R"(^\s*(Edit <Picture \d+>|subject_definitions:))");
+                if (!std::regex_search(text, verbatim)) {
+                    text = "Edit <Picture 1>. " + text;
+                } else {
+                    text = trim(text);
+                }
+            }
+            prompt += text;
         } else if (sd_version_is_hunyuan_video(version)) {
             prompt_template_encode_start_idx = 98;
             out_layers                       = {26};

@@ -372,18 +372,16 @@ public:
     }
 };
 
-__STATIC_INLINE__ ggml_tensor* modulate(ggml_context* ctx,
+__STATIC_INLINE__ ggml_tensor* modulate(GGMLRunnerContext* ctx,
                                         ggml_tensor* x,
                                         ggml_tensor* shift,
                                         ggml_tensor* scale) {
     // x: [N, L, C]
     // scale: [N, C]
     // shift: [N, C]
-    scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
-    shift = ggml_reshape_3d(ctx, shift, shift->ne[0], 1, shift->ne[1]);  // [N, 1, C]
-    x     = ggml_add(ctx, x, ggml_mul(ctx, x, scale));
-    x     = ggml_add(ctx, x, shift);
-    return x;
+    scale = ggml_reshape_3d(ctx->ggml_ctx, scale, scale->ne[0], 1, scale->ne[1]);  // [N, 1, C]
+    shift = ggml_reshape_3d(ctx->ggml_ctx, shift, shift->ne[0], 1, shift->ne[1]);  // [N, 1, C]
+    return ggml_ext_modulate(ctx, x, shift, scale);
 }
 
 struct DismantledBlock : public GGMLBlock {
@@ -455,10 +453,10 @@ public:
 
         auto x_norm = norm1->forward(ctx, x);
 
-        auto attn_in = modulate(ctx->ggml_ctx, x_norm, shift_msa, scale_msa);
+        auto attn_in = modulate(ctx, x_norm, shift_msa, scale_msa);
         auto qkv     = attn->pre_attention(ctx, attn_in);
 
-        auto attn2_in = modulate(ctx->ggml_ctx, x_norm, shift_msa2, scale_msa2);
+        auto attn2_in = modulate(ctx, x_norm, shift_msa2, scale_msa2);
         auto qkv2     = attn2->pre_attention(ctx, attn2_in);
 
         return {qkv, qkv2, {x, gate_msa, shift_mlp, scale_mlp, gate_mlp, gate_msa2}};
@@ -488,13 +486,13 @@ public:
             auto scale_mlp = m_vec[4];  // [N, hidden_size]
             auto gate_mlp  = m_vec[5];  // [N, hidden_size]
 
-            auto attn_in = modulate(ctx->ggml_ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
+            auto attn_in = modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
 
             auto qkv = attn->pre_attention(ctx, attn_in);
 
             return {qkv, {x, gate_msa, shift_mlp, scale_mlp, gate_mlp}};
         } else {
-            auto attn_in = modulate(ctx->ggml_ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
+            auto attn_in = modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa);
             auto qkv     = attn->pre_attention(ctx, attn_in);
 
             return {qkv, {nullptr, nullptr, nullptr, nullptr, nullptr}};
@@ -533,7 +531,7 @@ public:
 
         x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
         x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn2_out, gate_msa2));
-        auto mlp_out = mlp->forward(ctx, modulate(ctx->ggml_ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
+        auto mlp_out = mlp->forward(ctx, modulate(ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
         x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, mlp_out, gate_mlp));
 
         return x;
@@ -565,7 +563,7 @@ public:
         attn_out = attn->post_attention(ctx, attn_out);
 
         x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
-        auto mlp_out = mlp->forward(ctx, modulate(ctx->ggml_ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
+        auto mlp_out = mlp->forward(ctx, modulate(ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp));
         x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, mlp_out, gate_mlp));
 
         return x;
@@ -756,7 +754,7 @@ public:
         auto shift = m_vec[0];  // [N, hidden_size]
         auto scale = m_vec[1];  // [N, hidden_size]
 
-        x = modulate(ctx->ggml_ctx, norm_final->forward(ctx, x), shift, scale);
+        x = modulate(ctx, norm_final->forward(ctx, x), shift, scale);
         x = linear->forward(ctx, x);
 
         return x;

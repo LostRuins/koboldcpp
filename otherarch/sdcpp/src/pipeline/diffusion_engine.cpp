@@ -778,7 +778,7 @@ bool StableDiffusionGGML::init_model_loader(ModelLoader& model_loader, ModelConf
 
     if (strlen(SAFE_STR(sd_ctx_params->embeddings_connectors_path)) > 0) {
         LOG_INFO("loading embeddings connectors from '%s'", sd_ctx_params->embeddings_connectors_path);
-        if (!load_model("embeddings_connectors", sd_ctx_params->embeddings_connectors_path)) {
+        if (!load_model("embeddings_connectors", sd_ctx_params->embeddings_connectors_path, "embeddings_connectors.")) {
             LOG_WARN("loading embeddings connectors from '%s' failed", sd_ctx_params->embeddings_connectors_path);
         }
     }
@@ -1491,7 +1491,7 @@ bool StableDiffusionGGML::build_denoiser() {
         }
         case H3_AV_FLOW_PRED: {
             LOG_INFO("running in MiniMax H3 AV FLOW mode");
-            denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, 3.f, get_latent_channel());
+            denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, version == VERSION_P_H3_IMAGE ? 1.f : 3.f, get_latent_channel());
             break;
         }
         case MING_IMAGE_FLOW_PRED: {
@@ -2612,9 +2612,9 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids,
                     condition.c_ref_audios.empty() ? nullptr : &condition.c_ref_audios,
                     condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
-                    audio_length,
+                    version == VERSION_P_H3_IMAGE ? 2 : audio_length,
                     std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
-                    3.f};
+                    version == VERSION_P_H3_IMAGE ? 1.f : 3.f};
             } else if (sd_version_is_ltxav(version)) {
                 diffusion_params.extra = LTXAVDiffusionExtra{
                     nullptr,
@@ -3025,7 +3025,10 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
     if (sd_version_is_pid(version) || sd_version_is_minit2i(version) || version == VERSION_IRIS) {
         return sd::ops::clamp((x + 1.f) * 0.5f, 0.0f, 1.0f);
     }
-    auto latents                      = first_stage_model->diffusion_to_vae_latents(x);
+    auto image_latents                = version == VERSION_P_H3_IMAGE && x.dim() == 5
+                                            ? sd::ops::slice(x, 3, 0, get_latent_channel())
+                                            : x;
+    auto latents                      = first_stage_model->diffusion_to_vae_latents(image_latents);
     auto tiling_params                = first_stage_model->resolve_tiling_params(vae_tiling_params);
     const bool prefer_temporal_tiling = decode_video && latents.dim() == 5 && latents.shape()[2] > 1 &&
                                         first_stage_model->can_temporal_tile_decode();
@@ -3039,6 +3042,9 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
             return {};
         }
         auto decoded = first_stage_model->decode(n_threads, latents, tiling_params, decode_video, circular_x, circular_y);
+        if (version == VERSION_P_H3_IMAGE && !decoded.empty() && decoded.dim() == 5) {
+            decoded = decoded.squeeze(2);
+        }
         if (!decoded.empty() ||
             !sd::backend_fit::prepare_vae_decode_retry_tiling(tiling_params, prefer_temporal_tiling,
                                                               first_stage_model->last_compute_status(),
@@ -3238,7 +3244,7 @@ RefImageParams StableDiffusionGGML::resolve_ref_image_params(const char* ref_ima
     if (params.force_ref_timestep_zero && !sd_version_is_krea2(version)) {
         LOG_WARN("force_ref_timestep_zero is only supported by Krea2 architecture for now");
     }
-    if (sd_version_is_minimax_h3(version)) {
+    if (version == VERSION_MINIMAX_H3) {
         // H3 consumes references as VAE latents in its own packed sequence rather than
         // through the generic conditioner/DiT reference path, so ref_image_size is the
         // only arg it acts on. Everything else is reported as ineffective rather than

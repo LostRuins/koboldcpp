@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
 
 ggml_tensor* ggml_ext_mul_n_mode(ggml_context* ctx, ggml_tensor* a, ggml_tensor* b, int mode) {
     // reshape A
@@ -143,6 +144,27 @@ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_firs
     return gate_first ? ggml_swiglu(ctx, x) : ggml_swiglu_swapped(ctx, x);
 }
 
+ggml_tensor* ggml_ext_situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate) {
+#ifndef SD_USE_UPSTREAM_GGML
+    if (ctx->backend != nullptr) {
+        auto out = gate ? ggml_glu_split(ctx->ggml_ctx, gate, hidden, GGML_GLU_OP_SITU)
+                        : ggml_glu(ctx->ggml_ctx, hidden, GGML_GLU_OP_SITU, true);
+        if (ggml_backend_supports_op(ctx->backend, out)) {
+            return out;
+        }
+    }
+#endif
+    if (!gate) {
+        const auto dim = hidden->ne[0] / 2;
+        gate           = ggml_ext_slice(ctx->ggml_ctx, hidden, 0, dim, 2 * dim);
+        hidden         = ggml_ext_slice(ctx->ggml_ctx, hidden, 0, 0, dim);
+    }
+    auto a = ggml_scale(ctx->ggml_ctx, ggml_tanh(ctx->ggml_ctx, ggml_scale(ctx->ggml_ctx, gate, 0.25f)), 4.f);
+    a      = ggml_mul(ctx->ggml_ctx, a, ggml_sigmoid(ctx->ggml_ctx, gate));
+    auto b = ggml_scale(ctx->ggml_ctx, ggml_tanh(ctx->ggml_ctx, ggml_scale(ctx->ggml_ctx, hidden, 1.f / 25.f)), 25.f);
+    return ggml_mul(ctx->ggml_ctx, a, b);
+}
+
 ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
                                     ggml_tensor* a) {
     const float eps = 1e-6f;  // default eps parameter
@@ -153,6 +175,26 @@ static bool ggml_ext_is_padded_1d(const ggml_tensor* x) {
     return x->nb[0] == ggml_type_size(x->type) &&
            x->nb[2] == x->nb[1] * x->ne[1] &&
            x->nb[3] == x->nb[2] * x->ne[2];
+}
+
+ggml_tensor* ggml_ext_modulate(GGMLRunnerContext* ctx,
+                               ggml_tensor* x,
+                               ggml_tensor* shift,
+                               ggml_tensor* scale) {
+#ifndef SD_USE_UPSTREAM_GGML
+    if (x->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32 && (!shift || shift->type == GGML_TYPE_F32) &&
+        (sd_backend_is_cpu(ctx->backend) || sd_backend_is(ctx->backend, "CUDA") ||
+         sd_backend_is(ctx->backend, "ROCm") || sd_backend_is(ctx->backend, "MUSA") || sd_backend_is(ctx->backend, "Vulkan"))) {
+        ggml_tensor* inputs[] = {x, scale, shift};
+        return ggml_ext_op_create(ctx->ggml_ctx, sd_ggml_modulate_op(), inputs, shift ? 3 : 2, nullptr);
+    }
+#endif
+    // Preserve separate multiply/add nodes for rounding and backend fusion matching.
+    x = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, x, scale));
+    if (shift != nullptr) {
+        x = ggml_add(ctx->ggml_ctx, x, shift);
+    }
+    return x;
 }
 
 ggml_tensor* ggml_ext_scale(ggml_context* ctx,

@@ -464,7 +464,7 @@ ArgOptions SDContextParams::get_options() {
          &uncond_diffusion_model_path},
         {"",
          "--embeddings-connectors",
-         "path to LTXAV embeddings connectors",
+         "path to embeddings connectors (LTXAV or P-H3-Image)",
          0,
          &embeddings_connectors_path},
         {"",
@@ -1530,6 +1530,8 @@ ArgOptions SDGenerationParams::get_options() {
         std::string sigmas_str = value;
         if (sigmas_str == "qwen-image-2.1-turbo") {
             sigmas_str = "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0";
+        } else if (sigmas_str == "p-h3-image") {
+            sigmas_str = "1.0,0.984753,0.967905,0.951688,0.925372,0.881923,0.810083,0.528718,0.0";
         }
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
@@ -1777,11 +1779,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_scheduler_arg},
         {"",
          "--sigmas",
-         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo.",
+         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image.",
          on_sigmas_arg},
         {"",
          "--hires-sigmas",
-         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo.",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image.",
          on_hires_sigmas_arg},
         {"",
          "--skip-layers",

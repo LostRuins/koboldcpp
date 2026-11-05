@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cinttypes>
+
 #include "core/pe_cache.h"
 
 #include "model/common/ggml_block.hpp"
@@ -55,13 +56,6 @@ namespace MOSSImage {
         }
     };
 
-    inline ggml_tensor* situ(ggml_context* c, ggml_tensor* hidden, ggml_tensor* gate) {
-        auto a = ggml_scale(c, ggml_tanh(c, ggml_scale(c, gate, 0.25f)), 4.f);
-        a      = ggml_mul(c, a, ggml_sigmoid(c, gate));
-        auto b = ggml_scale(c, ggml_tanh(c, ggml_scale(c, hidden, 1.f / 25.f)), 25.f);
-        return ggml_mul(c, a, b);
-    }
-
     struct TextBlock : public GGMLBlock {
         MOSSImageConfig config;
 
@@ -85,7 +79,8 @@ namespace MOSSImage {
             auto y      = norm("norm1", x);
             auto qkv    = linear("qkv", y);
             auto split  = [&](int i) {
-                return ggml_reshape_4d(c, ggml_ext_slice(c, qkv, 0, i * config.dim, (i + 1) * config.dim), config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2]);
+                // q/k feed rms_norm and v a permuted copy, which read these strided views in place.
+                return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2], config.head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * config.dim * qkv->nb[0]);
             };
             auto q = norm("q_norm", split(0));
             auto k = norm("k_norm", split(1));
@@ -94,7 +89,7 @@ namespace MOSSImage {
             y      = linear("proj", y);
             x      = ggml_add(c, x, y);
             y      = norm("norm2", x);
-            y      = situ(c, linear("ffn_up", y), linear("ffn_gate", y));
+            y      = ggml_ext_situ(ctx, linear("ffn_up", y), linear("ffn_gate", y));
             y      = linear("ffn_down", y);
             return ggml_add(c, x, y);
         }
@@ -121,7 +116,7 @@ namespace MOSSImage {
             auto norm   = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h); };
             auto part   = [&](int i) { return mod[i]; };
             auto y      = norm("norm1", x);
-            y           = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(1))), part(0));
+            y           = ggml_ext_modulate(ctx, y, part(0), part(1));
             auto qkv    = linear("proj.qkv", y);
             auto split  = [&](int i) {
                 return ggml_view_4d(c, qkv, config.head_dim, config.dim / config.head_dim, x->ne[1], x->ne[2],
@@ -135,9 +130,9 @@ namespace MOSSImage {
             y            = ggml_mul(c, y, part(2));
             x            = ggml_add(c, x, y);
             y            = norm("norm2", x);
-            y            = ggml_add(c, ggml_add(c, y, ggml_mul(c, y, part(4))), part(3));
+            y            = ggml_ext_modulate(ctx, y, part(3), part(4));
             auto up_gate = linear("proj.ffn_up_gate", y);
-            y            = situ(c, ggml_ext_slice(c, up_gate, 0, 0, config.ffn_dim), ggml_ext_slice(c, up_gate, 0, config.ffn_dim, 2 * config.ffn_dim));
+            y            = ggml_ext_situ(ctx, up_gate);
             y            = linear("proj.ffn_down", y);
             y            = ggml_mul(c, y, part(5));
             return ggml_add(c, x, y);
@@ -196,7 +191,7 @@ namespace MOSSImage {
             x          = std::dynamic_pointer_cast<RMSNorm>(blocks["final_norm_video"])->forward(ctx, x);
             auto shift = ggml_ext_slice(c, head, 0, 0, config.dim);
             auto scale = ggml_ext_slice(c, head, 0, config.dim, 2 * config.dim);
-            x          = ggml_add(c, ggml_add(c, x, ggml_mul(c, x, scale)), shift);
+            x          = ggml_ext_modulate(ctx, x, shift, scale);
             x          = linear("final_linear_video", x);
             return DiT::unpatchify(c, x, image->ne[1], image->ne[0], 1, 1);
         }

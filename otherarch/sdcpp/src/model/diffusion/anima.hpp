@@ -129,7 +129,7 @@ namespace Anima {
             auto gate       = emb_chunks[2];
 
             auto x = norm->forward(ctx, hidden_states);
-            x      = Flux::modulate(ctx->ggml_ctx, x, shift, scale);
+            x      = Flux::modulate(ctx, x, shift, scale);
 
             return {x, gate};
         }
@@ -169,7 +169,7 @@ namespace Anima {
             auto scale      = emb_chunks[1];
 
             auto x = norm->forward(ctx, hidden_states);
-            x      = Flux::modulate(ctx->ggml_ctx, x, shift, scale);
+            x      = Flux::modulate(ctx, x, shift, scale);
             return x;
         }
     };

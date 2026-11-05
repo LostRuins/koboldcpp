@@ -140,8 +140,11 @@ namespace MiniMaxH3 {
     };
 
     struct MLP : public UnaryBlock {
+        int64_t ffn_hidden_size;
+
         MLP(int64_t hidden_size,
-            int64_t ffn_hidden_size) {
+            int64_t ffn_hidden_size)
+            : ffn_hidden_size(ffn_hidden_size) {
             blocks["fc1"] = std::make_shared<Linear>(hidden_size, ffn_hidden_size * 2, false, false, true, 1.f / 128.f);
             blocks["fc2"] = std::make_shared<Linear>(ffn_hidden_size, hidden_size, false, false, true, 1.f / 128.f);
         }
@@ -159,11 +162,38 @@ namespace MiniMaxH3 {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-            auto fc1       = std::dynamic_pointer_cast<Linear>(blocks["fc1"]);
-            auto fc2       = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
-            auto projected = fc1->forward(ctx, x);
-            auto activated = ggml_swiglu(ctx->ggml_ctx, projected);
-            return fc2->forward(ctx, activated);
+            auto fc1           = std::dynamic_pointer_cast<Linear>(blocks["fc1"]);
+            auto fc2           = std::dynamic_pointer_cast<Linear>(blocks["fc2"]);
+            auto forward_chunk = [&](ggml_tensor* input) {
+                auto projected = fc1->forward(ctx, input);
+                auto activated = ggml_swiglu(ctx->ggml_ctx, projected);
+                return fc2->forward(ctx, activated);
+            };
+
+            int64_t chunk_size = x->ne[1];
+            if (ctx->backend != nullptr) {
+                auto buft        = ggml_backend_get_default_buffer_type(ctx->backend);
+                size_t alignment = ggml_backend_buft_get_alignment(buft);
+                size_t max_size  = ggml_backend_buft_get_max_size(buft);
+                max_size -= max_size % alignment;
+                // Matmul outputs are F32 even for quantized weights. Split before fc1
+                // so its expanded activation never needs an oversized backend buffer.
+                size_t token_bytes = ggml_row_size(GGML_TYPE_F32, std::max(x->ne[0], 2 * ffn_hidden_size)) * x->ne[2] * x->ne[3];
+                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, max_size / token_bytes)));
+            }
+            if (chunk_size == x->ne[1]) {
+                return forward_chunk(x);
+            }
+
+            std::vector<ggml_tensor*> chunks;
+            for (int64_t start = 0; start < x->ne[1]; start += chunk_size) {
+                auto input = ggml_ext_slice(ctx->ggml_ctx, x, 1, start, std::min(start + chunk_size, x->ne[1]), false);
+                if (!ggml_is_contiguous(input)) {
+                    input = ggml_cont(ctx->ggml_ctx, input);
+                }
+                chunks.push_back(forward_chunk(input));
+            }
+            return ggml_ext_vec_concat(ctx->ggml_ctx, chunks, 1);
         }
     };
 
@@ -180,8 +210,8 @@ namespace MiniMaxH3 {
         GGML_ASSERT(rot_dim <= x->ne[0]);
 #ifndef SD_USE_UPSTREAM_GGML
         if (runner_ctx->backend != nullptr && x->type == GGML_TYPE_F32 && pe->type == GGML_TYPE_F32) {
-            auto out = ggml_rope_apply(ctx, x, pe, false);
-            if (ggml_backend_supports_op(runner_ctx->backend, out)) {
+            auto out = sd_ggml_rope_apply(ctx, runner_ctx->backend, x, pe, false);
+            if (out && ggml_backend_supports_op(runner_ctx->backend, out)) {
                 return out;
             }
         }
@@ -415,9 +445,7 @@ namespace MiniMaxH3 {
                 inputs.push_back(ggml_ext_slice(ctx->ggml_ctx, x, 1, segment.start, segment.end, false));
             }
             auto modulate = [&](ggml_tensor* value, const std::vector<ggml_tensor*>& row, int shift, int scale) {
-                return ggml_add(ctx->ggml_ctx,
-                                ggml_add(ctx->ggml_ctx, value, ggml_mul(ctx->ggml_ctx, value, row[scale])),
-                                row[shift]);
+                return ggml_ext_modulate(ctx, value, row[shift], row[scale]);
             };
             ggml_tensor* qkv = nullptr;
             for (size_t i = 0; i < segments.size(); ++i) {
