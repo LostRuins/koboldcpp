@@ -465,8 +465,8 @@ namespace Krea2 {
                 auto pre_x_main = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_main, B, nb1, nb2, 0);
                 auto pre_x_refs = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_refs, B, nb1, nb2, len_main * nb1);
 
-                auto attn_in_main = Flux::modulate(ctx->ggml_ctx, pre_x_main, mods_main[1], mods_main[0], true);
-                auto attn_in_refs = Flux::modulate(ctx->ggml_ctx, pre_x_refs, mods_refs[1], mods_refs[0], true);
+                auto attn_in_main = Flux::modulate(ctx, pre_x_main, mods_main[1], mods_main[0], true);
+                auto attn_in_refs = Flux::modulate(ctx, pre_x_refs, mods_refs[1], mods_refs[0], true);
 
                 auto attn_input = ggml_concat(ctx->ggml_ctx, attn_in_main, attn_in_refs, 1);
 
@@ -487,8 +487,8 @@ namespace Krea2 {
                 auto post_x_main = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_main, B, post_x->nb[1], post_x->nb[2], 0);
                 auto post_x_refs = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_refs, B, post_x->nb[1], post_x->nb[2], len_main * post_x->nb[1]);
 
-                auto mlp_in_main = Flux::modulate(ctx->ggml_ctx, post_x_main, mods_main[4], mods_main[3], true);
-                auto mlp_in_refs = Flux::modulate(ctx->ggml_ctx, post_x_refs, mods_refs[4], mods_refs[3], true);
+                auto mlp_in_main = Flux::modulate(ctx, post_x_main, mods_main[4], mods_main[3], true);
+                auto mlp_in_refs = Flux::modulate(ctx, post_x_refs, mods_refs[4], mods_refs[3], true);
 
                 auto mlp_input = ggml_concat(ctx->ggml_ctx, mlp_in_main, mlp_in_refs, 1);
                 auto mlp_out   = mlp->forward(ctx, mlp_input);
@@ -503,7 +503,7 @@ namespace Krea2 {
                 x            = ggml_add(ctx->ggml_ctx, x, mlp_res);
             } else {
                 auto mods       = mod->forward(ctx, vec);
-                auto attn_input = Flux::modulate(ctx->ggml_ctx,
+                auto attn_input = Flux::modulate(ctx,
                                                  prenorm->forward(ctx, x),
                                                  mods[1],
                                                  mods[0],
@@ -511,7 +511,7 @@ namespace Krea2 {
                 auto attn_out   = attn->forward(ctx, attn_input, pe);
                 x               = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, mods[2]));
 
-                auto mlp_input = Flux::modulate(ctx->ggml_ctx,
+                auto mlp_input = Flux::modulate(ctx,
                                                 postnorm->forward(ctx, x),
                                                 mods[4],
                                                 mods[3],
@@ -595,7 +595,7 @@ namespace Krea2 {
             auto modulation = std::dynamic_pointer_cast<KreaFinalModulation>(blocks["modulation"]);
 
             auto mods = modulation->forward(ctx, vec);
-            x         = Flux::modulate(ctx->ggml_ctx,
+            x         = Flux::modulate(ctx,
                                        norm->forward(ctx, x),
                                        mods[1],
                                        mods[0],

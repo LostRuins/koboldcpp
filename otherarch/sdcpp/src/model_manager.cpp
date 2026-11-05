@@ -1,9 +1,11 @@
 #include "model_manager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <iterator>
 #include <mutex>
+#include <thread>
 #include <tuple>
 #include <unordered_set>
 
@@ -2006,10 +2008,30 @@ bool ModelManager::ensure_compute_backend_capacity(
     }
     revert_demotions();
 
-    if (check_capacity(request, required_states).fits()) {
+    auto capacity = check_capacity(request, required_states);
+    if (!capacity.requires_reclamation && capacity.fits()) {
         return true;
     }
-    const auto capacity                = check_capacity(request, required_states, true);
+    if (sd_backend_is(compute_backend, "Vulkan") &&
+        capacity.required_budget_bytes <= capacity.available_budget_bytes) {
+        ggml_backend_synchronize(compute_backend);
+        sd_backend_clear_buffer_cache(compute_backend);
+        // Vulkan heap usage can lag behind buffer releases. Fast memory queries
+        // must not turn that reporting delay into an allocation failure.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        for (;;) {
+            capacity = check_capacity(request, required_states);
+            if (!capacity.requires_reclamation && capacity.fits()) {
+                return true;
+            }
+            if (capacity.required_budget_bytes > capacity.available_budget_bytes ||
+                std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    capacity                           = check_capacity(request, required_states, true);
     const std::string available_device = capacity.available_device_bytes == SIZE_MAX
                                              ? "unknown"
                                              : sd_format("%.2f MB", capacity.available_device_bytes / (1024.0 * 1024.0));

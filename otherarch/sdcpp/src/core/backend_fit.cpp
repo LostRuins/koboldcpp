@@ -42,8 +42,9 @@ namespace sd::backend_fit {
     struct Device {
         std::string name;
         std::string description;
-        int64_t free_bytes   = 0;
-        int64_t budget_bytes = 0;
+        int64_t free_bytes              = 0;
+        int64_t budget_bytes            = 0;
+        enum ggml_backend_dev_type type = GGML_BACKEND_DEVICE_TYPE_GPU;
     };
 
     enum class ParamsLocation {
@@ -140,6 +141,7 @@ namespace sd::backend_fit {
             Device device;
             device.name        = ggml_backend_dev_name(dev);
             device.description = ggml_backend_dev_description(dev);
+            device.type        = type;
             size_t free_bytes = 0, total_bytes = 0;
             ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
             device.free_bytes = (int64_t)free_bytes;
@@ -193,14 +195,23 @@ namespace sd::backend_fit {
     }
 
     static size_t select_main_device(const std::vector<Device>& devices) {
-        size_t main_device = SIZE_MAX;
-        for (size_t di = 0; di < devices.size(); ++di) {
-            if (devices[di].budget_bytes > 0 &&
-                (main_device == SIZE_MAX || devices[di].budget_bytes > devices[main_device].budget_bytes)) {
-                main_device = di;
+        // Shared system memory must not make an integrated GPU outrank a discrete GPU.
+        for (bool discrete : {true, false}) {
+            size_t main_device = SIZE_MAX;
+            for (size_t di = 0; di < devices.size(); ++di) {
+                if ((devices[di].type == GGML_BACKEND_DEVICE_TYPE_GPU) != discrete) {
+                    continue;
+                }
+                if (devices[di].budget_bytes > 0 &&
+                    (main_device == SIZE_MAX || devices[di].budget_bytes > devices[main_device].budget_bytes)) {
+                    main_device = di;
+                }
+            }
+            if (main_device != SIZE_MAX) {
+                return main_device;
             }
         }
-        return main_device;
+        return SIZE_MAX;
     }
 
     static Plan compute_plan(const std::vector<Component>& components,
