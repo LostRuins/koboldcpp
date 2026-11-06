@@ -704,6 +704,7 @@ static size_t estimate_draft_autofit_tax_mb(
 
     std::vector<ggml_backend_dev_t> devs;
     uint32_t hp_ngl = 0;
+    uint32_t hp_ngl_skip = 0;
     uint32_t hp_n_ctx_train = 0;
     uint32_t hp_n_expert = 0;
     common_device_memory_data_vec dmd;
@@ -715,6 +716,7 @@ static size_t estimate_draft_autofit_tax_mb(
             &draft_ctx_params,
             devs,
             hp_ngl,
+            hp_ngl_skip,
             hp_n_ctx_train,
             hp_n_expert,
             GGML_LOG_LEVEL_ERROR);
