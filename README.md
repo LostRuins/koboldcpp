@@ -151,7 +151,7 @@ Image, speech, embedding and music generation require the corresponding models t
 - Supported endpoints and request formats are described in the [KoboldCpp API reference](https://lite.koboldai.net/koboldcpp_api)
 
 ## Compiling KoboldCpp From Source Code
-Use a source build if a prebuilt binary does not suit your platform or you want to develop KoboldCpp. Manual builds require Git, Python 3, a C/C++ toolchain, and the development libraries for your chosen GPU backend.
+Use a source build if a prebuilt binary does not suit your platform or you want to develop Kobold CPP. Manual builds require Git, Python 3, a C/C++ toolchain, and the development libraries for your chosen GPU backend.
 
 Optional Python runtime dependencies include `customtkinter` and Tk support for the GUI launcher, `jinja2` for chat templates, and `psutil` for system information. Install the Python packages you need in your Python environment with `python -m pip install -r requirements.txt`; Tk may require a separate package from your operating system. The automated Linux build script manages its own dependencies.
 
@@ -275,7 +275,7 @@ The following are all official KoboldCpp resources
 
 ## KoboldCpp Website
 - NEW: KoboldCpp now has its own official KoboldCpp Website at **[https://koboldcpp.net](https://koboldcpp.net)**
-- This community website provides simple resources and instructions to help newbies get started, and links to release binaries on the KoboldCpp Github repo. Contributions are welcome.
+- This community website provides simple resources and instructions to help newbies get started, and links to release binaries on the Kobold Cpp Github repo. Contributions are welcome.
 
 ## Third Party Resources
 These unofficial community projects may be outdated or unmaintained. Contact their maintainers for support.
