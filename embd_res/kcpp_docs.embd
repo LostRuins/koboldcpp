@@ -370,10 +370,10 @@
                         "text": {
                            "type": "string"
                         },
-                        "timestamps": {
+                        "words": {
                            "type": "array",
                            "description": "Qwen3 Forced Aligner word timestamps when requested.",
-                           "items": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "start_time": {"type": "number"}, "end_time": {"type": "number"}}, "required": ["text", "start_time", "end_time"]}}
+                           "items": {"type": "object", "properties": {"word": {"type": "string"}, "start": {"type": "number"}, "end": {"type": "number"}}, "required": ["word", "start", "end"]}
                         },
                         "abc": {
                            "type": "string",

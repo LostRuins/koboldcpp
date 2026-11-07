@@ -129,18 +129,18 @@ static std::string audiocpp_transcription_metadata_json(
     std::ostringstream json;
     json.precision(10);
     json << "{\"family\":" << engine::io::json::stringify_string(audiocpp_transcription_family)
-         << ",\"timestamps\":[[";
+         << ",\"words\":[";
     for (size_t i = 0; i < result.word_timestamps.size(); ++i) {
         const auto & word = result.word_timestamps[i];
         if (i != 0) {
             json << ',';
         }
-        json << "{\"text\":" << engine::io::json::stringify_string(word.word)
-             << ",\"start_time\":" << static_cast<double>(word.span.start_sample) / sample_rate
-             << ",\"end_time\":" << static_cast<double>(word.span.end_sample) / sample_rate
+        json << "{\"word\":" << engine::io::json::stringify_string(word.word)
+             << ",\"start\":" << static_cast<double>(word.span.start_sample) / sample_rate
+             << ",\"end\":" << static_cast<double>(word.span.end_sample) / sample_rate
              << '}';
     }
-    json << "]]}";
+    json << "]}";
     return json.str();
 }
 

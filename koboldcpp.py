@@ -9050,7 +9050,7 @@ Change Mode<br>
                             return
                         transcribe_response = {"text":gendat}
                         if wants_timestamps:
-                            transcribe_response["timestamps"] = transcription_result.get("timestamps", [[]])
+                            transcribe_response["words"] = transcription_result.get("words", [])
                         if clean_path.endswith('/api/extra/music/transcribe'):
                             transcribe_response["abc"] = gendat
                         genresp = json.dumps(transcribe_response).encode()

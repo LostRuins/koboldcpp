@@ -420,9 +420,19 @@ select{
   </div>
 
   <div style="margin-top:10px">
+    <label for="transcribe_timestamps" title="Request word timestamps from Qwen3-ASR. This requires a Qwen3 Forced Aligner loaded with --transcribealigner.">Request word timestamps</label>
+    <input title="Request word timestamps" id="transcribe_timestamps" type="checkbox" style="max-width:30px">
+  </div>
+
+  <div style="margin-top:10px">
     <label for="transcribe_output" title="The returned transcript appears here and can be edited or copied. It is temporary and is not saved in the generated-audio library.">Transcription</label>
     <textarea id="transcribe_output" style="min-height:180px;" placeholder="The transcription will appear here."></textarea>
     <button type="button" class="secondary" style="margin-top:6px" onclick="copyTranscription()">Copy</button>
+  </div>
+
+  <div id="transcribe_json_container" class="hidden" style="margin-top:10px">
+    <label for="transcribe_json" title="Word timestamps returned by the Qwen3 Forced Aligner.">Timestamp JSON</label>
+    <textarea id="transcribe_json" style="min-height:180px;" readonly placeholder="Timestamp JSON will appear here."></textarea>
   </div>
 
   <div style="margin-top:14px">
@@ -700,6 +710,10 @@ async function transcribeAudio(){
     formData.append("file",file,file.name);
     const language=document.getElementById("transcribe_language").value.trim();
     if(language) formData.append("language",language);
+    const requestTimestamps=document.getElementById("transcribe_timestamps").checked;
+    if(requestTimestamps) formData.append("return_timestamps","true");
+    document.getElementById("transcribe_json").value="";
+    document.getElementById("transcribe_json_container").classList.add("hidden");
 
     const res=await fetch(url,{
       method:"POST",
@@ -712,6 +726,10 @@ async function transcribeAudio(){
     if(!data.text || !data.text.trim()) throw new Error("Whisper returned an empty transcription.");
 
     document.getElementById("transcribe_output").value=data.text.trim();
+    if(requestTimestamps && Array.isArray(data.words)){
+      document.getElementById("transcribe_json").value=JSON.stringify(data.words,null,2);
+      document.getElementById("transcribe_json_container").classList.remove("hidden");
+    }
     showMessage("Audio transcribed.");
   }catch(e){
     if(e.name!=="AbortError") showMessage(e.message || "Failed to transcribe audio.",5000);
@@ -724,7 +742,10 @@ async function transcribeAudio(){
 function clearTranscription(){
   document.getElementById("transcribe_file").value="";
   document.getElementById("transcribe_language").value="";
+  document.getElementById("transcribe_timestamps").checked=false;
   document.getElementById("transcribe_output").value="";
+  document.getElementById("transcribe_json").value="";
+  document.getElementById("transcribe_json_container").classList.add("hidden");
 }
 
 async function copyTranscription(){

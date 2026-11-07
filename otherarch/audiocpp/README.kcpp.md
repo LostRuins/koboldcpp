@@ -267,13 +267,12 @@ occupy the transcription slot at a time.
 Qwen3-ASR word timestamps require a separate Qwen3 Forced Aligner package. Pass
 its GGUF with `--transcribealigner`; the recommended upstream package is
 `qwen3-forced-aligner-0.6b-q8_0.gguf`. Set `return_timestamps=true` on the
-KoboldCpp transcription endpoint to add a `timestamps` array to its normal JSON
-response. Each word contains `text`, `start_time`, and `end_time`; the outer
-array is retained for simple downstream grouping. Timestamp requests default to
-clamped word spans and punctuation-preserving transcript text. The aligner does
-not provide diarization. The supported alignment languages are English, Chinese,
-Cantonese, French, German, Italian, Japanese, Korean, Portuguese, Russian, and
-Spanish.
+KoboldCpp transcription endpoint to add an OpenAI-compatible `words` array to
+its normal JSON response. Each entry contains `word`, `start`, and `end` in
+seconds. Timestamp requests default to clamped word spans and
+punctuation-preserving transcript text. The aligner does not provide diarization.
+The supported alignment languages are English, Chinese, Cantonese, French,
+German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish.
 
 ## Intentional compatibility changes
 
