@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/util.h"
 #include "model/common/rope.hpp"
@@ -230,9 +231,8 @@ namespace LingBotVideo {
             auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
 
             auto gate = gate_proj->forward(ctx, x);
-            gate      = ggml_silu_inplace(ctx->ggml_ctx, gate);
             auto up   = up_proj->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, gate, up);
+            x         = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             x         = down_proj->forward(ctx, x);
             return x;
         }
@@ -405,9 +405,8 @@ namespace LingBotVideo {
 
             x         = ggml_reshape_3d(ctx->ggml_ctx, x, hidden_size, 1, n_token_total);
             auto gate = expert_linear(ctx, "experts.w1", x, selected_experts);
-            gate      = ggml_silu_inplace(ctx->ggml_ctx, gate);
             auto up   = expert_linear(ctx, "experts.w3", x, selected_experts);
-            auto act  = ggml_mul(ctx->ggml_ctx, gate, up);
+            auto act  = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             auto out  = expert_linear(ctx, "experts.w2", act, selected_experts);
             out       = ggml_mul(ctx->ggml_ctx, out, weights);
 
@@ -486,12 +485,12 @@ namespace LingBotVideo {
             auto scale_mlp = mods[4];
             auto gate_mlp  = ggml_tanh(ctx->ggml_ctx, mods[5]);
 
-            auto attn_in  = Flux::modulate(ctx->ggml_ctx, norm1->forward(ctx, x), shift_msa, scale_msa, true);
+            auto attn_in  = Flux::modulate(ctx, norm1->forward(ctx, x), shift_msa, scale_msa, true);
             auto attn_out = attn->forward(ctx, attn_in, pe, attention_mask);
             attn_out      = norm_post_attn->forward(ctx, attn_out);
             x             = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, gate_msa, attn_out));
 
-            auto ffn_in  = Flux::modulate(ctx->ggml_ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp, true);
+            auto ffn_in  = Flux::modulate(ctx, norm2->forward(ctx, x), shift_mlp, scale_mlp, true);
             auto ffn_out = ffn->forward(ctx, ffn_in);
             ffn_out      = norm_post_ffn->forward(ctx, ffn_out);
             x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, gate_mlp, ffn_out));
@@ -588,7 +587,7 @@ namespace LingBotVideo {
                                              2,
                                              0);
             hidden_states   = norm_out->forward(ctx, hidden_states);
-            hidden_states   = Flux::modulate(ctx->ggml_ctx, hidden_states, final_mods[0], final_mods[1], true);
+            hidden_states   = Flux::modulate(ctx, hidden_states, final_mods[0], final_mods[1], true);
             hidden_states   = proj_out->forward(ctx, hidden_states);
             hidden_states   = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, 0, n_img);
 
@@ -606,9 +605,9 @@ namespace LingBotVideo {
     };
 
     struct LingBotVideoRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         LingBotVideoConfig config;
         LingBotVideoModel lingbot_video;
-        std::vector<float> pe_vec;
 
         LingBotVideoRunner(ggml_backend_t backend,
                            const String2TensorStorage& tensor_storage_map      = {},
@@ -647,19 +646,23 @@ namespace LingBotVideo {
             int64_t T = x->ne[2];
             int64_t N = x_tensor.shape()[4];
             GGML_ASSERT(N == 1);
-            pe_vec      = Rope::gen_lingbot_video_pe(static_cast<int>(T),
-                                                     static_cast<int>(H),
-                                                     static_cast<int>(W),
-                                                     config.patch_t,
-                                                     config.patch_h,
-                                                     config.patch_w,
-                                                     static_cast<int>(N),
-                                                     static_cast<int>(context->ne[1]),
-                                                     config.rope_theta,
-                                                     config.axes_dim);
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("lingbot_video.pe");
+            pe_key.add(T).add(H).add(W).add(N).add_shape(context).add(config.patch_t).add(config.patch_h).add(config.patch_w);
+            pe_key.add(config.rope_theta).add(config.axes_dim).add(config.axes_dim_sum);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = Rope::gen_lingbot_video_pe(static_cast<int>(T),
+                                                         static_cast<int>(H),
+                                                         static_cast<int>(W),
+                                                         config.patch_t,
+                                                         config.patch_h,
+                                                         config.patch_w,
+                                                         static_cast<int>(N),
+                                                         static_cast<int>(context->ne[1]),
+                                                         config.rope_theta,
+                                                         config.axes_dim);
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = lingbot_video.forward(&runner_ctx, x, timesteps, context, pe);

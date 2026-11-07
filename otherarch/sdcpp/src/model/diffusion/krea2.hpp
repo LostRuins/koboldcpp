@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
@@ -207,9 +208,9 @@ namespace Krea2 {
             auto up   = std::dynamic_pointer_cast<Linear>(blocks["up"]);
             auto down = std::dynamic_pointer_cast<Linear>(blocks["down"]);
 
-            auto gated = ggml_silu(ctx->ggml_ctx, gate->forward(ctx, x));
-            auto up_x  = up->forward(ctx, x);
-            x          = ggml_mul(ctx->ggml_ctx, gated, up_x);
+            auto gate_x = gate->forward(ctx, x);
+            auto up_x   = up->forward(ctx, x);
+            x           = ggml_swiglu_split(ctx->ggml_ctx, gate_x, up_x);
             return down->forward(ctx, x);
         }
     };
@@ -464,8 +465,8 @@ namespace Krea2 {
                 auto pre_x_main = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_main, B, nb1, nb2, 0);
                 auto pre_x_refs = ggml_view_3d(ctx->ggml_ctx, pre_x, D, len_refs, B, nb1, nb2, len_main * nb1);
 
-                auto attn_in_main = Flux::modulate(ctx->ggml_ctx, pre_x_main, mods_main[1], mods_main[0], true);
-                auto attn_in_refs = Flux::modulate(ctx->ggml_ctx, pre_x_refs, mods_refs[1], mods_refs[0], true);
+                auto attn_in_main = Flux::modulate(ctx, pre_x_main, mods_main[1], mods_main[0], true);
+                auto attn_in_refs = Flux::modulate(ctx, pre_x_refs, mods_refs[1], mods_refs[0], true);
 
                 auto attn_input = ggml_concat(ctx->ggml_ctx, attn_in_main, attn_in_refs, 1);
 
@@ -486,8 +487,8 @@ namespace Krea2 {
                 auto post_x_main = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_main, B, post_x->nb[1], post_x->nb[2], 0);
                 auto post_x_refs = ggml_view_3d(ctx->ggml_ctx, post_x, D, len_refs, B, post_x->nb[1], post_x->nb[2], len_main * post_x->nb[1]);
 
-                auto mlp_in_main = Flux::modulate(ctx->ggml_ctx, post_x_main, mods_main[4], mods_main[3], true);
-                auto mlp_in_refs = Flux::modulate(ctx->ggml_ctx, post_x_refs, mods_refs[4], mods_refs[3], true);
+                auto mlp_in_main = Flux::modulate(ctx, post_x_main, mods_main[4], mods_main[3], true);
+                auto mlp_in_refs = Flux::modulate(ctx, post_x_refs, mods_refs[4], mods_refs[3], true);
 
                 auto mlp_input = ggml_concat(ctx->ggml_ctx, mlp_in_main, mlp_in_refs, 1);
                 auto mlp_out   = mlp->forward(ctx, mlp_input);
@@ -502,7 +503,7 @@ namespace Krea2 {
                 x            = ggml_add(ctx->ggml_ctx, x, mlp_res);
             } else {
                 auto mods       = mod->forward(ctx, vec);
-                auto attn_input = Flux::modulate(ctx->ggml_ctx,
+                auto attn_input = Flux::modulate(ctx,
                                                  prenorm->forward(ctx, x),
                                                  mods[1],
                                                  mods[0],
@@ -510,7 +511,7 @@ namespace Krea2 {
                 auto attn_out   = attn->forward(ctx, attn_input, pe);
                 x               = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, mods[2]));
 
-                auto mlp_input = Flux::modulate(ctx->ggml_ctx,
+                auto mlp_input = Flux::modulate(ctx,
                                                 postnorm->forward(ctx, x),
                                                 mods[4],
                                                 mods[3],
@@ -594,7 +595,7 @@ namespace Krea2 {
             auto modulation = std::dynamic_pointer_cast<KreaFinalModulation>(blocks["modulation"]);
 
             auto mods = modulation->forward(ctx, vec);
-            x         = Flux::modulate(ctx->ggml_ctx,
+            x         = Flux::modulate(ctx,
                                        norm->forward(ctx, x),
                                        mods[1],
                                        mods[0],
@@ -714,9 +715,9 @@ namespace Krea2 {
     }
 
     struct Krea2Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         Krea2Config config;
         Krea2Model model;
-        std::vector<float> pe_vec;
 
         Krea2Runner(ggml_backend_t backend,
                     const String2TensorStorage& tensor_storage_map      = {},
@@ -754,18 +755,23 @@ namespace Krea2 {
                 ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
-            pe_vec      = finish_rope_pe(gen_krea2_pe(static_cast<int>(x->ne[1]),
-                                                      static_cast<int>(x->ne[0]),
-                                                      config.patch_size,
-                                                      static_cast<int>(x->ne[3]),
-                                                      static_cast<int>(context->ne[1]),
-                                                      config.theta,
-                                                      config.axes_dim,
-                                                      ref_latents,
-                                                      ref_image_params.ref_index_mode));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("krea2.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size).add_shapes(ref_latents);
+            pe_key.add(ref_image_params.ref_index_mode);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(gen_krea2_pe(static_cast<int>(x->ne[1]),
+                                                          static_cast<int>(x->ne[0]),
+                                                          config.patch_size,
+                                                          static_cast<int>(x->ne[3]),
+                                                          static_cast<int>(context->ne[1]),
+                                                          config.theta,
+                                                          config.axes_dim,
+                                                          ref_latents,
+                                                          ref_image_params.ref_index_mode));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pe, ref_latents, ref_image_params.force_ref_timestep_zero);

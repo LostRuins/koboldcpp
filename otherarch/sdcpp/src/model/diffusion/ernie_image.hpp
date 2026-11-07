@@ -4,6 +4,7 @@
 #include <cinttypes>
 #include <memory>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "model/common/rope.hpp"
 #include "model/diffusion/dit.hpp"
@@ -203,9 +204,8 @@ namespace ErnieImage {
             auto linear_fc2 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc2"]);
 
             auto gate = gate_proj->forward(ctx, x);
-            gate      = ggml_ext_gelu(ctx->ggml_ctx, gate);
             x         = up_proj->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, x, gate);
+            x         = ggml_geglu_split(ctx->ggml_ctx, gate, x);
             x         = linear_fc2->forward(ctx, x);
             return x;
         }
@@ -246,13 +246,13 @@ namespace ErnieImage {
 
             auto residual = x;
             x             = adaLN_sa_ln->forward(ctx, x);
-            x             = Flux::modulate(ctx->ggml_ctx, x, shift_msa, scale_msa, true);
+            x             = Flux::modulate(ctx, x, shift_msa, scale_msa, true);
             auto attn_out = self_attention->forward(ctx, x, pe, attention_mask);
             x             = ggml_add(ctx->ggml_ctx, residual, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
 
             residual = x;
             x        = adaLN_mlp_ln->forward(ctx, x);
-            x        = Flux::modulate(ctx->ggml_ctx, x, shift_mlp, scale_mlp, true);
+            x        = Flux::modulate(ctx, x, shift_mlp, scale_mlp, true);
             x        = ggml_add(ctx->ggml_ctx, residual, ggml_mul(ctx->ggml_ctx, mlp->forward(ctx, x), gate_mlp));
             return x;
         }
@@ -274,7 +274,7 @@ namespace ErnieImage {
             auto shift = mods[1];
 
             x = norm->forward(ctx, x);
-            x = Flux::modulate(ctx->ggml_ctx, x, shift, scale);
+            x = Flux::modulate(ctx, x, shift, scale);
             return x;
         }
     };
@@ -383,9 +383,9 @@ namespace ErnieImage {
     };
 
     struct ErnieImageRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         ErnieImageConfig config;
         ErnieImageModel ernie_image;
-        std::vector<float> pe_vec;
 
         ErnieImageRunner(ggml_backend_t backend,
                          const String2TensorStorage& tensor_storage_map      = {},
@@ -415,16 +415,20 @@ namespace ErnieImage {
             GGML_ASSERT(!context_tensor.empty());
             ggml_tensor* context = make_input(context_tensor);
 
-            pe_vec      = finish_rope_pe(Rope::gen_ernie_image_pe(static_cast<int>(x->ne[1]),
-                                                                  static_cast<int>(x->ne[0]),
-                                                                  config.patch_size,
-                                                                  static_cast<int>(x->ne[3]),
-                                                                  static_cast<int>(context->ne[1]),
-                                                                  config.theta,
-                                                                  config.axes_dim));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, config.axes_dim_sum, 1, pos_len, 2);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("ernie_image.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(Rope::gen_ernie_image_pe(static_cast<int>(x->ne[1]),
+                                                                      static_cast<int>(x->ne[0]),
+                                                                      config.patch_size,
+                                                                      static_cast<int>(x->ne[3]),
+                                                                      static_cast<int>(context->ne[1]),
+                                                                      config.theta,
+                                                                      config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({config.axes_dim_sum, 1, pos_len, 2}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = ernie_image.forward(&runner_ctx, x, timesteps, context, pe);

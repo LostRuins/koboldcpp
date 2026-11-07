@@ -4,8 +4,11 @@
 #include <cstdint>
 #include <vector>
 
+#include "core/ggml_extensions.h"
 #include "ggml-backend.h"
 #include "ggml.h"
+
+struct GGMLRunnerContext;
 
 #define EPS 1e-05f
 
@@ -49,6 +52,9 @@ std::vector<ggml_tensor*> ggml_ext_chunk(ggml_context* ctx,
 
 ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_first = true);
 
+// Without gate, hidden contains [hidden, gate] packed along ne[0].
+ggml_tensor* ggml_ext_situ(GGMLRunnerContext* ctx, ggml_tensor* hidden, ggml_tensor* gate = nullptr);
+
 ggml_tensor* ggml_ext_group_norm_32(ggml_context* ctx,
                                     ggml_tensor* a);
 
@@ -56,6 +62,13 @@ ggml_tensor* ggml_ext_scale(ggml_context* ctx,
                             ggml_tensor* x,
                             float factor,
                             bool inplace = false);
+
+// scale and optional shift must already be broadcastable to x in ggml layout.
+// Computes (x + x * scale) + shift; F32 uses sd.modulate.v1 when supported by ctx->backend.
+ggml_tensor* ggml_ext_modulate(GGMLRunnerContext* ctx,
+                               ggml_tensor* x,
+                               ggml_tensor* shift,
+                               ggml_tensor* scale);
 
 ggml_tensor* ggml_ext_gelu(ggml_context* ctx,
                            ggml_tensor* x,

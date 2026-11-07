@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -197,11 +198,11 @@ namespace PixArt {
                 return ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, y, g));
             };
 
-            auto h = modulate(ctx->ggml_ctx, norm(ctx->ggml_ctx, x), mv[0], mv[1]);
+            auto h = modulate(ctx, norm(ctx->ggml_ctx, x), mv[0], mv[1]);
             x      = gate(attn1->forward(ctx, h, h), mv[2]);
             // ada_norm_single: no norm before cross-attention (PixArtMS.py)
             x = ggml_add(ctx->ggml_ctx, x, attn2->forward(ctx, x, context, context_mask));
-            h = modulate(ctx->ggml_ctx, norm(ctx->ggml_ctx, x), mv[3], mv[4]);
+            h = modulate(ctx, norm(ctx->ggml_ctx, x), mv[3], mv[4]);
             h = proj->forward(ctx, h);
             h = ggml_ext_gelu(ctx->ggml_ctx, h, true);
             h = fc2->forward(ctx, h);
@@ -287,7 +288,7 @@ namespace PixArt {
                                         ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, ss), config.hidden_size * 2, N),
                                         2, 0);
             h          = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer.norm_final"])->forward(ctx, h);
-            h          = modulate(ctx->ggml_ctx, h, parts[0], parts[1]);
+            h          = modulate(ctx, h, parts[0], parts[1]);
             h          = std::dynamic_pointer_cast<Linear>(blocks["final_layer.linear"])->forward(ctx, h);  // [N, hp*wp, p*p*out_ch]
             h          = DiT::unpatchify(ctx->ggml_ctx, h, hp, wp, static_cast<int>(p), static_cast<int>(p), false);
             return h;  // [N, out_channels, H, W]
@@ -295,9 +296,9 @@ namespace PixArt {
     };
 
     struct PixArtRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         PixArtConfig config;
         PixArtModel model;
-        std::vector<float> pos_vec;
 
         PixArtRunner(ggml_backend_t backend,
                      const String2TensorStorage& tensor_storage_map      = {},
@@ -357,10 +358,13 @@ namespace PixArt {
             int64_t wp = W / config.patch_size;
             int64_t hp = H / config.patch_size;
 
-            pos_vec  = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
-                                               config.pos_embed_base_size, config.interpolation_scale);
-            auto pos = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.hidden_size, wp * hp, 1);
-            set_backend_tensor_data(pos, pos_vec.data());
+            sd::PECacheKey pos_key("pixart.pos");
+            pos_key.add(hp).add(wp).add(config.hidden_size).add(config.pos_embed_base_size).add(config.interpolation_scale);
+            auto pos = make_input(pe_cache_.get_or_create(pos_key, [&]() {
+                auto pos_vec = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
+                                                       config.pos_embed_base_size, config.interpolation_scale);
+                return sd::Tensor<float>({config.hidden_size, wp * hp, 1}, std::move(pos_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pos, context_mask);

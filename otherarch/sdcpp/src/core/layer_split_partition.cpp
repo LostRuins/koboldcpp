@@ -206,23 +206,23 @@ namespace sd {
         for (size_t seg_idx = 0; seg_idx < plan.segments.size(); seg_idx++) {
             ggml_backend_t backend = backend_by_segment[seg_idx];
             const auto& segment    = plan.segments[seg_idx];
-            for (int node_index : segment.internal_node_indices) {
+            auto assign_node       = [&](int node_index) {
                 if (node_index < 0 || node_index >= n_nodes) {
-                    continue;
+                    return;
                 }
                 ggml_tensor* node = ggml_graph_node(gf, node_index);
-                if (node != nullptr) {
+                if (node == nullptr) {
+                    return;
+                }
+                if (assignment.node_assignments.find(node) == assignment.node_assignments.end()) {
                     assignment.node_assignments[node] = backend;
                 }
+            };
+            for (int node_index : segment.internal_node_indices) {
+                assign_node(node_index);
             }
             for (int node_index : segment.output_node_indices) {
-                if (node_index < 0 || node_index >= n_nodes) {
-                    continue;
-                }
-                ggml_tensor* node = ggml_graph_node(gf, node_index);
-                if (node != nullptr) {
-                    assignment.node_assignments[node] = backend;
-                }
+                assign_node(node_index);
             }
         }
 

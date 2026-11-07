@@ -1,9 +1,11 @@
 #include "model_manager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <iterator>
 #include <mutex>
+#include <thread>
 #include <tuple>
 #include <unordered_set>
 
@@ -1767,10 +1769,16 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
     auto add             = [](size_t a, size_t b) { return b > SIZE_MAX - a ? SIZE_MAX : a + b; };
     const size_t missing = compute_backend_alloc_size(states, true);
     // Backend scratch buffers and pipelines are not included in graph measurements.
-    constexpr size_t safety_margin = 512ULL * 1024ULL * 1024ULL;
-    result.required_device_bytes   = add(add(request.pending_allocation_bytes, missing), safety_margin);
-    result.required_budget_bytes   = add(request.runtime_peak_bytes(), missing);
-    auto available_device_bytes    = [&](ggml_backend_t backend) {
+    size_t safety_margin = 512ULL * 1024ULL * 1024ULL;
+#ifdef _WIN32
+    if (sd_backend_is(request.compute_backend, "CUDA")) {
+        // Avoid WDDM allocation churn when transient buffers compete with reusable staging buffers.
+        safety_margin = 1024ULL * 1024ULL * 1024ULL;
+    }
+#endif
+    result.required_device_bytes = add(add(request.pending_allocation_bytes, missing), safety_margin);
+    result.required_budget_bytes = add(request.runtime_peak_bytes(), missing);
+    auto available_device_bytes  = [&](ggml_backend_t backend) {
         auto device = ggml_backend_get_device(backend);
         if (device == nullptr) {
             return SIZE_MAX;
@@ -2000,10 +2008,30 @@ bool ModelManager::ensure_compute_backend_capacity(
     }
     revert_demotions();
 
-    if (check_capacity(request, required_states).fits()) {
+    auto capacity = check_capacity(request, required_states);
+    if (!capacity.requires_reclamation && capacity.fits()) {
         return true;
     }
-    const auto capacity                = check_capacity(request, required_states, true);
+    if (sd_backend_is(compute_backend, "Vulkan") &&
+        capacity.required_budget_bytes <= capacity.available_budget_bytes) {
+        ggml_backend_synchronize(compute_backend);
+        sd_backend_clear_buffer_cache(compute_backend);
+        // Vulkan heap usage can lag behind buffer releases. Fast memory queries
+        // must not turn that reporting delay into an allocation failure.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        for (;;) {
+            capacity = check_capacity(request, required_states);
+            if (!capacity.requires_reclamation && capacity.fits()) {
+                return true;
+            }
+            if (capacity.required_budget_bytes > capacity.available_budget_bytes ||
+                std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    capacity                           = check_capacity(request, required_states, true);
     const std::string available_device = capacity.available_device_bytes == SIZE_MAX
                                              ? "unknown"
                                              : sd_format("%.2f MB", capacity.available_device_bytes / (1024.0 * 1024.0));

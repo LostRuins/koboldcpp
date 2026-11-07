@@ -173,7 +173,7 @@ struct MingImageDiffusionExtra {
 
 struct ZImageDiffusionExtra {
     const sd::Tensor<float>* control_latent = nullptr;
-    float strength                           = 1.f;
+    float strength                          = 1.f;
 };
 
 using DiffusionExtraParams = std::variant<std::monostate,
