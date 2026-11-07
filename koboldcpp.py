@@ -53,7 +53,7 @@ bias_min_value = -100.0
 bias_max_value = 100.0
 logprobs_max = 10
 default_draft_amount = 4
-default_ttsmaxlen = 4096
+default_ttsmaxlen = 8192
 default_embeddingsmaxctx = 4096
 default_visionmaxres = 1024
 tools_max_temperature = 1.0 #chat requests with tools are clamped to this temperature; the horde worker declares it as a limit
@@ -3466,7 +3466,7 @@ def tts_load_model(ttc_model_filename,cts_model_filename):
         if ttst > 0:
             thds = ttst
     inputs.threads = thds
-    inputs.ttsmaxlen = args.ttsmaxlen if args.ttsmaxlen < 4096 else 4096
+    inputs.ttsmaxlen = args.ttsmaxlen
     inputs = set_backend_props(inputs)
     ret = handle.tts_load_model(inputs)
     return ret
@@ -10858,7 +10858,7 @@ def show_gui():
     makefileentry(audio_tab, "TTS Model:", "Select TTS GGUF Model File", tts_model_var, 3, width=280, singlerow=True, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a TTS GGUF model file on disk to be loaded for Narration.")
     tts_model_var.trace_add("write", gui_changed_modelfile)
     makelabelentry(audio_tab, "TTS Threads:" , tts_threads_var, 5, 50,padx=100,singleline=True,tooltip="How many threads to use during TTS generation.\nIf left blank, uses same value as threads.")
-    makelabelentry(audio_tab, "TTS Max Tokens:" , ttsmaxlen_var, 5, 50,padx=300,singleline=True,tooltip="Max allowed audiotokens to generate per TTS request.", labelpadx=190)
+    makelabelentry(audio_tab, "TTS Max Words:" , ttsmaxlen_var, 5, 50,padx=300,singleline=True,tooltip="Max allowed words to generate per TTS request.", labelpadx=190)
     makecheckbox(audio_tab, "TTS Use GPU", ttsgpu_var, 9, 0,tooltiptxt="Uses the GPU for TTS on supported model architectures.")
     ttsgpu_var.trace_add("write", gui_changed_modelfile)
     makefileentry(audio_tab, "WavTokenizer Model (Required for some models):", "Select WavTokenizer GGUF Model File", wavtokenizer_var, 11, width=280, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a WavTokenizer GGUF model file on disk to be loaded for Narration.")
@@ -14776,7 +14776,7 @@ if __name__ == '__main__':
     ttsparsergroup.add_argument("--ttsmodel", metavar=('[filename]'), help="Specify the TTS Text-To-Speech GGUF model.", default="")
     ttsparsergroup.add_argument("--ttswavtokenizer", metavar=('[filename]'), help="Specify the WavTokenizer GGUF model.", default="")
     ttsparsergroup.add_argument("--ttsgpu", help="Use the GPU for TTS.", action='store_true')
-    ttsparsergroup.add_argument("--ttsmaxlen", help="Limit number of audio tokens generated with TTS.",  type=int, default=default_ttsmaxlen)
+    ttsparsergroup.add_argument("--ttsmaxlen", help="Limit number of words generated with TTS.",  type=int, default=default_ttsmaxlen)
     ttsparsergroup.add_argument("--ttsthreads", metavar=('[threads]'), help="Use a different number of threads for TTS if specified. Otherwise, has the same value as --threads.", type=int, default=0)
     ttsparsergroup.add_argument("--ttsdir", metavar=('[directory]'), help="Select directory containing voices for voice cloning.", default="")
 
