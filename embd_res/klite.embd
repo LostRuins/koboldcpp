@@ -13,7 +13,7 @@ Current version indicated by LITEVER below.
 <head>
 	<script id="init-config">
 	/* split: src/config/init-config.js */
-	const LITEVER = 353;
+	const LITEVER = 354;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -14167,6 +14167,28 @@ Current version indicated by LITEVER below.
 	var worker_data_showonly = []; //only for table display, dont mix
 	//track worker earn rates
 	var first_seen_workers = {};
+	function worker_supports_vision(elem)
+	{
+		return !!(elem && elem.chat && Array.isArray(elem.chat.features) && elem.chat.features.includes("vision"));
+	}
+	function get_worker_job_icons(elem)
+	{
+		if(!elem || typeof elem!="object") { return ""; }
+		let icons = [];
+		if(elem.accepts_chat_jobs)
+		{
+			icons.push('<span role="img" aria-label="Accepts chat jobs" title="Accepts chat jobs">💬</span>');
+		}
+		if(elem.accepts_prompt_jobs)
+		{
+			icons.push('<span role="img" aria-label="Accepts prompt jobs" title="Accepts prompt jobs">📝</span>');
+		}
+		if(worker_supports_vision(elem))
+		{
+			icons.push('<span role="img" aria-label="Vision enabled" title="Vision enabled">👁️</span>');
+		}
+		return icons.join(" ");
+	}
 	function track_kudos_earnings(wdata)
 	{
 		if(wdata && wdata.length>0)
@@ -14198,7 +14220,7 @@ Current version indicated by LITEVER below.
 					tokenspersec = 0;
 				}
 				worker_data_showonly[i].tokenspersec = parseFloat(tokenspersec);
-				worker_data_showonly[i].jobtypes = (elem.accepts_chat_jobs ? 2 : 0) + (elem.accepts_prompt_jobs ? 1 : 0);
+				worker_data_showonly[i].jobtypes = (worker_supports_vision(elem) ? 4 : 0) + (elem.accepts_chat_jobs ? 2 : 0) + (elem.accepts_prompt_jobs ? 1 : 0);
 				if(elem.models.length>0)
 				{
 					worker_data_showonly[i].defaultmodel = elem.models[0];
@@ -14362,9 +14384,13 @@ Current version indicated by LITEVER below.
 		};
 
 		let fields = Object.keys(elem).filter(key => elem[key]!==undefined && !displayOnlyFields.has(key));
+		let jobCapabilities = get_worker_job_icons(elem);
+		let jobsDetails = jobCapabilities==""
+			? ""
+			: `<div style="margin-bottom:0.6em"><b>Jobs:</b> ${jobCapabilities}</div>`;
 		let detailsContent = fields.length==0
-			? '<span style="color:gray">No worker details provided.</span>'
-			: fields.map(key => `<div style="margin-bottom:0.6em"><b>${escape_html(labelFor(key))}:</b> ${valueToHtml(elem[key], key, new WeakSet(), true)}</div>`).join("");
+			? (jobsDetails || '<span style="color:gray">No worker details provided.</span>')
+			: jobsDetails + fields.map(key => `<div style="margin-bottom:0.6em"><b>${escape_html(labelFor(key))}:</b> ${valueToHtml(elem[key], key, new WeakSet(), true)}</div>`).join("");
 		let details = `<div style="box-sizing:border-box; padding:0.75em 1em; text-align:left; line-height:1.4">${detailsContent}</div>`;
 		let workerName = (typeof elem.name=="string" && elem.name!="") ? ` - ${elem.name.substring(0, 40)}` : "";
 
@@ -14376,8 +14402,6 @@ Current version indicated by LITEVER below.
 
 		let str = "";
 		let timenow = performance.now();
-		const chatJobIndicator = '<span role="img" aria-label="Accepts chat jobs" title="Accepts chat jobs">💬</span>';
-		const promptJobIndicator = '<span role="img" aria-label="Accepts prompt jobs" title="Accepts prompt jobs">📝</span>';
 		for (var i = 0; i < worker_data_showonly.length; ++i) {
 			let elem = worker_data_showonly[i];
 			let tokenspersec = elem.performance.replace(" tokens per second", "");
@@ -14408,9 +14432,7 @@ Current version indicated by LITEVER below.
 				if (n > 0) { allmdls += "<br>"; }
 				allmdls += escape_html(elem.models[n].substring(0, 40));
 			}
-			let jobCapabilities = "";
-			if (elem.accepts_chat_jobs) { jobCapabilities = chatJobIndicator; }
-			if (elem.accepts_prompt_jobs) { jobCapabilities += `${jobCapabilities ? " " : ""}${promptJobIndicator}`; }
+			let jobCapabilities = get_worker_job_icons(elem);
 			if (!jobCapabilities) { jobCapabilities = "&mdash;"; }
 			let kudos_per_hr = "";
 			if(first_seen_workers.hasOwnProperty(elem.id))
