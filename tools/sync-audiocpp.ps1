@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "sheetsage2", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "qwen3_tts", "all")]
+    [ValidateSet("supertonic", "yue2", "sheetsage2", "qwen3_asr", "audio8_asr", "sense_asr", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "qwen3_tts", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -510,12 +510,61 @@ $sheetSage2Files = @(
     "src/models/sheetsage/session.cpp"
 )
 
+$qwen3AsrFiles = @(
+    "model_specs/qwen3_asr.json",
+    "model_specs/qwen3_forced_aligner.json",
+    "src/framework/audio/chunking.cpp",
+    "src/framework/modules/recurrent_modules.cpp",
+    "src/framework/modules/speech_encoders/qwen3_audio_encoder_runtime.cpp",
+    "src/framework/runtime/partial_text.cpp",
+    "src/models/qwen3_asr/assets.cpp",
+    "src/models/qwen3_asr/tokenizer_text.cpp",
+    "src/models/qwen3_asr/frontend_whisper.cpp",
+    "src/models/qwen3_asr/thinker.cpp",
+    "src/models/qwen3_asr/prompt_asr.cpp",
+    "src/models/qwen3_asr/postprocess.cpp",
+    "src/models/qwen3_asr/session.cpp",
+    "src/models/qwen3_asr/loader.cpp",
+    "src/models/qwen3_forced_aligner/processor.cpp",
+    "src/models/qwen3_forced_aligner/session.cpp",
+    "src/models/qwen3_forced_aligner/loader.cpp",
+    "src/models/silero_vad/assets.cpp",
+    "src/models/silero_vad/runtime.cpp",
+    "src/models/silero_vad/session.cpp"
+)
+
+$audio8AsrFiles = @(
+    "model_specs/audio8_asr.json",
+    "src/community_models/audio8_asr/assets.cpp",
+    "src/community_models/audio8_asr/projector.cpp",
+    "src/community_models/audio8_asr/thinker.cpp",
+    "src/community_models/audio8_asr/session.cpp"
+)
+
+$senseAsrFiles = @(
+    "model_specs/sense_asr.json",
+    "src/framework/audio/chunking.cpp",
+    "src/framework/modules/recurrent_modules.cpp",
+    "src/framework/modules/speech_encoders/sanm.cpp",
+    "src/framework/runtime/partial_text.cpp",
+    "src/community_models/sense_asr/assets.cpp",
+    "src/community_models/sense_asr/frontend.cpp",
+    "src/community_models/sense_asr/encoder.cpp",
+    "src/community_models/sense_asr/session.cpp",
+    "src/models/silero_vad/assets.cpp",
+    "src/models/silero_vad/runtime.cpp",
+    "src/models/silero_vad/session.cpp"
+)
+
 $selected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($name in $Component) {
     if ($name -eq "all") {
         [void] $selected.Add("supertonic")
         [void] $selected.Add("yue2")
         [void] $selected.Add("sheetsage2")
+        [void] $selected.Add("qwen3_asr")
+        [void] $selected.Add("audio8_asr")
+        [void] $selected.Add("sense_asr")
         [void] $selected.Add("fish_audio")
         [void] $selected.Add("maya1")
         [void] $selected.Add("chatterbox")
@@ -541,6 +590,11 @@ foreach ($name in $Component) {
 # and reference-conditioning implementation rather than duplicating them.
 if ($selected.Contains("kitten_tts2")) {
     [void] $selected.Add("chatterbox")
+}
+
+# Audio8 shares Qwen3-ASR's audio encoder implementation.
+if ($selected.Contains("audio8_asr")) {
+    [void] $selected.Add("qwen3_asr")
 }
 
 if ($selected.Contains("pocket_tts")) {
@@ -684,6 +738,38 @@ if ($selected.Contains("yue2")) {
 if ($selected.Contains("sheetsage2")) {
     Copy-AudioCppTree "include/engine/models/sheetsage"
     foreach ($relativePath in $sheetSage2Files) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("qwen3_asr")) {
+    Copy-AudioCppTree "include/engine/models/qwen3_asr"
+    Copy-AudioCppTree "include/engine/models/qwen3_forced_aligner"
+    Copy-AudioCppTree "include/engine/models/silero_vad"
+    Copy-AudioCppFile "include/engine/framework/audio/chunking.h"
+    Copy-AudioCppFile "include/engine/framework/modules/recurrent_modules.h"
+    Copy-AudioCppFile "include/engine/framework/modules/speech_encoders/qwen3_audio_encoder_runtime.h"
+    Copy-AudioCppFile "include/engine/framework/runtime/partial_text.h"
+    foreach ($relativePath in $qwen3AsrFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("audio8_asr")) {
+    Copy-AudioCppTree "include/engine/community_models/audio8_asr"
+    foreach ($relativePath in $audio8AsrFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("sense_asr")) {
+    Copy-AudioCppTree "include/engine/community_models/sense_asr"
+    Copy-AudioCppTree "include/engine/models/silero_vad"
+    Copy-AudioCppFile "include/engine/framework/audio/chunking.h"
+    Copy-AudioCppFile "include/engine/framework/modules/recurrent_modules.h"
+    Copy-AudioCppFile "include/engine/framework/modules/speech_encoders/sanm.h"
+    Copy-AudioCppFile "include/engine/framework/runtime/partial_text.h"
+    foreach ($relativePath in $senseAsrFiles) {
         Copy-AudioCppFile $relativePath
     }
 }
@@ -897,6 +983,56 @@ foreach ($loader in $ttsLoaders) {
 [System.IO.File]::WriteAllText(
     (Join-Path $generatedDirectory "kcpp_tts_registry_loaders.inc"),
     $ttsRegistryLoaders,
+    $utf8WithoutBom)
+
+$transcriptionLoaders = @(
+    @{
+        Family = "sheetsage2"
+        Header = "engine/models/sheetsage/session.h"
+        Factory = "engine::models::sheetsage::make_sheetsage2_loader"
+        Task = "Midi"
+        SampleRate = 24000
+    },
+    @{
+        Family = "qwen3_asr"
+        Header = "engine/models/qwen3_asr/loader.h"
+        Factory = "engine::models::qwen3_asr::make_qwen3_asr_loader"
+        Task = "Asr"
+        SampleRate = 16000
+    },
+    @{
+        Family = "audio8_asr"
+        Header = "engine/community_models/audio8_asr/session.h"
+        Factory = "engine::community_models::audio8_asr::make_audio8_asr_loader"
+        Task = "Asr"
+        SampleRate = 16000
+    },
+    @{
+        Family = "sense_asr"
+        Header = "engine/community_models/sense_asr/session.h"
+        Factory = "engine::community_models::sense_asr::make_sense_asr_loader"
+        Task = "Asr"
+        SampleRate = 16000
+    }
+)
+$transcriptionRegistryHeaders = ""
+$transcriptionRegistryLoaders = ""
+foreach ($loader in $transcriptionLoaders) {
+    $headerPath = Join-Path $vendorRoot ("include/" + $loader.Header)
+    $specPath = Join-Path $vendorRoot ("model_specs/" + $loader.Family + ".json")
+    if ((Test-Path -LiteralPath $headerPath -PathType Leaf) -and
+        (Test-Path -LiteralPath $specPath -PathType Leaf)) {
+        $transcriptionRegistryHeaders += "#include `"$($loader.Header)`"`n"
+        $transcriptionRegistryLoaders += "    {`"$($loader.Family)`", $($loader.Factory)(), engine::runtime::VoiceTaskKind::$($loader.Task), $($loader.SampleRate)},`n"
+    }
+}
+[System.IO.File]::WriteAllText(
+    (Join-Path $generatedDirectory "kcpp_transcription_registry_headers.inc"),
+    $transcriptionRegistryHeaders,
+    $utf8WithoutBom)
+[System.IO.File]::WriteAllText(
+    (Join-Path $generatedDirectory "kcpp_transcription_registry_loaders.inc"),
+    $transcriptionRegistryLoaders,
     $utf8WithoutBom)
 
 Write-Host "Synchronized Audio.cpp components [$($selected -join ', ')] into $vendorRoot"

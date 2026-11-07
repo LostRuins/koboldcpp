@@ -1,3 +1,205 @@
+    {"audio8_asr", R"AUDIOCPP_SPEC({
+  "family": "audio8_asr",
+  "display_name": "Audio8-ASR-0.1B",
+  "description": "Audio8-ASR-0.1B compact multilingual ASR (en/zh/yue/ja/ko/fr/de): Qwen3-ASR audio encoder with an MLP-tower adapter and an 8-layer Qwen2-style decoder. 30-second offline transcription windows. Checkpoint license: CC-BY-NC-4.0; GGUF conversion is local-only, no public redistribution is approved.",
+  "category": "asr",
+  "status": "community",
+  "tasks": [
+    "asr"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "en",
+    "zh",
+    "yue",
+    "ja",
+    "ko",
+    "fr",
+    "de"
+  ],
+  "capabilities": {
+    "asr": []
+  },
+  "options": {
+    "request": [],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Decoder and adapter weight storage type.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "audio_encoder_weight_type",
+        "type": "enum",
+        "description": "Audio encoder weight storage type (quantized storage is rejected for the encoder; already-quantized GGUF tensors load as native).",
+        "values": [
+          "native",
+          "f32",
+          "f16"
+        ],
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Audio encoder graph arena size in MB. Must be positive; sufficient capacity depends on the graph.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      },
+      {
+        "name": "projector_graph_arena_mb",
+        "type": "int",
+        "description": "Adapter (MLP tower + pooling + projector) graph arena size in MB. Must be positive; sufficient capacity depends on the graph.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "prefill_graph_arena_mb",
+        "type": "int",
+        "description": "Decoder prefill graph arena size in MB. Must be positive; sufficient capacity depends on the graph.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "decode_graph_arena_mb",
+        "type": "int",
+        "description": "Decoder step decode graph arena size in MB. Must be positive; sufficient capacity depends on the graph.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "server",
+      "cuda",
+      "metal",
+      "cpu"
+    ]
+  },
+  "ui": {
+    "recommended_package": "audio8_asr_0_1b_q8_0",
+    "tags": [
+      "ASR",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/asr.md",
+      "docs/models/audio8_asr.md"
+    ],
+    "summary": "Audio8-ASR-0.1B compact multilingual offline transcription."
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "unsupported",
+      "reason": "CC-BY-NC-4.0 checkpoint: convert locally with audiocpp_gguf; no public audio.cpp GGUF distribution is approved."
+    }
+  },
+  "packages": [
+    {
+      "id": "audio8_asr_0_1b_q8_0",
+      "display_name": "Audio8-ASR-0.1B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Audio8-ASR-0.1B-GGUF",
+      "files": [
+        "Audio8-ASR-0.1B-GGUF/audio8-asr-0.1b-q8_0.gguf"
+      ],
+      "strip_prefix": "Audio8-ASR-0.1B-GGUF"
+    },
+    {
+      "id": "audio8_asr_0_1b_f16",
+      "display_name": "Audio8-ASR-0.1B F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Audio8-ASR-0.1B-GGUF",
+      "files": [
+        "Audio8-ASR-0.1B-GGUF/audio8-asr-0.1b-f16.gguf"
+      ],
+      "strip_prefix": "Audio8-ASR-0.1B-GGUF"
+    },
+    {
+      "id": "audio8_asr_0_1b_safetensors",
+      "display_name": "Audio8-ASR-0.1B HF Safetensors",
+      "format": "safetensors",
+      "precision": "bfloat16",
+      "target_directory": "Audio8-ASR-0.1B-hf",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "merges.txt",
+        "model.safetensors"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "Audio8/Audio8-ASR-0.1B",
+        "revision": "main",
+        "gated": false
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "preprocessor_config": "model:preprocessor_config.json"
+      },
+      "optional_files": {
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "preprocessor_config": "model:preprocessor_config.json"
+      },
+      "optional_files": {
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "model:model.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
     {"breeze_tts", R"AUDIOCPP_SPEC({
   "schema_version": 1,
   "family": "breeze_tts",
@@ -3653,6 +3855,637 @@
   ]
 }
 )AUDIOCPP_SPEC"},
+    {"qwen3_asr", R"AUDIOCPP_SPEC({
+  "family": "qwen3_asr",
+  "display_name": "Qwen3-ASR",
+  "description": "Qwen ASR model family for language identification and speech recognition across 30 languages, 22 Chinese dialects, and multiple English accents, with robustness for noisy, long-form, and singing audio.",
+  "category": "asr",
+  "status": "supported",
+  "tasks": [
+    "asr"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "yue",
+    "ar",
+    "de",
+    "fr",
+    "es",
+    "pt",
+    "id",
+    "it",
+    "ko",
+    "ru",
+    "th",
+    "vi",
+    "ja",
+    "tr",
+    "hi",
+    "ms",
+    "nl",
+    "sv",
+    "da",
+    "fi",
+    "pl",
+    "cs",
+    "fil",
+    "fa",
+    "el",
+    "hu",
+    "mk",
+    "ro",
+    "zh dialects"
+  ],
+  "capabilities": {
+    "asr": [
+      "word_timestamps",
+      "vad_chunking",
+      "partial_results"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Recognition language code or label. Omit to detect language automatically; Auto also selects automatic detection.",
+        "required": false
+      },
+      {
+        "name": "max_tokens",
+        "type": "int",
+        "description": "Maximum generated transcript tokens; omitted uses the checkpoint generation_config.json (512 when absent).",
+        "required": false,
+        "min": 1
+      },
+      {
+        "name": "return_timestamps",
+        "type": "bool",
+        "description": "Return word-level timestamps by running Qwen3 ForcedAligner after ASR; default false and requires forced_aligner_path when enabled. Offline only; streaming rejects true even when an aligner is configured.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "audio_chunk_mode",
+        "type": "enum",
+        "description": "Audio chunking mode; default auto uses fixed chunks normally and VAD chunks when timestamps are requested. Offline only; streaming uses fixed-duration windows regardless of this selection.",
+        "values": [
+          "auto",
+          "fixed",
+          "vad",
+          "none"
+        ],
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "audio_chunk_duration_sec",
+        "type": "float",
+        "description": "Maximum audio chunk duration in seconds; must be > 0 when chunking or streaming. Ignored with audio_chunk_mode=none offline. Default 30 for streaming and offline transcription, or 15 for offline timestamps/VAD chunking.",
+        "required": false,
+        "min": 0
+      },
+      {
+        "name": "clamp_timestamps_to_audio",
+        "type": "bool",
+        "description": "Opt-in guard for word timestamp output: keep repaired forced-aligner word spans inside the local audio chunk. Defaults to false to preserve existing timestamp repair behavior.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "preserve_punctuation",
+        "type": "bool",
+        "description": "Opt-in text output mode for timestamped chunked ASR: preserve ASR punctuation in text_output instead of rebuilding text from aligned words.",
+        "required": false,
+        "default": false
+      }
+    ],
+    "session": [
+      {
+        "name": "lora",
+        "type": "path",
+        "description": "PEFT LoRA adapter directory or checkpoint file; merged into matching encoder/decoder weights at session creation.",
+        "required": false
+      },
+      {
+        "name": "lora_scale",
+        "type": "float",
+        "description": "Multiplier for the adapter's alpha/r scaling; default 1.",
+        "required": false,
+        "default": 1.0
+      },
+      {
+        "name": "forced_aligner_path",
+        "type": "path",
+        "description": "Optional Qwen3 ForcedAligner model path required for return_timestamps.",
+        "required": false
+      },
+      {
+        "name": "vad_model_path",
+        "type": "path",
+        "description": "Optional Silero VAD model path for VAD chunking; default assets/framework/models/silero_vad.",
+        "required": false,
+        "default": "assets/framework/models/silero_vad"
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared text decoder weight storage fallback; default native.",
+        "required": false,
+        "default": "native",
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "audio_encoder_weight_type",
+        "type": "enum",
+        "description": "Audio encoder weight storage type; default native.",
+        "required": false,
+        "default": "native",
+        "preset": "weight_type_conv"
+      },
+      {
+        "name": "text_decoder_weight_type",
+        "type": "enum",
+        "description": "Text decoder matmul weight storage type; defaults to weight_type when set, otherwise native.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "audio_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Audio encoder graph arena size in MiB; default 128.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      },
+      {
+        "name": "text_decoder_prefill_graph_arena_mb",
+        "type": "int",
+        "description": "Text decoder prefill graph arena size in MiB; default 256.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "text_decoder_decode_graph_arena_mb",
+        "type": "int",
+        "description": "Text decoder cached-step graph arena size in MiB; default 256.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "text_decoder_weight_context_mb",
+        "type": "int",
+        "description": "Text decoder weight context size in MiB; default 64.",
+        "required": false,
+        "min": 1,
+        "default": 64
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "stream"
+    ]
+  },
+  "ui": {
+    "recommended_package": "qwen3_asr_1_7b_q8_0",
+    "tags": [
+      "ASR",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/qwen3_asr.md",
+      "docs/asr.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "qwen3_asr_1_7b_q8_0",
+      "display_name": "Qwen3-ASR 1.7B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Qwen3-ASR-1.7B-GGUF",
+      "files": [
+        "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-q8_0.gguf"
+      ],
+      "strip_prefix": "Qwen3-ASR-1.7B-GGUF"
+    },
+    {
+      "id": "qwen3_asr_1_7b_f16",
+      "display_name": "Qwen3-ASR 1.7B F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Qwen3-ASR-1.7B-GGUF",
+      "files": [
+        "Qwen3-ASR-1.7B-GGUF/qwen3-asr-1.7b-f16.gguf"
+      ],
+      "strip_prefix": "Qwen3-ASR-1.7B-GGUF"
+    },
+    {
+      "id": "qwen3_asr_0_6b_q8_0",
+      "display_name": "Qwen3-ASR 0.6B Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Qwen3-ASR-0.6B-GGUF",
+      "files": [
+        "Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-q8_0.gguf"
+      ],
+      "strip_prefix": "Qwen3-ASR-0.6B-GGUF"
+    },
+    {
+      "id": "qwen3_asr_0_6b_f16",
+      "display_name": "Qwen3-ASR 0.6B F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Qwen3-ASR-0.6B-GGUF",
+      "files": [
+        "Qwen3-ASR-0.6B-GGUF/qwen3-asr-0.6b-f16.gguf"
+      ],
+      "strip_prefix": "Qwen3-ASR-0.6B-GGUF"
+    },
+    {
+      "id": "qwen3_asr_1_7b_safetensors",
+      "display_name": "Qwen3-ASR 1.7B HF Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "Qwen3-ASR-1.7B-hf",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors",
+        "processor_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "Qwen/Qwen3-ASR-1.7B-hf"
+      }
+    },
+    {
+      "id": "qwen3_asr_0_6b_safetensors",
+      "display_name": "Qwen3-ASR 0.6B Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "Qwen3-ASR-0.6B",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "tokenizer_config.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "Qwen/Qwen3-ASR-0.6B"
+      }
+    },
+    {
+      "id": "qwencleo_asr_q8_0",
+      "display_name": "QwenCleo-ASR Egyptian Arabic Q8_0 GGUF",
+      "description": "Egyptian Arabic and Arabic-English code-switching fine-tune of Qwen3-ASR-1.7B from mohammedaly22/QwenCleo-ASR. Use language=Arabic.",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "QwenCleo-ASR-GGUF",
+      "files": [
+        "qwencleo-asr-q8_0.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "mohammedaly22/QwenCleo-ASR-GGUF"
+      }
+    },
+    {
+      "id": "qwencleo_asr_f16",
+      "display_name": "QwenCleo-ASR Egyptian Arabic F16 GGUF",
+      "description": "Egyptian Arabic and Arabic-English code-switching fine-tune of Qwen3-ASR-1.7B from mohammedaly22/QwenCleo-ASR. Use language=Arabic.",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "QwenCleo-ASR-GGUF",
+      "files": [
+        "qwencleo-asr-f16.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "mohammedaly22/QwenCleo-ASR-GGUF"
+      }
+    },
+    {
+      "id": "qwencleo_asr_safetensors",
+      "display_name": "QwenCleo-ASR Egyptian Arabic Safetensors",
+      "description": "Egyptian Arabic and Arabic-English code-switching fine-tune of Qwen3-ASR-1.7B from mohammedaly22/QwenCleo-ASR. Use language=Arabic.",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "QwenCleo-ASR",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+        "vocab.json",
+        "merges.txt",
+        "chat_template.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "mohammedaly22/QwenCleo-ASR"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "preprocessor_config": "model:preprocessor_config.json",
+        "processor_config": "model:processor_config.json",
+        "chat_template": "model:chat_template.json",
+        "chat_template_jinja": "model:chat_template.jinja",
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "preprocessor_config": "model:preprocessor_config.json",
+        "processor_config": "model:processor_config.json",
+        "chat_template": "model:chat_template.json",
+        "chat_template_jinja": "model:chat_template.jinja",
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+)AUDIOCPP_SPEC" R"AUDIOCPP_SPEC(        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "model:model.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"qwen3_forced_aligner", R"AUDIOCPP_SPEC({
+  "family": "qwen3_forced_aligner",
+  "display_name": "Qwen3 Forced Aligner",
+  "description": "Qwen3 non-autoregressive forced aligner that aligns transcript text to speech and returns word- or character-level timestamps across 11 supported languages.",
+  "category": "speech_analysis",
+  "status": "supported",
+  "tasks": [
+    "align"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "yue",
+    "fr",
+    "de",
+    "it",
+    "ja",
+    "ko",
+    "pt",
+    "ru",
+    "es"
+  ],
+  "capabilities": {
+    "align": [
+      "word_timestamps"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "clamp_timestamps_to_audio",
+        "type": "bool",
+        "description": "Opt-in guard for word timestamp output: keep repaired word spans inside the local audio input. Defaults to false to preserve existing timestamp repair behavior.",
+        "required": false,
+        "default": false
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared thinker matmul storage; does not override audio encoder storage.",
+        "required": false,
+        "preset": "weight_type_full",
+        "default": "native"
+      },
+      {
+        "name": "audio_encoder_weight_type",
+        "type": "enum",
+        "description": "Audio encoder matmul storage.",
+        "required": false,
+        "values": [
+          "native",
+          "f32",
+          "f16"
+        ],
+        "default": "native"
+      },
+      {
+        "name": "thinker_weight_type",
+        "type": "enum",
+        "description": "Thinker matmul storage; inherits weight_type when omitted.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "audio_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Audio encoder graph metadata arena. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      },
+      {
+        "name": "thinker_prefill_graph_arena_mb",
+        "type": "int",
+        "description": "Thinker prefill graph metadata arena. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "thinker_decode_graph_arena_mb",
+        "type": "int",
+        "description": "Thinker cached-step graph metadata arena. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "thinker_weight_context_mb",
+        "type": "int",
+        "description": "Thinker weight metadata context. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 64
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "qwen3_forced_aligner_0_6b_q8_0",
+    "tags": [
+      "Align",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/qwen3_forced_aligner.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "qwen3_forced_aligner_0_6b_q8_0",
+      "display_name": "Qwen3 Forced Aligner 0.6B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Qwen3-ForcedAligner-0.6B-GGUF",
+      "files": [
+        "Qwen3-ForcedAligner-0.6B-GGUF/qwen3-forced-aligner-0.6b-q8_0.gguf"
+      ],
+      "strip_prefix": "Qwen3-ForcedAligner-0.6B-GGUF"
+    },
+    {
+      "id": "qwen3_forced_aligner_0_6b_f16",
+      "display_name": "Qwen3 Forced Aligner 0.6B F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Qwen3-ForcedAligner-0.6B-GGUF",
+      "files": [
+        "Qwen3-ForcedAligner-0.6B-GGUF/qwen3-forced-aligner-0.6b-f16.gguf"
+      ],
+      "strip_prefix": "Qwen3-ForcedAligner-0.6B-GGUF"
+    },
+    {
+      "id": "qwen3_forced_aligner_0_6b_safetensors",
+      "display_name": "Qwen3 Forced Aligner 0.6B Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "Qwen3-ForcedAligner-0.6B",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "tokenizer_config.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "Qwen/Qwen3-ForcedAligner-0.6B"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "preprocessor_config": "model:preprocessor_config.json",
+        "processor_config": "model:processor_config.json",
+        "chat_template": "model:chat_template.json",
+        "chat_template_jinja": "model:chat_template.jinja",
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "preprocessor_config": "model:preprocessor_config.json",
+        "processor_config": "model:processor_config.json",
+        "chat_template": "model:chat_template.json",
+        "chat_template_jinja": "model:chat_template.jinja",
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "model:model.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
     {"qwen3_tts", R"AUDIOCPP_SPEC({
   "family": "qwen3_tts",
   "display_name": "Qwen3-TTS",
@@ -4224,6 +5057,181 @@
       "tensors": {
         "model_weights": "model:model.safetensors",
         "speech_tokenizer_weights": "model:speech_tokenizer/model.safetensors"
+      }
+    }
+  ]
+}
+)AUDIOCPP_SPEC"},
+    {"sense_asr", R"AUDIOCPP_SPEC({
+  "schema_version": 1,
+  "family": "sense_asr",
+  "display_name": "SenseVoice-Small",
+  "description": "SenseVoice-Small multilingual speech recognition with rich event/emotion/ITN tags via a SAN-M encoder and CTC head, ported to audio.cpp.",
+  "category": "asr",
+  "status": "community",
+  "tasks": [
+    "asr"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "auto",
+    "zh",
+    "en",
+    "yue",
+    "ja",
+    "ko",
+    "pt",
+    "ru",
+    "es",
+    "it",
+    "fr",
+    "de",
+    "nl",
+    "pl",
+    "tr",
+    "ar",
+    "hi",
+    "vi",
+    "th",
+    "id",
+    "ms",
+    "fa",
+    "nospeech"
+  ],
+  "capabilities": {
+    "asr": [
+      "vad_chunking",
+      "partial_results"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Recognition language, or auto to let the model infer it from the audio.",
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "enable_itn",
+        "type": "bool",
+        "description": "Enable inverse text normalization (adds the withitn query token).",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "keep_tags",
+        "type": "bool",
+        "description": "Keep <|event|>/<|emotion|>/<|language|> tags inline in the output text.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "audio_chunk_mode",
+        "type": "enum",
+        "description": "Offline chunk mode: auto, fixed, vad, or none. Streaming always uses fixed-duration windows.",
+        "values": [
+          "auto",
+          "fixed",
+          "vad",
+          "none"
+        ],
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "audio_chunk_duration_sec",
+        "type": "float",
+        "description": "Positive duration rounding to at least one sample; sets fixed windows and the VAD maximum chunk length.",
+        "required": false,
+        "default": 30
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared model weight storage type.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Encoder graph arena size in MB.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "vad_model_path",
+        "type": "string",
+        "description": "Path to the Silero VAD model directory used by automatic audio chunking.",
+        "required": false,
+        "default": "assets/framework/models/silero_vad"
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "server",
+      "stream",
+      "cuda",
+      "metal",
+      "cpu"
+    ]
+  },
+  "packages": [
+    {
+      "id": "sensevoice_small_q8",
+      "display_name": "SenseVoice-Small Q8 GGUF",
+      "description": "audio.cpp GGUF built from the SenseVoice-Small checkpoint via the SenseVoice llama.cpp export script.",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "SenseVoice-Small-GGUF",
+      "files": [
+        "sensevoice-small-q8-audiocpp-v1.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "FunAudioLLM/SenseVoiceSmall-GGUF-audiocpp",
+        "revision": "5c3fcfe748a8714216bc135476d5863084fddb72",
+        "gated": false
+      }
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "sensevoice_small_q8",
+    "tags": [
+      "ASR",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/sense_asr.md"
+    ],
+    "summary": "SenseVoice-Small transcription with event/emotion tags and ITN."
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {},
+      "optional_files": {},
+      "tensors": {
+        "weights": "weights:"
       }
     }
   ]

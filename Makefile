@@ -830,7 +830,7 @@ LLAMASERVER_CXXFLAGS := -I./tools/mtmd
 
 
 #whisper objects
-whispercpp_default.o: otherarch/whispercpp/whisper_adapter.cpp otherarch/whispercpp/whisper.cpp kcpp_src/kcpp_backend.h
+whispercpp_default.o: otherarch/whispercpp/whisper_adapter.cpp otherarch/whispercpp/whisper.cpp kcpp_src/kcpp_backend.h otherarch/audiocpp/upstream/generated/kcpp_transcription_registry_headers.inc otherarch/audiocpp/upstream/generated/kcpp_transcription_registry_loaders.inc
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Audio.cpp sources as one integration unit.

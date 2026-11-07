@@ -1,0 +1,220 @@
+{
+  "family": "qwen3_forced_aligner",
+  "display_name": "Qwen3 Forced Aligner",
+  "description": "Qwen3 non-autoregressive forced aligner that aligns transcript text to speech and returns word- or character-level timestamps across 11 supported languages.",
+  "category": "speech_analysis",
+  "status": "supported",
+  "tasks": [
+    "align"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "zh",
+    "en",
+    "yue",
+    "fr",
+    "de",
+    "it",
+    "ja",
+    "ko",
+    "pt",
+    "ru",
+    "es"
+  ],
+  "capabilities": {
+    "align": [
+      "word_timestamps"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "clamp_timestamps_to_audio",
+        "type": "bool",
+        "description": "Opt-in guard for word timestamp output: keep repaired word spans inside the local audio input. Defaults to false to preserve existing timestamp repair behavior.",
+        "required": false,
+        "default": false
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared thinker matmul storage; does not override audio encoder storage.",
+        "required": false,
+        "preset": "weight_type_full",
+        "default": "native"
+      },
+      {
+        "name": "audio_encoder_weight_type",
+        "type": "enum",
+        "description": "Audio encoder matmul storage.",
+        "required": false,
+        "values": [
+          "native",
+          "f32",
+          "f16"
+        ],
+        "default": "native"
+      },
+      {
+        "name": "thinker_weight_type",
+        "type": "enum",
+        "description": "Thinker matmul storage; inherits weight_type when omitted.",
+        "required": false,
+        "preset": "weight_type_full"
+      },
+      {
+        "name": "audio_encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Audio encoder graph metadata arena. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 128
+      },
+      {
+        "name": "thinker_prefill_graph_arena_mb",
+        "type": "int",
+        "description": "Thinker prefill graph metadata arena. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "thinker_decode_graph_arena_mb",
+        "type": "int",
+        "description": "Thinker cached-step graph metadata arena. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 256
+      },
+      {
+        "name": "thinker_weight_context_mb",
+        "type": "int",
+        "description": "Thinker weight metadata context. Size in MiB; must be positive.",
+        "required": false,
+        "min": 1,
+        "default": 64
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "qwen3_forced_aligner_0_6b_q8_0",
+    "tags": [
+      "Align",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/qwen3_forced_aligner.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "huggingface_snapshot",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "revision": "main",
+      "gated": false
+    }
+  },
+  "packages": [
+    {
+      "id": "qwen3_forced_aligner_0_6b_q8_0",
+      "display_name": "Qwen3 Forced Aligner 0.6B Q8_0 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "Qwen3-ForcedAligner-0.6B-GGUF",
+      "files": [
+        "Qwen3-ForcedAligner-0.6B-GGUF/qwen3-forced-aligner-0.6b-q8_0.gguf"
+      ],
+      "strip_prefix": "Qwen3-ForcedAligner-0.6B-GGUF"
+    },
+    {
+      "id": "qwen3_forced_aligner_0_6b_f16",
+      "display_name": "Qwen3 Forced Aligner 0.6B F16 GGUF",
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "Qwen3-ForcedAligner-0.6B-GGUF",
+      "files": [
+        "Qwen3-ForcedAligner-0.6B-GGUF/qwen3-forced-aligner-0.6b-f16.gguf"
+      ],
+      "strip_prefix": "Qwen3-ForcedAligner-0.6B-GGUF"
+    },
+    {
+      "id": "qwen3_forced_aligner_0_6b_safetensors",
+      "display_name": "Qwen3 Forced Aligner 0.6B Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "Qwen3-ForcedAligner-0.6B",
+      "files": [
+        "config.json",
+        "generation_config.json",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "tokenizer_config.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "Qwen/Qwen3-ForcedAligner-0.6B"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "preprocessor_config": "model:preprocessor_config.json",
+        "processor_config": "model:processor_config.json",
+        "chat_template": "model:chat_template.json",
+        "chat_template_jinja": "model:chat_template.jinja",
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "generation_config": "model:generation_config.json",
+        "tokenizer_config": "model:tokenizer_config.json"
+      },
+      "optional_files": {
+        "preprocessor_config": "model:preprocessor_config.json",
+        "processor_config": "model:processor_config.json",
+        "chat_template": "model:chat_template.json",
+        "chat_template_jinja": "model:chat_template.jinja",
+        "vocab": "model:vocab.json",
+        "merges": "model:merges.txt",
+        "tokenizer_json": "model:tokenizer.json"
+      },
+      "tensors": {
+        "weights": "model:model.safetensors"
+      }
+    }
+  ]
+}

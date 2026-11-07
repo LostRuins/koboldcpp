@@ -301,6 +301,7 @@ struct whisper_generation_inputs
     const char * audio_data = nullptr;
     const bool suppress_non_speech = false;
     const char * langcode = nullptr;
+    const char * audiocpp_extra_params_json = "";
 };
 struct whisper_generation_outputs
 {

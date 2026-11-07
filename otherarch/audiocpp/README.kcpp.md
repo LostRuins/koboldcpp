@@ -13,6 +13,9 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component supertonic
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component sheetsage2
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component qwen3_asr
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component audio8_asr
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component sense_asr
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component fish_audio
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component maya1
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
@@ -247,6 +250,19 @@ SheetSage2 decodes input at 24 kHz and defaults to 1024-row attention tiling to
 avoid the model's multi-gigabyte untiled attention allocation. This compatibility
 bridge occupies the transcription slot, so Whisper and SheetSage2 cannot both be
 resident there at once.
+
+Qwen3-ASR, Audio8-ASR, and SenseVoice GGUF packages use that same
+`--whispermodel` slot and the existing `/api/extra/transcribe` and
+`/v1/audio/transcriptions` endpoints. Qwen's existing `prompt` field is passed
+as transcription context, while `langcode`/`language` selects a language for
+Qwen3-ASR and SenseVoice; omit it or use `auto` for detection. Requests default
+to fixed-duration text-only chunking, so no separate Silero VAD or Qwen forced
+aligner weights are needed. The JSON endpoints also pass through `max_tokens`,
+`audio_chunk_mode`, `audio_chunk_duration_sec`, `keep_tags`, `enable_itn`,
+`target_language`, `punc`, and `preserve_punctuation` when a model supports
+them. In particular, `keep_tags=true` retains SenseVoice's language, emotion,
+and audio-event tags. Only one Whisper, SheetSage2, or Audio.cpp ASR model can
+occupy the transcription slot at a time.
 
 ## Intentional compatibility changes
 

@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "family": "sense_asr",
+  "display_name": "SenseVoice-Small",
+  "description": "SenseVoice-Small multilingual speech recognition with rich event/emotion/ITN tags via a SAN-M encoder and CTC head, ported to audio.cpp.",
+  "category": "asr",
+  "status": "community",
+  "tasks": [
+    "asr"
+  ],
+  "modes": [
+    "offline",
+    "streaming"
+  ],
+  "languages": [
+    "auto",
+    "zh",
+    "en",
+    "yue",
+    "ja",
+    "ko",
+    "pt",
+    "ru",
+    "es",
+    "it",
+    "fr",
+    "de",
+    "nl",
+    "pl",
+    "tr",
+    "ar",
+    "hi",
+    "vi",
+    "th",
+    "id",
+    "ms",
+    "fa",
+    "nospeech"
+  ],
+  "capabilities": {
+    "asr": [
+      "vad_chunking",
+      "partial_results"
+    ]
+  },
+  "options": {
+    "request": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Recognition language, or auto to let the model infer it from the audio.",
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "enable_itn",
+        "type": "bool",
+        "description": "Enable inverse text normalization (adds the withitn query token).",
+        "required": false,
+        "default": true
+      },
+      {
+        "name": "keep_tags",
+        "type": "bool",
+        "description": "Keep <|event|>/<|emotion|>/<|language|> tags inline in the output text.",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "audio_chunk_mode",
+        "type": "enum",
+        "description": "Offline chunk mode: auto, fixed, vad, or none. Streaming always uses fixed-duration windows.",
+        "values": [
+          "auto",
+          "fixed",
+          "vad",
+          "none"
+        ],
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "audio_chunk_duration_sec",
+        "type": "float",
+        "description": "Positive duration rounding to at least one sample; sets fixed windows and the VAD maximum chunk length.",
+        "required": false,
+        "default": 30
+      }
+    ],
+    "session": [
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Shared model weight storage type.",
+        "preset": "weight_type_full",
+        "required": false,
+        "default": "native"
+      },
+      {
+        "name": "encoder_graph_arena_mb",
+        "type": "int",
+        "description": "Encoder graph arena size in MB.",
+        "required": false,
+        "min": 1,
+        "default": 1024
+      },
+      {
+        "name": "vad_model_path",
+        "type": "string",
+        "description": "Path to the Silero VAD model directory used by automatic audio chunking.",
+        "required": false,
+        "default": "assets/framework/models/silero_vad"
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf",
+      "server",
+      "stream",
+      "cuda",
+      "metal",
+      "cpu"
+    ]
+  },
+  "packages": [
+    {
+      "id": "sensevoice_small_q8",
+      "display_name": "SenseVoice-Small Q8 GGUF",
+      "description": "audio.cpp GGUF built from the SenseVoice-Small checkpoint via the SenseVoice llama.cpp export script.",
+      "default": true,
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "SenseVoice-Small-GGUF",
+      "files": [
+        "sensevoice-small-q8-audiocpp-v1.gguf"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "FunAudioLLM/SenseVoiceSmall-GGUF-audiocpp",
+        "revision": "5c3fcfe748a8714216bc135476d5863084fddb72",
+        "gated": false
+      }
+    }
+  ],
+  "dependencies": [],
+  "ui": {
+    "recommended_package": "sensevoice_small_q8",
+    "tags": [
+      "ASR",
+      "GGUF",
+      "Stream"
+    ],
+    "docs": [
+      "docs/models/sense_asr.md"
+    ],
+    "summary": "SenseVoice-Small transcription with event/emotion tags and ITN."
+  },
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {},
+      "optional_files": {},
+      "tensors": {
+        "weights": "weights:"
+      }
+    }
+  ]
+}

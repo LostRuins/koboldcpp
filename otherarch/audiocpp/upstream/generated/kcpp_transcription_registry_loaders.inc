@@ -1,0 +1,4 @@
+    {"sheetsage2", engine::models::sheetsage::make_sheetsage2_loader(), engine::runtime::VoiceTaskKind::Midi, 24000},
+    {"qwen3_asr", engine::models::qwen3_asr::make_qwen3_asr_loader(), engine::runtime::VoiceTaskKind::Asr, 16000},
+    {"audio8_asr", engine::community_models::audio8_asr::make_audio8_asr_loader(), engine::runtime::VoiceTaskKind::Asr, 16000},
+    {"sense_asr", engine::community_models::sense_asr::make_sense_asr_loader(), engine::runtime::VoiceTaskKind::Asr, 16000},
