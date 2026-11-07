@@ -316,6 +316,33 @@ runtime::TaskResult Qwen3ASRSession::run(const runtime::TaskRequest & request) {
     if (task_.mode != runtime::RunMode::Offline) {
         throw std::runtime_error("Qwen3 ASR run() requires an offline session");
     }
+    if (const auto transcript = runtime::find_option(request.options, {"alignment_transcript"})) {
+        if (forced_aligner_session_ == nullptr) {
+            throw std::runtime_error("supplied-transcript alignment requires a Qwen3 Forced Aligner model");
+        }
+        if (!request.audio_input.has_value()) {
+            throw std::runtime_error("supplied-transcript alignment requires audio_input");
+        }
+        if (transcript->empty()) {
+            throw std::runtime_error("supplied-transcript alignment requires non-empty transcript text");
+        }
+        std::string language = request.text_input.has_value() ? request.text_input->language : "";
+        if (const auto value = runtime::find_option(request.options, {"language"})) {
+            language = *value;
+        }
+        if (language.empty() || language == "auto" || language == "Auto") {
+            throw std::runtime_error("supplied-transcript alignment requires an explicit language");
+        }
+        runtime::TaskRequest align_request;
+        align_request.audio_input = request.audio_input;
+        align_request.text_input = runtime::Transcript{*transcript, language};
+        align_request.options["audio_chunk_mode"] = "none";
+        if (request_clamp_timestamps_to_audio(request)) {
+            align_request.options["clamp_timestamps_to_audio"] = "true";
+        }
+        forced_aligner_session_->prepare(runtime::build_preparation_request(align_request));
+        return forced_aligner_session_->run(align_request);
+    }
     const auto chunks = audio_chunk_plan(request);
     if (chunks.empty()) {
         const auto mode = engine::audio::parse_audio_chunk_mode(request.options);

@@ -3412,7 +3412,8 @@ def whisper_load_model(model_filename, aligner_filename=""):
 
 def transcription_requests_timestamps(genparams):
     value = genparams.get("return_timestamps", False)
-    return value is True or (isinstance(value, str) and value.strip().lower() in ("1", "true", "yes", "on"))
+    explicit = value is True or (isinstance(value, str) and value.strip().lower() in ("1", "true", "yes", "on"))
+    return explicit or bool(str(genparams.get("transcript", "") or "").strip())
 
 def whisper_generate_result(genparams):
     global args
@@ -3434,6 +3435,9 @@ def whisper_generate_result(genparams):
                 "clamp_timestamps_to_audio"):
         if key in genparams and genparams[key] is not None:
             audiocpp_options[key] = genparams[key]
+    supplied_transcript = str(genparams.get("transcript", "") or "").strip()
+    if supplied_transcript:
+        audiocpp_options["alignment_transcript"] = supplied_transcript
     if transcription_requests_timestamps(genparams):
         audiocpp_options["return_timestamps"] = True
         audiocpp_options.setdefault("clamp_timestamps_to_audio", True)

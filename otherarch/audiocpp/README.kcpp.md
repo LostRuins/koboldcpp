@@ -273,6 +273,8 @@ seconds. Timestamp requests default to clamped word spans and
 punctuation-preserving transcript text. The aligner does not provide diarization.
 The supported alignment languages are English, Chinese, Cantonese, French,
 German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish.
+Supplying `transcript` together with an explicit `language` aligns that known
+text directly against the uploaded audio and bypasses the ASR generation pass.
 
 ## Intentional compatibility changes
 
@@ -283,6 +285,9 @@ German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish.
 - `src/framework/modules/attention/attention_internal.h`: KoboldCpp lowers
   Audio.cpp's optional private CUDA `ggml_mul_mat_pack4` projection to the
   standard portable linear operation. This keeps upstream GGML unchanged.
+- `src/models/qwen3_asr/session.cpp`: KoboldCpp accepts an
+  `alignment_transcript` request option and routes it directly through the
+  already-loaded forced aligner session.
 
 CosyVoice3's RKNN source files are present only because its loader references
 the optional execution-plan plumbing. `ENGINE_HAVE_RKNN` is not defined and
