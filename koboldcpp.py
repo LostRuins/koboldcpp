@@ -280,6 +280,7 @@ deprecated_keys = {
     "useswa",
     "jinja_tools",
     "multiuser",
+    "whispermodel",
 }
 
 saved_stdout = None
@@ -1432,7 +1433,7 @@ def old_cpu_check(): #return -1 for pass, 0 if has avx2, 1 if has avx, 2 if has 
         return -1 #cannot determine
 
 def has_valid_model():
-    return args.model_param or args.sdmodel or args.whispermodel or args.ttsmodel or args.embeddingsmodel or args.musicdiffusion or args.musicllm or args.mcpfile or args.nomodel or args.rpcmode=="host"
+    return args.model_param or args.sdmodel or args.transcribemodel or args.ttsmodel or args.embeddingsmodel or args.musicdiffusion or args.musicllm or args.mcpfile or args.nomodel or args.rpcmode=="host"
 
 def unpack_to_dir(destpath = ""):
     srcpath = os.path.abspath(os.path.dirname(__file__))
@@ -8305,7 +8306,7 @@ Change Mode<br>
                 return
             ratelimitlookup[client_ip] = datetime.now()
         muint = int(args.queuelimit)
-        if muint < 2 and ((args.whispermodel and args.whispermodel!="") or (args.sdmodel and args.sdmodel!="") or (args.ttsmodel and args.ttsmodel!="") or (args.embeddingsmodel and args.embeddingsmodel!="")):
+        if muint < 2 and ((args.transcribemodel and args.transcribemodel!="") or (args.sdmodel and args.sdmodel!="") or (args.ttsmodel and args.ttsmodel!="") or (args.embeddingsmodel and args.embeddingsmodel!="")):
             muint = 2 # this prevents errors when using voice/img together with text
         if args.parallelrequests > 1 and muint <=0:
             muint = queue_concurrent_limit # required for batching
@@ -11174,7 +11175,7 @@ def show_gui():
         args.gendefaults = gen_defaults_var.get()  if gen_defaults_var.get() != "" else ""
         args.reasoningeffort = "default" # already incorporated into the editable generation defaults
         args.gendefaultsoverwrite = (gen_defaults_overwrite_var.get()==1)
-        args.whispermodel = whisper_model_var.get() if whisper_model_var.get() != "" else ""
+        args.transcribemodel = whisper_model_var.get() if whisper_model_var.get() != "" else ""
         args.embeddingsmodel = embeddings_model_var.get()  if embeddings_model_var.get() != "" else ""
         args.embeddingsmaxctx = (0 if embeddings_ctx_var.get()=="" else int(embeddings_ctx_var.get()))
         args.embeddingsgpu = (embeddings_gpu_var.get()==1)
@@ -11498,7 +11499,7 @@ def show_gui():
         gen_defaults_var.set(gendefaults)
         gen_defaults_overwrite_var.set(1 if "gendefaultsoverwrite" in mydict and mydict["gendefaultsoverwrite"] else 0)
 
-        whisper_model_var.set(mydict["whispermodel"] if ("whispermodel" in mydict and mydict["whispermodel"]) else "")
+        whisper_model_var.set(mydict["transcribemodel"] if ("transcribemodel" in mydict and mydict["transcribemodel"]) else "")
 
         tts_threads_var.set(str(mydict["ttsthreads"]) if ("ttsthreads" in mydict and mydict["ttsthreads"]) else str(default_threads))
         tts_model_var.set(mydict["ttsmodel"] if ("ttsmodel" in mydict and mydict["ttsmodel"]) else "")
@@ -12114,6 +12115,8 @@ def convert_invalid_args(args):
         dict = vars(args)
     if "usecuda" not in dict and "usecublas" in dict and dict["usecublas"]:
         dict["usecuda"] = dict["usecublas"]
+    if "whispermodel" in dict and dict["whispermodel"] and not dict.get("transcribemodel"):
+        dict["transcribemodel"] = dict["whispermodel"]
     if "usecuda" in dict and dict["usecuda"] and "lowvram" in dict["usecuda"]:
         dict["lowvram"] = True
     if "usecuda" in dict and dict["usecuda"] and "nommq" in dict["usecuda"]:
@@ -13146,7 +13149,7 @@ def main(launch_args, default_args):
 
     if not args.admin: #run in single process mode
         if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
-            setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel) else False)
+            setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel) else False)
         kcpp_main_process(args,global_memory,using_gui_launcher)
         if global_memory["input_to_exit"]:
             print("===")
@@ -13158,7 +13161,7 @@ def main(launch_args, default_args):
             global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":initial_model, "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False})
 
             if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
-                setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel) else False)
+                setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel) else False)
 
             # invoke the main koboldcpp process
             original_args = copy.deepcopy(args)
@@ -13372,7 +13375,7 @@ def mk_lora_info(imgloras, multipliers):
 
 autoswap_model_fields = {
     "text": ["model", "model_param", "lora", "mmproj", "draftmodel"],
-    "stt": ["whispermodel"],
+    "stt": ["transcribemodel"],
     "tts": ["ttsmodel", "ttswavtokenizer"],
     "embed": ["embeddingsmodel"],
     "music": ["musicllm", "musicembeddings", "musicdiffusion", "musicvae"],
@@ -13381,7 +13384,7 @@ autoswap_model_fields = {
 
 autoswap_primary_fields = {
     "text": ["model", "model_param"],
-    "stt": ["whispermodel"],
+    "stt": ["transcribemodel"],
     "tts": ["ttsmodel"],
     "embed": ["embeddingsmodel"],
     "music": ["musicllm", "musicdiffusion"],
@@ -13478,8 +13481,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 tempName = os.path.basename(os.path.abspath(args.mmproj))
                 tempName = os.path.splitext(tempName)[0]
                 mmprojName = sanitize_string(tempName)
-        if args.whispermodel and args.whispermodel!="":
-            tempName = os.path.basename(os.path.abspath(args.whispermodel))
+        if args.transcribemodel and args.transcribemodel!="":
+            tempName = os.path.basename(os.path.abspath(args.transcribemodel))
             tempName = os.path.splitext(tempName)[0]
             sttName = sanitize_string(tempName)
         if args.ttsmodel and args.ttsmodel!="":
@@ -13643,10 +13646,10 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         dlfile = download_model_from_url(args.mmproj,[".gguf"],min_file_size=500000)
         if dlfile:
             args.mmproj = dlfile
-    if args.whispermodel and args.whispermodel!="":
-        dlfile = download_model_from_url(args.whispermodel,[".gguf",".bin"],min_file_size=500000)
+    if args.transcribemodel and args.transcribemodel!="":
+        dlfile = download_model_from_url(args.transcribemodel,[".gguf",".bin"],min_file_size=500000)
         if dlfile:
-            args.whispermodel = dlfile
+            args.transcribemodel = dlfile
     if args.draftmodel and args.draftmodel!="":
         dlfile = download_model_from_url(args.draftmodel,[".gguf"],min_file_size=500000)
         if dlfile:
@@ -13820,7 +13823,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             if args.gpulayers==-1 and args.model_param and os.path.exists(args.model_param):
                 if (not args.usecpu) and ((args.usecuda is not None) or (args.usevulkan is not None) or sys.platform=="darwin"):
                     if MaxMemory[0] > 0:
-                        extract_modelfile_params(args.model_param,args.sdmodel,args.whispermodel,args.mmproj,args.draftmodel,args.ttsmodel if args.ttsgpu else "",args.embeddingsmodel if args.embeddingsgpu else "", args.musicllm, args.musicdiffusion, args.musicvae)
+                        extract_modelfile_params(args.model_param,args.sdmodel,args.transcribemodel,args.mmproj,args.draftmodel,args.ttsmodel if args.ttsgpu else "",args.embeddingsmodel if args.embeddingsgpu else "", args.musicllm, args.musicdiffusion, args.musicvae)
                         layeramt = autoset_gpu_layers(args.contextsize,args.sdquant,args.batchsize,args.musiclowvram)
                         print(f"Auto Recommended GPU Layers: {layeramt}")
                         args.gpulayers = layeramt
@@ -14038,12 +14041,12 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 exit_with_error(3,"Could not load image model: " + imgmodel)
 
     #handle whisper model
-    if args.whispermodel and args.whispermodel!="":
-        whispermodel = args.whispermodel
+    if args.transcribemodel and args.transcribemodel!="":
+        whispermodel = args.transcribemodel
         if not whispermodel or not os.path.exists(whispermodel):
             if args.ignoremissing:
                 print(f"Ignoring missing whisper model file: {whispermodel}")
-                args.whispermodel = None
+                args.transcribemodel = None
             else:
                 exitcounter = 999
                 exit_with_error(2,f"Cannot find whisper model file: {whispermodel}")
@@ -14217,7 +14220,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         with open(os.path.join(embddir, "kcpp_musicui.embd"), mode='rb') as f:
             embedded_musicui = f.read()
             embedded_musicui_gz = gzip.compress(embedded_musicui)
-            if args.musicllm or args.musicdiffusion or args.ttsmodel or args.whispermodel:
+            if args.musicllm or args.musicdiffusion or args.ttsmodel or args.transcribemodel:
                 print("Embedded MusicUI loaded.")
     except Exception:
         print("Could not find Embedded MusicUI.")
@@ -14329,7 +14332,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
             if args.sdmodel:
                 print(f"StableUI is available at {endpoint_url}/sdui/")
-            if args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel:
+            if args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel:
                 print(f"MusicUI is available at {endpoint_url}/musicui/")
         elif global_memory:
             val = global_memory["tunnel_url"]
@@ -14341,7 +14344,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
                 if args.sdmodel:
                     print(f"StableUI is available at {endpoint_url}/sdui/")
-                if args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel:
+                if args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel:
                     print(f"MusicUI is available at {endpoint_url}/musicui/")
             global_memory["load_complete"] = True
         if args.launch:
@@ -14683,8 +14686,8 @@ if __name__ == '__main__':
     sdparsergroup.add_argument("--sdvaedevice", metavar=('[Device ID]'), help=f"VAE device for image generation. GPU index, -1 or 'main' for the main GPU, or 'CPU' (default: {default_sdvaedevice}).", type=sd_get_device_number, default=None)
     sdparsergroup.add_argument("--sdvramlimit", metavar=('[limit MB]'), help="If set, prevent VRAM usage from image gen from using more than this many MB.", type=int, default=0)
 
-    whisperparsergroup = parser.add_argument_group('Whisper Transcription Commands')
-    whisperparsergroup.add_argument("--whispermodel", metavar=('[filename]'), help="Specify a Whisper .bin or Audio.cpp ASR .gguf for speech-to-text, or SheetSage2 .gguf for music-to-ABC transcription.", default="")
+    whisperparsergroup = parser.add_argument_group('Audio Transcription Commands')
+    whisperparsergroup.add_argument("--transcribemodel", metavar=('[filename]'), help="Specify a Whisper .bin or Audio.cpp ASR .gguf for speech-to-text, or SheetSage2 .gguf for music-to-ABC transcription.", default="")
 
     ttsparsergroup = parser.add_argument_group('TTS Narration Commands')
     ttsparsergroup.add_argument("--ttsmodel", metavar=('[filename]'), help="Specify the TTS Text-To-Speech GGUF model.", default="")
@@ -14729,6 +14732,7 @@ if __name__ == '__main__':
     deprecatedgroup = parser.add_argument_group('Deprecated Commands, DO NOT USE!')
     deprecatedgroup.add_argument("--hordeconfig", help=argparse.SUPPRESS, nargs='+')
     deprecatedgroup.add_argument("--sdconfig", help=argparse.SUPPRESS, nargs='+')
+    deprecatedgroup.add_argument("--whispermodel", help=argparse.SUPPRESS, metavar=('[filename]'))
     compatgroup.add_argument("--noblas", help=argparse.SUPPRESS, action='store_true')
     compatgroup3.add_argument("--nommap","--no-mmap", help=argparse.SUPPRESS, action='store_true')
     deprecatedgroup.add_argument("--nopipelineparallel", help=argparse.SUPPRESS, action='store_true') #now to automatically enable when ubatch < batchsize and multigpu
