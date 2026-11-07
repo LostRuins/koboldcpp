@@ -407,8 +407,12 @@ public:
         output_tokens_ = sum_values(chunk_token_lengths_);
         const int64_t max_chunk_tokens = max_value(chunk_token_lengths_);
         attention_window_tokens_ = max_chunk_tokens * (config.n_window_infer / chunk_frame_limit_);
-        if (output_tokens_ > config.max_source_positions) {
-            throw std::runtime_error("Qwen3 audio encoder token count exceeds max_source_positions");
+        // max_source_positions bounds the positional table applied to each
+        // convolution chunk, not the compacted token sequence for the whole
+        // recording.  The reference implementation likewise slices the table
+        // to the padded per-chunk length before concatenating valid tokens.
+        if (max_chunk_tokens > config.max_source_positions) {
+            throw std::runtime_error("Qwen3 audio encoder chunk token count exceeds max_source_positions");
         }
         attention_window_lengths_ = audio_attention_window_lengths(output_tokens_, attention_window_tokens_);
         ggml_init_params params{graph_arena_bytes, nullptr, true};
