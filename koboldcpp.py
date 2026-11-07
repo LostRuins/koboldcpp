@@ -178,6 +178,7 @@ multiplayer_dataformat = "" # used to tell what is the data payload in saved sto
 multiplayer_lastactive = {} # timestamp of last activity for each unique player
 websearch_lastquery = ""
 websearch_lastresponse = []
+KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME = "koboldcpp_websearch"
 preloaded_story = None
 chatcompl_adapter = None
 chatcompl_adapter_list = None #if using autoguess, will populate this will potential adapters
@@ -1631,7 +1632,7 @@ def get_capabilities():
     audioSupport = (has_audio_support) #todo: not always correct
     has_guidance = True if args.enableguidance else False
     has_jinja = True if args.jinja else False
-    has_mcp = True if (args.mcpfile and mcp_connections and len(mcp_connections) > 0) else False
+    has_mcp = bool(args.websearch or (args.mcpfile and mcp_connections))
     admin_type = (2 if args.admin and args.admindir and args.adminpassword else (1 if args.admin and args.admindir else 0))
     has_router = True if args.routermode else False
     musicfamily_raw = handle.music_get_family()
@@ -4051,6 +4052,48 @@ def websearch(query):
     websearch_lastquery = query
     websearch_lastresponse = results
     return results
+
+def get_koboldcpp_websearch_mcp_tool():
+    return {
+        "name": KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME,
+        "description": "Search the web and return relevant results with excerpts from their pages.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The web search query.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    }
+
+def call_koboldcpp_websearch_mcp(request_id, callparams):
+    arguments = callparams.get("arguments", {})
+    query = arguments.get("query") if isinstance(arguments, dict) else None
+    if not isinstance(query, str) or not query.strip():
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32602,
+                "message": "Invalid arguments: 'query' must be a non-empty string",
+            },
+        }
+    results = websearch(query)
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "content": [{
+                "type": "text",
+                "text": json.dumps(results, ensure_ascii=False),
+            }],
+            "structuredContent": {"results": results},
+        },
+    }
 
 def is_port_in_use(portNum):
     try:
@@ -8264,22 +8307,34 @@ Change Mode<br>
                         for conn in mcp_connections:
                             currtools = conn["tools"]
                             for tool in currtools:
-                                reply["result"]["tools"].append(tool)
+                                is_native_websearch = (
+                                    args.websearch and isinstance(tool, dict) and
+                                    tool.get("name", "") == KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME
+                                )
+                                if not is_native_websearch:
+                                    reply["result"]["tools"].append(tool)
+                    if args.websearch:
+                        reply["result"]["tools"].append(get_koboldcpp_websearch_mcp_tool())
                     response_body = (json.dumps(reply).encode())
                 elif method == "tools/call":
                     foundtool = False
                     callparams = tempbody.get("params",{})
                     callname = callparams.get("name","")
-                    with mcp_lock:
-                        for conn in mcp_connections:
-                            currtools = conn["tools"]
-                            currclient = conn["client"]
-                            for tool in currtools:
-                                if currclient and tool.get("name","")!="" and tool.get("name","")==callname:
-                                    foundtool = True
-                                    mcpresp = currclient.send(tempbody)
-                                    response_body = (json.dumps(mcpresp).encode())
-                                    break
+                    if args.websearch and callname == KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME:
+                        foundtool = True
+                        mcpresp = call_koboldcpp_websearch_mcp(request_id, callparams)
+                        response_body = (json.dumps(mcpresp).encode())
+                    else:
+                        with mcp_lock:
+                            for conn in mcp_connections:
+                                currtools = conn["tools"]
+                                currclient = conn["client"]
+                                for tool in currtools:
+                                    if currclient and tool.get("name","")!="" and tool.get("name","")==callname:
+                                        foundtool = True
+                                        mcpresp = currclient.send(tempbody)
+                                        response_body = (json.dumps(mcpresp).encode())
+                                        break
                     if not foundtool:
                         response_body = (json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Tool not found"}}).encode())
                 else:
