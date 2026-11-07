@@ -16,6 +16,7 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component qwen3_asr
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component audio8_asr
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component sense_asr
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component mms_forced_aligner
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component fish_audio
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component maya1
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
@@ -107,6 +108,9 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
   cloning, CustomVoice packaged speakers, or VoiceDesign instructions. Base
   cloning automatically uses speaker-embedding-only mode when no reference
   transcript is supplied.
+- `mms_forced_aligner`: Meta MMS-300M CTC forced alignment for supplied audio
+  and transcripts. The native Audio.cpp normalizer supports English and Dutch;
+  other languages require caller-provided ASCII romanization.
 - Later candidates should be added only when their framework closure is small
   and measurable. Existing KoboldCpp MiniMax H3, ACE-Step, Kokoro, OuteTTS,
   Parler, Dia, and Orpheus implementations are not imported.
@@ -275,6 +279,14 @@ The supported alignment languages are English, Chinese, Cantonese, French,
 German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish.
 Supplying `transcript` together with an explicit `language` aligns that known
 text directly against the uploaded audio and bypasses the ASR generation pass.
+
+Alternatively, pass an Audio.cpp MMS-300M Forced Aligner GGUF with
+`--transcribealigner`. MMS runs as a separate CTC alignment session: a supplied
+`transcript` bypasses ASR, while a timestamp-only request first transcribes with
+Qwen3-ASR and then aligns that text against the original audio. Native text
+normalization accepts English (`en`/`eng`) and Dutch (`nl`/`nld`). Other
+languages require ASCII romanized input with `text_normalization` set to
+`pre_romanized`.
 
 ## Intentional compatibility changes
 

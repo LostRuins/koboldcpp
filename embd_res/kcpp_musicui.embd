@@ -425,7 +425,7 @@ select{
   </div>
 
   <div style="margin-top:10px">
-    <label for="transcribe_timestamps" title="Request word timestamps from Qwen3-ASR. This requires a Qwen3 Forced Aligner loaded with --transcribealigner.">Request word timestamps</label>
+    <label for="transcribe_timestamps" title="Request word timestamps from Qwen3-ASR. This requires a supported forced aligner loaded with --transcribealigner.">Request word timestamps</label>
     <input title="Request word timestamps" id="transcribe_timestamps" type="checkbox" style="max-width:30px">
   </div>
 
@@ -436,7 +436,7 @@ select{
   </div>
 
   <div id="transcribe_json_container" class="hidden" style="margin-top:10px">
-    <label for="transcribe_json" title="Word timestamps returned by the Qwen3 Forced Aligner.">Timestamp JSON</label>
+    <label for="transcribe_json" title="Word timestamps returned by the configured forced aligner.">Timestamp JSON</label>
     <textarea id="transcribe_json" style="min-height:180px;" readonly placeholder="Timestamp JSON will appear here."></textarea>
   </div>
 

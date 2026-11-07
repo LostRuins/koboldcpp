@@ -372,7 +372,7 @@
                         },
                         "words": {
                            "type": "array",
-                           "description": "Qwen3 Forced Aligner word timestamps when requested.",
+                           "description": "Forced-aligner word timestamps when requested.",
                            "items": {"type": "object", "properties": {"word": {"type": "string"}, "start": {"type": "number"}, "end": {"type": "number"}}, "required": ["word", "start", "end"]}
                         },
                         "abc": {
@@ -795,7 +795,7 @@
                    },
                    "OpenAITranscriptionRequest": {
                       "type": "object",
-                      "properties": {"file": {"type": "string", "format": "binary"}, "model": {"type": "string"}, "prompt": {"type": "string"}, "language": {"type": "string", "description": "Language code, or auto when omitted. Required when transcript is supplied."}, "transcript": {"type": "string", "description": "Known transcript to align directly against the audio with Qwen3 Forced Aligner, bypassing ASR."}, "return_timestamps": {"type": "boolean", "description": "Adds Qwen3 Forced Aligner word timestamps. Requires --transcribealigner."}},
+                      "properties": {"file": {"type": "string", "format": "binary"}, "model": {"type": "string"}, "prompt": {"type": "string"}, "language": {"type": "string", "description": "Language code, or auto when omitted. Required when transcript is supplied."}, "transcript": {"type": "string", "description": "Known transcript to align directly against the audio with the configured forced aligner, bypassing ASR."}, "return_timestamps": {"type": "boolean", "description": "Adds word timestamps from the configured forced aligner. Requires --transcribealigner."}},
                       "required": ["file"]
                    },
                    "OpenAISpeechRequest": {

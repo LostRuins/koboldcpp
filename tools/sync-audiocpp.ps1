@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $SourceRoot,
 
-    [ValidateSet("supertonic", "yue2", "sheetsage2", "qwen3_asr", "audio8_asr", "sense_asr", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "qwen3_tts", "all")]
+    [ValidateSet("supertonic", "yue2", "sheetsage2", "qwen3_asr", "audio8_asr", "sense_asr", "mms_forced_aligner", "fish_audio", "maya1", "chatterbox", "chatterbox_turbo", "kitten_tts2", "soprano_tts", "cosyvoice3", "pocket_tts", "vibevoice", "voxcpm2", "voxcpm1", "omnivoice", "breeze_tts", "ming3_tts", "neutts", "qwen3_tts", "all")]
     [string[]] $Component = @("all"),
 
     [switch] $ModelSourcesOnly
@@ -556,6 +556,16 @@ $senseAsrFiles = @(
     "src/models/silero_vad/session.cpp"
 )
 
+$mmsForcedAlignerFiles = @(
+    "model_specs/mms_forced_aligner.json",
+    "src/framework/modules/speech_encoders/wav2vec2_encoder.cpp",
+    "src/community_models/mms_forced_aligner/assets.cpp",
+    "src/community_models/mms_forced_aligner/ctc_alignment.cpp",
+    "src/community_models/mms_forced_aligner/emissions.cpp",
+    "src/community_models/mms_forced_aligner/session.cpp",
+    "src/community_models/mms_forced_aligner/text_processor.cpp"
+)
+
 $selected = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($name in $Component) {
     if ($name -eq "all") {
@@ -565,6 +575,7 @@ foreach ($name in $Component) {
         [void] $selected.Add("qwen3_asr")
         [void] $selected.Add("audio8_asr")
         [void] $selected.Add("sense_asr")
+        [void] $selected.Add("mms_forced_aligner")
         [void] $selected.Add("fish_audio")
         [void] $selected.Add("maya1")
         [void] $selected.Add("chatterbox")
@@ -770,6 +781,14 @@ if ($selected.Contains("sense_asr")) {
     Copy-AudioCppFile "include/engine/framework/modules/speech_encoders/sanm.h"
     Copy-AudioCppFile "include/engine/framework/runtime/partial_text.h"
     foreach ($relativePath in $senseAsrFiles) {
+        Copy-AudioCppFile $relativePath
+    }
+}
+
+if ($selected.Contains("mms_forced_aligner")) {
+    Copy-AudioCppTree "include/engine/community_models/mms_forced_aligner"
+    Copy-AudioCppFile "include/engine/framework/modules/speech_encoders/wav2vec2_encoder.h"
+    foreach ($relativePath in $mmsForcedAlignerFiles) {
         Copy-AudioCppFile $relativePath
     }
 }
@@ -1012,6 +1031,13 @@ $transcriptionLoaders = @(
         Header = "engine/community_models/sense_asr/session.h"
         Factory = "engine::community_models::sense_asr::make_sense_asr_loader"
         Task = "Asr"
+        SampleRate = 16000
+    },
+    @{
+        Family = "mms_forced_aligner"
+        Header = "engine/community_models/mms_forced_aligner/session.h"
+        Factory = "engine::community_models::mms_forced_aligner::make_mms_forced_aligner_loader"
+        Task = "Alignment"
         SampleRate = 16000
     }
 )

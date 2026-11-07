@@ -55,6 +55,10 @@ static const audiocpp_transcription_loader_entry * audiocpp_transcription_entry 
 static std::string audiocpp_transcription_family;
 static std::unique_ptr<engine::runtime::ILoadedVoiceModel> audiocpp_transcription_model;
 static std::unique_ptr<engine::runtime::IVoiceTaskSession> audiocpp_transcription_session;
+static const audiocpp_transcription_loader_entry * audiocpp_alignment_entry = nullptr;
+static std::string audiocpp_alignment_family;
+static std::unique_ptr<engine::runtime::ILoadedVoiceModel> audiocpp_alignment_model;
+static std::unique_ptr<engine::runtime::IVoiceTaskSession> audiocpp_alignment_session;
 
 int total_transcribe_gens = 0;
 
@@ -167,6 +171,10 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
     audiocpp_transcription_family.clear();
     audiocpp_transcription_session.reset();
     audiocpp_transcription_model.reset();
+    audiocpp_alignment_entry = nullptr;
+    audiocpp_alignment_family.clear();
+    audiocpp_alignment_session.reset();
+    audiocpp_alignment_model.reset();
     if (architecture == "audiocpp") {
         const auto & loaders = audiocpp_transcription_loaders();
         const auto it = std::find_if(loaders.begin(), loaders.end(),
@@ -197,9 +205,39 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
                 ? inputs.aligner_filename : "";
             if (!aligner_filename.empty()) {
                 if (audiocpp_family == "qwen3_asr") {
-                    options.options["qwen3_asr.forced_aligner_path"] = aligner_filename;
+                    const std::string aligner_architecture = gguf_get_model_arch(aligner_filename);
+                    const std::string aligner_family = aligner_architecture == "audiocpp"
+                        ? gguf_get_string(aligner_filename, "audiocpp.model_spec.family")
+                        : aligner_architecture;
+                    if (aligner_family == "qwen3_forced_aligner") {
+                        options.options["qwen3_asr.forced_aligner_path"] = aligner_filename;
+                    } else if (aligner_family == "mms_forced_aligner") {
+                        const auto aligner_it = std::find_if(loaders.begin(), loaders.end(),
+                            [&aligner_family](const auto & entry) {
+                                return aligner_family == entry.family &&
+                                    entry.task == engine::runtime::VoiceTaskKind::Alignment;
+                            });
+                        if (aligner_it == loaders.end()) {
+                            throw std::runtime_error("MMS forced aligner support is not linked");
+                        }
+                        audiocpp_alignment_entry = &*aligner_it;
+                        audiocpp_alignment_family = aligner_family;
+                        engine::runtime::ModelLoadRequest aligner_request;
+                        aligner_request.model_path = aligner_filename;
+                        aligner_request.family_hint = aligner_family;
+                        audiocpp_alignment_model = audiocpp_alignment_entry->loader->load(aligner_request);
+                        engine::runtime::SessionOptions aligner_options;
+                        aligner_options.backend = options.backend;
+                        audiocpp_alignment_session = audiocpp_alignment_model->create_task_session(
+                            {engine::runtime::VoiceTaskKind::Alignment, engine::runtime::RunMode::Offline},
+                            aligner_options);
+                        printf("\nLoaded Audio.cpp MMS forced aligner: %s", aligner_filename.c_str());
+                    } else {
+                        throw std::runtime_error(
+                            "unsupported transcription aligner family '" + aligner_family + "'");
+                    }
                 } else {
-                    printf("\nWarning: --transcribealigner is only used by Qwen3-ASR; ignoring it for %s.",
+                    printf("\nWarning: --transcribealigner is only used with Qwen3-ASR; ignoring it for %s.",
                         audiocpp_family.c_str());
                 }
             }
@@ -217,6 +255,10 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
             audiocpp_transcription_model.reset();
             audiocpp_transcription_entry = nullptr;
             audiocpp_transcription_family.clear();
+            audiocpp_alignment_session.reset();
+            audiocpp_alignment_model.reset();
+            audiocpp_alignment_entry = nullptr;
+            audiocpp_alignment_family.clear();
             return false;
         }
     }
@@ -273,6 +315,33 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
             request.audio_input = engine::runtime::AudioBuffer{
                 audiocpp_transcription_entry->sample_rate, 1, std::move(pcmf32)};
             parse_audiocpp_transcription_options(inputs, request.options);
+            const bool use_external_mms = audiocpp_alignment_family == "mms_forced_aligner" &&
+                audiocpp_alignment_session != nullptr;
+            std::string supplied_transcript;
+            std::unordered_map<std::string, std::string> alignment_options;
+            bool wants_external_alignment = false;
+            if (use_external_mms) {
+                if (const auto it = request.options.find("alignment_transcript"); it != request.options.end()) {
+                    supplied_transcript = it->second;
+                    request.options.erase(it);
+                }
+                if (const auto it = request.options.find("return_timestamps"); it != request.options.end()) {
+                    const std::string value = it->second;
+                    wants_external_alignment = value == "1" || value == "true" || value == "yes" || value == "on";
+                    request.options.erase(it);
+                }
+                wants_external_alignment = wants_external_alignment || !supplied_transcript.empty();
+                for (const char * key : {"text_normalization", "star_frequency", "merge_threshold_sec"}) {
+                    if (const auto it = request.options.find(key); it != request.options.end()) {
+                        alignment_options.emplace(it->first, it->second);
+                        request.options.erase(it);
+                    }
+                }
+                // These are Qwen timestamp post-processing controls and are not
+                // part of MMS's exact-transcript alignment contract.
+                request.options.erase("clamp_timestamps_to_audio");
+                request.options.erase("preserve_punctuation");
+            }
             if (audiocpp_transcription_entry->task == engine::runtime::VoiceTaskKind::Asr) {
                 // Fixed mode keeps the common text-only path self-contained;
                 // VAD/timestamp options may still be selected explicitly.
@@ -294,7 +363,44 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
                 audiocpp_transcription_session->prepare(
                     engine::runtime::build_preparation_request(request));
             }
-            auto result = offline->run(request);
+            engine::runtime::TaskResult result;
+            if (supplied_transcript.empty()) {
+                result = offline->run(request);
+            } else {
+                result.text_output = engine::runtime::Transcript{
+                    supplied_transcript, inputs.langcode != nullptr ? inputs.langcode : ""};
+            }
+            if (wants_external_alignment) {
+                auto * aligner = dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(
+                    audiocpp_alignment_session.get());
+                if (aligner == nullptr || !result.text_output.has_value()) {
+                    throw std::runtime_error("MMS forced aligner is not initialized");
+                }
+                std::string language = result.text_output->language;
+                if (language.empty() || language == "auto" || language == "Auto") {
+                    language = inputs.langcode != nullptr ? inputs.langcode : "";
+                }
+                std::transform(language.begin(), language.end(), language.begin(),
+                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                if (language == "english" || language == "eng") {
+                    language = "en";
+                } else if (language == "dutch" || language == "nld") {
+                    language = "nl";
+                }
+                if (language.empty() || language == "auto") {
+                    throw std::runtime_error("MMS forced alignment requires an explicit language");
+                }
+                engine::runtime::TaskRequest align_request;
+                align_request.audio_input = request.audio_input;
+                align_request.text_input = engine::runtime::Transcript{
+                    result.text_output->text, language};
+                align_request.options = std::move(alignment_options);
+                align_request.options["language"] = language;
+                align_request.options["return_timestamps"] = "true";
+                audiocpp_alignment_session->prepare(
+                    engine::runtime::build_preparation_request(align_request));
+                result = aligner->run(align_request);
+            }
             if (!result.text_output.has_value()) {
                 throw std::runtime_error("model produced no text output");
             }

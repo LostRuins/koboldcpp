@@ -3433,7 +3433,8 @@ def whisper_generate_result(genparams):
     for key in ("max_tokens", "audio_chunk_mode", "audio_chunk_duration_sec",
                 "keep_tags", "enable_itn", "target_language", "punc",
                 "preserve_punctuation", "return_timestamps",
-                "clamp_timestamps_to_audio"):
+                "clamp_timestamps_to_audio", "text_normalization",
+                "star_frequency", "merge_threshold_sec"):
         if key in genparams and genparams[key] is not None:
             audiocpp_options[key] = genparams[key]
     supplied_transcript = str(genparams.get("transcript", "") or "").strip()
@@ -9056,7 +9057,7 @@ Change Mode<br>
                         wants_timestamps = transcription_requests_timestamps(genparams)
                         if wants_timestamps and not args.transcribealigner:
                             genresp = json.dumps({"detail": {
-                                "msg": "Timestamp output requires --transcribealigner with a Qwen3 Forced Aligner GGUF.",
+                                "msg": "Timestamp output requires --transcribealigner with a supported forced-aligner GGUF.",
                                 "type": "model_unavailable",
                             }}).encode()
                             self.send_response(400)
@@ -10912,7 +10913,7 @@ def show_gui():
     audio_tab = tabcontent["Audio"]
     makefileentry(audio_tab, "Transcriber:", "Select Whisper or Audio.cpp Transcription Model", whisper_model_var, 1, width=280, singlerow=True, filetypes=[("*.bin *.gguf","*.bin *.gguf")], tooltiptxt="Select a Whisper .bin or Audio.cpp ASR .gguf for speech-to-text, or a SheetSage2 .gguf for music-to-ABC transcription.")
     whisper_model_var.trace_add("write", gui_changed_modelfile)
-    makefileentry(audio_tab, "STT Aligner:", "Optional Qwen3 Forced Aligner GGUF", transcribe_aligner_var, 2, width=280, singlerow=True, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Optional Qwen3 Forced Aligner model used for word timestamps.")
+    makefileentry(audio_tab, "STT Aligner:", "Optional Qwen3 or MMS Forced Aligner GGUF", transcribe_aligner_var, 2, width=280, singlerow=True, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Optional Qwen3 or MMS Forced Aligner model used for word timestamps.")
     transcribe_aligner_var.trace_add("write", gui_changed_modelfile)
     makefileentry(audio_tab, "TTS Model:", "Select TTS GGUF Model File", tts_model_var, 3, width=280, singlerow=True, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a TTS GGUF model file on disk to be loaded for Narration.")
     tts_model_var.trace_add("write", gui_changed_modelfile)
@@ -14829,7 +14830,7 @@ if __name__ == '__main__':
 
     whisperparsergroup = parser.add_argument_group('Audio Transcription Commands')
     whisperparsergroup.add_argument("--transcribemodel", metavar=('[filename]'), help="Specify a Whisper .bin or Audio.cpp ASR .gguf for speech-to-text, or SheetSage2 .gguf for music-to-ABC transcription.", default="")
-    whisperparsergroup.add_argument("--transcribealigner", metavar=('[filename]'), help="Optional Qwen3 Forced Aligner GGUF used for word timestamps.", default="")
+    whisperparsergroup.add_argument("--transcribealigner", metavar=('[filename]'), help="Optional Qwen3 or MMS Forced Aligner GGUF used for word timestamps.", default="")
 
     ttsparsergroup = parser.add_argument_group('TTS Narration Commands')
     ttsparsergroup.add_argument("--ttsmodel", metavar=('[filename]'), help="Specify the TTS Text-To-Speech GGUF model.", default="")
