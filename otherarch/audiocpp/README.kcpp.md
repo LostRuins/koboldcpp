@@ -239,7 +239,7 @@ KoboldCpp maps its existing `instruction` field to Ming's `freeform` template
 unless `template_name` is supplied explicitly. Ming produces 44.1 kHz mono
 audio in Chinese, English, Japanese, Korean, German, French, or Spanish.
 
-Pass `sheetsage2-orig.gguf` through the existing `--whispermodel` slot to use
+Pass `sheetsage2-orig.gguf` through the existing `--transcribemodel` slot to use
 music-to-ABC transcription instead of Whisper speech-to-text. Both
 `/api/extra/transcribe` and `/v1/audio/transcriptions` return the generated ABC
 in their normal `text` field. The convenience `/api/extra/music/transcribe`
@@ -252,7 +252,7 @@ bridge occupies the transcription slot, so Whisper and SheetSage2 cannot both be
 resident there at once.
 
 Qwen3-ASR, Audio8-ASR, and SenseVoice GGUF packages use that same
-`--whispermodel` slot and the existing `/api/extra/transcribe` and
+`--transcribemodel` slot and the existing `/api/extra/transcribe` and
 `/v1/audio/transcriptions` endpoints. Qwen's existing `prompt` field is passed
 as transcription context, while `langcode`/`language` selects a language for
 Qwen3-ASR and SenseVoice; omit it or use `auto` for detection. Requests default
@@ -263,6 +263,17 @@ aligner weights are needed. The JSON endpoints also pass through `max_tokens`,
 them. In particular, `keep_tags=true` retains SenseVoice's language, emotion,
 and audio-event tags. Only one Whisper, SheetSage2, or Audio.cpp ASR model can
 occupy the transcription slot at a time.
+
+Qwen3-ASR word timestamps require a separate Qwen3 Forced Aligner package. Pass
+its GGUF with `--transcribealigner`; the recommended upstream package is
+`qwen3-forced-aligner-0.6b-q8_0.gguf`. Set `return_timestamps=true` on the
+KoboldCpp transcription endpoint to add a `timestamps` array to its normal JSON
+response. Each word contains `text`, `start_time`, and `end_time`; the outer
+array is retained for simple downstream grouping. Timestamp requests default to
+clamped word spans and punctuation-preserving transcript text. The aligner does
+not provide diarization. The supported alignment languages are English, Chinese,
+Cantonese, French, German, Italian, Japanese, Korean, Portuguese, Russian, and
+Spanish.
 
 ## Intentional compatibility changes
 

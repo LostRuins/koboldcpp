@@ -16,6 +16,7 @@
 #include <memory>
 #include <cstdio>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -34,6 +35,7 @@ static int whisperdebugmode = 0;
 static bool whisper_is_quiet = false;
 static whisper_context * whisper_ctx = nullptr;
 static std::string whisper_output_text = "";
+static std::string whisper_output_metadata = "";
 struct audiocpp_transcription_loader_entry {
     const char * family;
     std::shared_ptr<engine::runtime::IVoiceModelLoader> loader;
@@ -120,6 +122,35 @@ static void parse_audiocpp_transcription_options(
     }
 }
 
+static std::string audiocpp_transcription_metadata_json(
+    const engine::runtime::TaskResult & result,
+    int sample_rate)
+{
+    std::ostringstream json;
+    json.precision(10);
+    json << "{\"family\":" << engine::io::json::stringify_string(audiocpp_transcription_family)
+         << ",\"timestamps\":[[";
+    for (size_t i = 0; i < result.word_timestamps.size(); ++i) {
+        const auto & word = result.word_timestamps[i];
+        if (i != 0) {
+            json << ',';
+        }
+        json << "{\"text\":" << engine::io::json::stringify_string(word.word)
+             << ",\"start_time\":" << static_cast<double>(word.span.start_sample) / sample_rate
+             << ",\"end_time\":" << static_cast<double>(word.span.end_sample) / sample_rate
+             << '}';
+    }
+    json << "]]}";
+    return json.str();
+}
+
+static std::string audiocpp_transcription_error_json(const std::string & error)
+{
+    return std::string("{\"family\":") +
+        engine::io::json::stringify_string(audiocpp_transcription_family) +
+        ",\"error\":" + engine::io::json::stringify_string(error) + "}";
+}
+
 bool whispertype_load_model(const whisper_load_model_inputs inputs)
 {
     whisper_is_quiet = inputs.quiet;
@@ -161,6 +192,16 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
             if (audiocpp_family == "sheetsage2") {
                 // A 300-second untiled attention score can exceed 3 GiB.
                 options.options["sheetsage2.attention_tile_rows"] = "1024";
+            }
+            const std::string aligner_filename = inputs.aligner_filename != nullptr
+                ? inputs.aligner_filename : "";
+            if (!aligner_filename.empty()) {
+                if (audiocpp_family == "qwen3_asr") {
+                    options.options["qwen3_asr.forced_aligner_path"] = aligner_filename;
+                } else {
+                    printf("\nWarning: --transcribealigner is only used by Qwen3-ASR; ignoring it for %s.",
+                        audiocpp_family.c_str());
+                }
             }
             audiocpp_transcription_session = audiocpp_transcription_model->create_task_session(
                 {audiocpp_transcription_entry->task, engine::runtime::RunMode::Offline},
@@ -207,6 +248,7 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
 whisper_generation_outputs whispertype_generate(const whisper_generation_inputs inputs)
 {
     whisper_generation_outputs output;
+    whisper_output_metadata.clear();
 
     if (audiocpp_transcription_entry != nullptr) {
         auto * offline = audiocpp_transcription_session
@@ -256,6 +298,8 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
             if (!result.text_output.has_value()) {
                 throw std::runtime_error("model produced no text output");
             }
+            whisper_output_metadata = audiocpp_transcription_metadata_json(
+                result, audiocpp_transcription_entry->sample_rate);
             whisper_output_text = std::move(result.text_output->text);
             const std::string ts = get_timestamp_str();
             if (whisper_is_quiet) {
@@ -266,6 +310,7 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
                     audiocpp_transcription_family.c_str(), whisper_output_text.c_str());
             }
             output.text = whisper_output_text.c_str();
+            output.metadata_json = whisper_output_metadata.c_str();
             output.status = 1;
             total_transcribe_gens += 1;
             return output;
@@ -273,6 +318,8 @@ whisper_generation_outputs whispertype_generate(const whisper_generation_inputs 
             printf("\nAudio.cpp %s Generation Error: %s\n",
                 audiocpp_transcription_family.c_str(), error.what());
             output.text = "";
+            whisper_output_metadata = audiocpp_transcription_error_json(error.what());
+            output.metadata_json = whisper_output_metadata.c_str();
             output.status = 0;
             return output;
         }
