@@ -718,11 +718,15 @@ ggml_v1_failsafe.o: otherarch/ggml_v1.c otherarch/ggml_v1.h
 	$(CC)  $(FASTCFLAGS) $(NONECFLAGS) -c $< -o $@
 
 #vulkan
-ggml-vulkan.o: ggml/src/ggml-vulkan/ggml-vulkan.cpp ggml/include/ggml-vulkan.h $(VKGEN_CPP)
+# ggml-vulkan.cpp textually includes these implementation files, so make must
+# rebuild the object whenever any of them changes.
+GGML_VULKAN_INCLUDED_SRCS = ggml/src/ggml-vulkan/ggml-vulkan-common.h ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp ggml/src/ggml-vulkan/ggml-vulkan-debug.cpp ggml/src/ggml-vulkan/ggml-vulkan-comm.cpp
+
+ggml-vulkan.o: ggml/src/ggml-vulkan/ggml-vulkan.cpp ggml/include/ggml-vulkan.h $(GGML_VULKAN_INCLUDED_SRCS) $(VKGEN_CPP) Makefile
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_ADD) $(VULKAN_FLAGS) -c $< -o $@
 ggml-vulkan-shaders.o: $(VKGEN_CPP) ggml/include/ggml-vulkan.h
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_ADD) $(VULKAN_FLAGS) -c $< -o $@
-ggml-vulkan-noext.o: ggml/src/ggml-vulkan/ggml-vulkan.cpp ggml/include/ggml-vulkan.h ggml/src/ggml-vulkan-shaders-noext.cpp
+ggml-vulkan-noext.o: ggml/src/ggml-vulkan/ggml-vulkan.cpp ggml/include/ggml-vulkan.h $(GGML_VULKAN_INCLUDED_SRCS) ggml/src/ggml-vulkan-shaders-noext.cpp Makefile
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_FORCE) $(VULKAN_FLAGS) -c $< -o $@
 ggml-vulkan-shaders-noext.o: ggml/src/ggml-vulkan-shaders-noext.cpp ggml/include/ggml-vulkan.h
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_FORCE) $(VULKAN_FLAGS) -c $< -o $@
