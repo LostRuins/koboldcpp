@@ -145,6 +145,7 @@ struct MiniMaxH3DiffusionExtra {
     int audio_length                                              = 0;
     float video_sigma_shift                                       = 12.f;
     float audio_sigma_shift                                       = 3.f;
+    float video_sigma_next                                        = NAN;
 };
 
 struct MiniT2IDiffusionExtra {

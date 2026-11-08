@@ -33,10 +33,7 @@ void ModelManager::synchronize_prefetch_block(PrefetchBlock& block) {
         ggml_backend_event_synchronize(block.event);
         ggml_backend_event_free(block.event);
         block.event = nullptr;
-    }
-    // Event completion does not release backend-owned transfer resources, such
-    // as Metal's temporary host mappings and command buffers.
-    if (block.submitted && block.transfer_backend != nullptr) {
+    } else if (block.submitted && block.transfer_backend != nullptr) {
         ggml_backend_synchronize(block.transfer_backend);
     }
     block.transfer_backend = nullptr;

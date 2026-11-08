@@ -1136,7 +1136,7 @@ ArgOptions SDGenerationParams::get_options() {
          &extra_ad_args},
         {"-i",
          "--init-img",
-         "path to the init image",
+         "path to the init image, or a single input image for vid_upscale",
          0,
          &init_image_path},
         {"",
@@ -1540,6 +1540,12 @@ ArgOptions SDGenerationParams::get_options() {
             sigmas_str = "1.0,0.978453,0.95418,0.926626,0.89508,0.845148,0.704534,0.414568,0.0";
         } else if (sigmas_str == "p-h3-image") {
             sigmas_str = "1.0,0.984753,0.967905,0.951688,0.925372,0.881923,0.810083,0.528718,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-4") {
+            sigmas_str = "1.0,0.962575853,0.755781889,0.312497854,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-6") {
+            sigmas_str = "1.0,0.982655942,0.914642572,0.674755692,0.385223746,0.159055337,0.0";
+        } else if (sigmas_str == "hyperflow-h3-flash-8") {
+            sigmas_str = "1.0,0.993909776,0.9842875,0.966063678,0.923076928,0.834942341,0.696852028,0.468753338,0.0";
         }
         if (!sigmas_str.empty() && sigmas_str.front() == '[') {
             sigmas_str.erase(0, 1);
@@ -1787,11 +1793,11 @@ ArgOptions SDGenerationParams::get_options() {
          on_scheduler_arg},
         {"",
          "--sigmas",
-         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image.",
+         "custom sigma values for the sampler, comma-separated (e.g., \"14.61,7.8,3.5,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_sigmas_arg},
         {"",
          "--hires-sigmas",
-         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image.",
+         "custom sigma values for the highres fix second pass, comma-separated (e.g., \"0.85,0.725,0.421875,0.0\") or preset: qwen-image-2.1-turbo, p-h3-image, hyperflow-h3-flash-4, hyperflow-h3-flash-6, hyperflow-h3-flash-8.",
          on_hires_sigmas_arg},
         {"",
          "--skip-layers",

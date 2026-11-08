@@ -501,6 +501,15 @@ struct ggml_tensor;
 
 typedef void (*sd_log_cb_t)(enum sd_log_level_t level, const char* text, void* data);
 typedef void (*sd_progress_cb_t)(int step, int steps, float time, void* data);
+typedef struct {
+    const char* stage;
+    const char* detail;
+    const char* unit;
+    int sample_pass;
+    int64_t completed;
+    int64_t total;
+} sd_generation_progress_t;
+typedef void (*sd_generation_progress_cb_t)(const sd_generation_progress_t* progress, void* data);
 typedef void (*sd_preview_cb_t)(int step, int frame_count, sd_image_t* frames, bool is_noisy, void* data);
 
 typedef struct {
@@ -511,6 +520,11 @@ typedef bool (*sd_graph_eval_callback_t)(struct ggml_tensor* t, bool ask, void* 
 
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
+// Context-local generation events, independent of preview and the legacy progress callback.
+// Strings and the event are valid only during the synchronous callback. Callbacks must not throw.
+// total == 0 means unknown; sample_pass counts from 1 since callback registration.
+// Register/clear only while the context is idle. Passing nullptr clears the callback.
+SD_API void sd_set_generation_progress_callback(sd_ctx_t* ctx, sd_generation_progress_cb_t cb, void* data);
 // In each sampling pass, a positive interval previews every Nth denoiser step, while a
 // negative interval previews only completed logical step -interval. Zero previews the final
 // completed step of the first sampling pass (base-resolution or high-noise).
@@ -626,6 +640,9 @@ typedef struct {
     int n_threads;
     const char* backend;
     const char* params_backend;
+    // auto/on/off or diffusion/vae assignments; null selects auto.
+    const char* flash_attn_mode;
+    const char* conv_direct_mode;
 } sd_video_upscaler_ctx_params_t;
 
 typedef struct {
@@ -635,6 +652,8 @@ typedef struct {
     int64_t seed;
     // RelayVSR reference window, including both endpoints; defaults to 16.
     int window_size;
+    // SeedVR2 independent temporal chunks in input frames (1 or 4n+1); defaults to 5.
+    int temporal_chunk_size;
 } sd_video_upscale_params_t;
 
 SD_API void sd_video_upscaler_ctx_params_init(sd_video_upscaler_ctx_params_t* params);

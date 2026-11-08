@@ -1342,7 +1342,8 @@ namespace sd::pipeline {
         condition_params.ref_image_params      = ref_image_params;
 
         int64_t prepare_start_ms = ggml_time_ms();
-        embeds.cond              = sd->get_learned_condition(condition_params);
+        sd->generation_progress.report("conditioning", "positive_prompt");
+        embeds.cond = sd->get_learned_condition(condition_params);
         if (embeds.cond.empty()) {
             LOG_ERROR("failed to encode video prompt");
             return std::nullopt;
@@ -1367,7 +1368,8 @@ namespace sd::pipeline {
         }
         if (request.use_uncond) {
             condition_params.text = request.negative_prompt;
-            embeds.uncond         = sd->get_learned_condition(condition_params);
+            sd->generation_progress.report("conditioning", "negative_prompt");
+            embeds.uncond = sd->get_learned_condition(condition_params);
             if (embeds.uncond.empty()) {
                 LOG_ERROR("failed to encode negative video prompt");
                 return std::nullopt;
@@ -2040,6 +2042,7 @@ namespace sd::pipeline {
         sd->reset_generation_extensions();
 
         SamplePlan plan(sd, sd_vid_gen_params, request);
+        sd->generation_progress.report("preparing", "inputs");
         auto latent_inputs_opt = prepare_video_generation_latents(sd, sd_vid_gen_params, &request, ref_image_params);
         if (!latent_inputs_opt.has_value()) {
             return false;
@@ -2168,6 +2171,7 @@ namespace sd::pipeline {
                 LOG_ERROR("cancelling generation before latent upscale");
                 return false;
             }
+            sd->generation_progress.report("upscaling", "hires");
             int64_t upscale_start = ggml_time_ms();
             sd::Tensor<float> upscaled_latent;
             if (sd_version_is_ltxav(sd->version)) {
