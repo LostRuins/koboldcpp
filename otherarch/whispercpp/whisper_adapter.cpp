@@ -164,9 +164,10 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
     std::transform(extension.begin(), extension.end(), extension.begin(),
         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     const std::string architecture = extension == ".gguf" ? gguf_get_model_arch(modelfile) : "";
-    const std::string audiocpp_family = architecture == "audiocpp"
-        ? gguf_get_string(modelfile, "audiocpp.model_spec.family")
-        : architecture;
+    const std::string embedded_audiocpp_family = extension == ".gguf"
+        ? gguf_get_string(modelfile, "audiocpp.model_spec.family") : "";
+    const std::string audiocpp_family = !embedded_audiocpp_family.empty()
+        ? embedded_audiocpp_family : architecture;
     audiocpp_transcription_entry = nullptr;
     audiocpp_transcription_family.clear();
     audiocpp_transcription_session.reset();
@@ -175,7 +176,7 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
     audiocpp_alignment_family.clear();
     audiocpp_alignment_session.reset();
     audiocpp_alignment_model.reset();
-    if (architecture == "audiocpp") {
+    if (architecture == "audiocpp" || !embedded_audiocpp_family.empty()) {
         const auto & loaders = audiocpp_transcription_loaders();
         const auto it = std::find_if(loaders.begin(), loaders.end(),
             [&audiocpp_family](const auto & entry) { return audiocpp_family == entry.family; });
@@ -204,41 +205,46 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
             const std::string aligner_filename = inputs.aligner_filename != nullptr
                 ? inputs.aligner_filename : "";
             if (!aligner_filename.empty()) {
-                if (audiocpp_family == "qwen3_asr") {
-                    const std::string aligner_architecture = gguf_get_model_arch(aligner_filename);
-                    const std::string aligner_family = aligner_architecture == "audiocpp"
-                        ? gguf_get_string(aligner_filename, "audiocpp.model_spec.family")
-                        : aligner_architecture;
-                    if (aligner_family == "qwen3_forced_aligner") {
+                const std::string aligner_architecture = gguf_get_model_arch(aligner_filename);
+                const std::string embedded_aligner_family =
+                    gguf_get_string(aligner_filename, "audiocpp.model_spec.family");
+                const std::string aligner_family = !embedded_aligner_family.empty()
+                    ? embedded_aligner_family : aligner_architecture;
+                if (aligner_family == "qwen3_forced_aligner") {
+                    if (audiocpp_family == "qwen3_asr") {
                         options.options["qwen3_asr.forced_aligner_path"] = aligner_filename;
-                    } else if (aligner_family == "mms_forced_aligner") {
-                        const auto aligner_it = std::find_if(loaders.begin(), loaders.end(),
-                            [&aligner_family](const auto & entry) {
-                                return aligner_family == entry.family &&
-                                    entry.task == engine::runtime::VoiceTaskKind::Alignment;
-                            });
-                        if (aligner_it == loaders.end()) {
-                            throw std::runtime_error("MMS forced aligner support is not linked");
-                        }
-                        audiocpp_alignment_entry = &*aligner_it;
-                        audiocpp_alignment_family = aligner_family;
-                        engine::runtime::ModelLoadRequest aligner_request;
-                        aligner_request.model_path = aligner_filename;
-                        aligner_request.family_hint = aligner_family;
-                        audiocpp_alignment_model = audiocpp_alignment_entry->loader->load(aligner_request);
-                        engine::runtime::SessionOptions aligner_options;
-                        aligner_options.backend = options.backend;
-                        audiocpp_alignment_session = audiocpp_alignment_model->create_task_session(
-                            {engine::runtime::VoiceTaskKind::Alignment, engine::runtime::RunMode::Offline},
-                            aligner_options);
-                        printf("\nLoaded Audio.cpp MMS forced aligner: %s", aligner_filename.c_str());
                     } else {
                         throw std::runtime_error(
-                            "unsupported transcription aligner family '" + aligner_family + "'");
+                            "Qwen3 forced aligner requires a Qwen3-ASR transcription model");
                     }
+                } else if (aligner_family == "mms_forced_aligner") {
+                    if (audiocpp_transcription_entry->task != engine::runtime::VoiceTaskKind::Asr) {
+                        throw std::runtime_error(
+                            "MMS forced aligner requires an ASR transcription model");
+                    }
+                    const auto aligner_it = std::find_if(loaders.begin(), loaders.end(),
+                        [&aligner_family](const auto & entry) {
+                            return aligner_family == entry.family &&
+                                entry.task == engine::runtime::VoiceTaskKind::Alignment;
+                        });
+                    if (aligner_it == loaders.end()) {
+                        throw std::runtime_error("MMS forced aligner support is not linked");
+                    }
+                    audiocpp_alignment_entry = &*aligner_it;
+                    audiocpp_alignment_family = aligner_family;
+                    engine::runtime::ModelLoadRequest aligner_request;
+                    aligner_request.model_path = aligner_filename;
+                    aligner_request.family_hint = aligner_family;
+                    audiocpp_alignment_model = audiocpp_alignment_entry->loader->load(aligner_request);
+                    engine::runtime::SessionOptions aligner_options;
+                    aligner_options.backend = options.backend;
+                    audiocpp_alignment_session = audiocpp_alignment_model->create_task_session(
+                        {engine::runtime::VoiceTaskKind::Alignment, engine::runtime::RunMode::Offline},
+                        aligner_options);
+                    printf("\nLoaded Audio.cpp MMS forced aligner: %s", aligner_filename.c_str());
                 } else {
-                    printf("\nWarning: --transcribealigner is only used with Qwen3-ASR; ignoring it for %s.",
-                        audiocpp_family.c_str());
+                    throw std::runtime_error(
+                        "unsupported transcription aligner family '" + aligner_family + "'");
                 }
             }
             audiocpp_transcription_session = audiocpp_transcription_model->create_task_session(
