@@ -51,10 +51,10 @@ namespace PixArt {
                 config.out_channels = w->ne[1] / (config.patch_size * config.patch_size);
             }
             if (auto w = find("y_embedder.y_proj.fc1.weight")) {
-                config.caption_channels = w->ne[0];
+                config.caption_channels = w->logical_ne0();
             }
             if (auto w = find("blocks.0.cross_attn.kv_linear.weight")) {
-                config.cross_attention_dim = w->ne[0];
+                config.cross_attention_dim = w->logical_ne0();
             }
             if (auto w = find("blocks.0.mlp.fc1.weight")) {
                 config.ffn_dim = w->ne[1];

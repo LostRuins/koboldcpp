@@ -147,8 +147,8 @@ namespace sd {
                         append(type);
                     }
                 } else {
-                    const auto alignment_offset = reinterpret_cast<uintptr_t>(tensor->data) % ggml_backend_get_alignment(external);
-                    append(alignment_offset);
+                    append(tensor->buffer);
+                    append(tensor->data);
                 }
                 const int32_t uses = ggml_graph_use_count(graph, tensor);
                 append(uses);
@@ -164,7 +164,7 @@ namespace sd {
             return {};
         }
         std::unordered_map<const ggml_tensor*, ggml_tensor*> copies;
-        std::map<ggml_backend_t, ggml_backend_buffer_t> external_buffers;
+        std::map<std::pair<ggml_backend_t, const void*>, ggml_backend_buffer_t> external_buffers;
         for (auto tensor : tensors) {
             auto copy      = ggml_dup_tensor(context, tensor);
             *copy          = *tensor;
@@ -179,7 +179,9 @@ namespace sd {
             }
             auto external = external_backend(source);
             if (external != nullptr && source->view_src == nullptr) {
-                auto& buffer = external_buffers[external];
+                // Preserve distinct external allocations so overlap checks do not invent aliases.
+                const void* storage = source->buffer ? static_cast<const void*>(source->buffer) : source;
+                auto& buffer        = external_buffers[{external, storage}];
                 if (buffer == nullptr) {
                     buffer = ggml_backend_alloc_buffer(external, 0);
                     GGML_ASSERT(buffer != nullptr);
@@ -189,6 +191,18 @@ namespace sd {
                 // Capability checks inspect alignment even before weights are resident.
                 copy->data  = source->data ? source->data : reinterpret_cast<void*>(ggml_backend_get_alignment(external));
                 copy->extra = nullptr;
+            }
+        }
+        for (const auto& entry : copies) {
+            const auto* source = entry.first;
+            if (source->view_src && source->buffer) {
+                const auto* owner = source->view_src;
+                while (owner->view_src) {
+                    owner = owner->view_src;
+                }
+                if (external_backend(owner) != nullptr) {
+                    entry.second->buffer = copies.at(owner)->buffer;
+                }
             }
         }
         auto copy_graph = ggml_new_graph_custom(context, graph_size, false);

@@ -1,6 +1,7 @@
 #include "generation_info.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -12,6 +13,21 @@ namespace sd {
 
     static const char* text(const char* value) {
         return value ? value : "";
+    }
+
+    static double shortest_f32_as_double(float value) {
+        if (!std::isfinite(value)) {
+            return static_cast<double>(value);
+        }
+        char buf[64];
+        buf[0] = '\0';
+        for (int prec = 1; prec <= 9; ++prec) {
+            std::snprintf(buf, sizeof(buf), "%.*g", prec, static_cast<double>(value));
+            if (std::strtof(buf, nullptr) == value) {
+                break;
+            }
+        }
+        return std::strtod(buf, nullptr);
     }
 
     static json sampling_info(const sd_sample_params_t& p, bool high_noise = false) {
@@ -117,8 +133,13 @@ namespace sd {
         }
         if (p.lora_count > 0) {
             info["loras"] = json::array();
-            for (uint32_t i = 0; i < p.lora_count; ++i)
-                info["loras"].push_back({{"path", text(p.loras[i].path)}, {"multiplier", p.loras[i].multiplier}, {"is_high_noise", p.loras[i].is_high_noise}});
+            for (uint32_t i = 0; i < p.lora_count; ++i) {
+                // nlohmann::json promotes float to double, so dump the shortest
+                // decimal that round-trips the float32 (e.g. 0.85f stays 0.85
+                // instead of 0.8500000238418579) to keep replay exact.
+                const double multiplier = shortest_f32_as_double(p.loras[i].multiplier);
+                info["loras"].push_back({{"path", text(p.loras[i].path)}, {"multiplier", multiplier}, {"is_high_noise", p.loras[i].is_high_noise}});
+            }
         }
         return info;
     }
@@ -127,8 +148,11 @@ namespace sd {
         auto info = common_info(p, "image");
         if (p.init_image.data)
             info["strength"] = p.strength;
-        if (p.control_image.data)
+        if (p.control_image.data) {
             info["control_strength"] = p.control_strength;
+            if (p.control_type != SD_CONTROL_TYPE_NONE)
+                info["control_type"] = sd_control_type_name(p.control_type);
+        }
         if (p.ip_adapter_image.data)
             info["ip_adapter_strength"] = p.ip_adapter_strength;
         if (p.pm_params.id_images && p.pm_params.id_images_count > 0) {
@@ -188,7 +212,7 @@ namespace sd {
         auto inpaint        = image_info(inpaint_params);
         inpaint["strength"] = inpaint_params.strength;
         // ADetailer clears these inputs before generating each crop.
-        for (const auto* key : {"control_strength", "pm_params", "pulid_params", "hires", "image_preprocess"})
+        for (const auto* key : {"control_strength", "control_type", "pm_params", "pulid_params", "hires", "image_preprocess"})
             inpaint.erase(key);
         sd_img_gen_params_t defaults;
         sd_img_gen_params_init(&defaults);

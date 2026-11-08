@@ -253,6 +253,9 @@ namespace sd::pipeline {
 
         if (sd_img_gen_params->control_image.data != nullptr) {
             control_image_tensor = sd_image_to_tensor(sd_img_gen_params->control_image, request->width, request->height);
+            if (!sd->set_control_type(request->control_type)) {
+                return std::nullopt;
+            }
         }
 
         if (init_image_tensor.empty() || mask_image_tensor.empty()) {

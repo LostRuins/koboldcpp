@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <functional>
 #include <set>
 #include <string>
 #include <tuple>
@@ -18,9 +19,10 @@
 
 namespace MiniMaxH3 {
 
-    constexpr int H3_GRAPH_SIZE          = 131072;
-    constexpr float FRAME_RESCALE        = 5.f / 3.f;
-    constexpr float VISUAL_COND_TIMESTEP = 0.999f;
+    constexpr int H3_GRAPH_SIZE                   = 131072;
+    constexpr float DEFAULT_ATTN_CHUNK_BUDGET_GIB = 2.f;
+    constexpr float FRAME_RESCALE                 = 5.f / 3.f;
+    constexpr float VISUAL_COND_TIMESTEP          = 0.999f;
 
     struct Config {
         int64_t hidden_size              = 5376;
@@ -73,16 +75,16 @@ namespace MiniMaxH3 {
             };
 
             if (const auto* weight = find("video_patch_proj.weight")) {
-                config.video_latent_channels = weight->ne[0] / 4;
+                config.video_latent_channels = weight->logical_ne0() / 4;
                 config.hidden_size           = weight->ne[1];
             }
             if (const auto* weight = find("audio_patch_proj.weight")) {
-                config.audio_latent_channels = weight->ne[0];
+                config.audio_latent_channels = weight->logical_ne0();
             }
             config.num_layers               = count_blocks(tensors, prefix + ".blocks.");
             config.token_refiner_num_layers = count_blocks(tensors, prefix + ".token_refiner.blocks.");
             if (const auto* weight = find("blocks.0.attn.q_norm.weight")) {
-                config.attention_head_dim = weight->ne[0];
+                config.attention_head_dim = weight->logical_ne0();
             }
             if (const auto* weight = find("blocks.0.attn.qkv_proj.weight")) {
                 config.num_attention_heads = weight->ne[1] / (3 * config.attention_head_dim);
@@ -91,14 +93,14 @@ namespace MiniMaxH3 {
                 config.ffn_hidden_size = weight->ne[1] / 2;
             }
             if (const auto* weight = find("condition_proj.weight")) {
-                config.text_dim = weight->ne[0];
+                config.text_dim = weight->logical_ne0();
             }
             if (const auto* table = find("adaln_t_table")) {
                 config.time_embed_dim   = table->ne[0];
                 config.adaln_curve_grid = table->ne[1];
             } else {
                 if (const auto* weight = find("time_embedder.proj_in.weight")) {
-                    config.timestep_input_dim     = weight->ne[0];
+                    config.timestep_input_dim     = weight->logical_ne0();
                     config.time_embed_hidden_size = weight->ne[1];
                 }
                 if (const auto* weight = find("time_embedder.proj_out.weight")) {
@@ -172,14 +174,14 @@ namespace MiniMaxH3 {
 
             int64_t chunk_size = x->ne[1];
             if (ctx->backend != nullptr) {
-                auto buft        = ggml_backend_get_default_buffer_type(ctx->backend);
-                size_t alignment = ggml_backend_buft_get_alignment(buft);
-                size_t max_size  = ggml_backend_buft_get_max_size(buft);
-                max_size -= max_size % alignment;
-                // Matmul outputs are F32 even for quantized weights. Split before fc1
-                // so its expanded activation never needs an oversized backend buffer.
+                auto buft           = ggml_backend_get_default_buffer_type(ctx->backend);
+                size_t alignment    = ggml_backend_buft_get_alignment(buft);
+                size_t chunk_budget = ggml_backend_buft_get_max_size(buft);
+                chunk_budget -= chunk_budget % alignment;
+                // Use the backend's preferred allocation size as a conservative chunk budget.
+                // Matmul outputs are F32 even for quantized weights.
                 size_t token_bytes = ggml_row_size(GGML_TYPE_F32, std::max(x->ne[0], 2 * ffn_hidden_size)) * x->ne[2] * x->ne[3];
-                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, max_size / token_bytes)));
+                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, chunk_budget / token_bytes)));
             }
             if (chunk_size == x->ne[1]) {
                 return forward_chunk(x);
@@ -230,6 +232,7 @@ namespace MiniMaxH3 {
     struct Attention : public GGMLBlock {
         int64_t heads;
         int64_t head_dim;
+        float head_chunk_budget_gib = DEFAULT_ATTN_CHUNK_BUDGET_GIB;
 
         Attention(int64_t hidden_size,
                   int64_t heads,
@@ -243,8 +246,69 @@ namespace MiniMaxH3 {
             blocks["out_proj"] = std::make_shared<Linear>(inner, hidden_size, false);
         }
 
-        ggml_tensor* project_qkv(GGMLRunnerContext* ctx, ggml_tensor* x) {
-            return std::dynamic_pointer_cast<Linear>(blocks["qkv_proj"])->forward(ctx, x);
+        std::vector<ggml_tensor*> split_qkv(GGMLRunnerContext* ctx, ggml_tensor* projected) {
+            std::vector<ggml_tensor*> result;
+            for (int i = 0; i < 3; ++i) {
+                result.push_back(ggml_view_4d(ctx->ggml_ctx, projected, head_dim, heads,
+                                              projected->ne[1], projected->ne[2] * projected->ne[3],
+                                              head_dim * projected->nb[0], projected->nb[1], projected->nb[2],
+                                              i * heads * head_dim * projected->nb[0]));
+            }
+            return result;
+        }
+
+        std::vector<ggml_tensor*> project_qkv(GGMLRunnerContext* ctx,
+                                              const std::vector<ggml_tensor*>& inputs,
+                                              const std::function<ggml_tensor*(ggml_tensor*, size_t)>& prepare_input = {}) {
+            auto projection  = std::dynamic_pointer_cast<Linear>(blocks["qkv_proj"]);
+            int64_t sequence = 0;
+            for (auto input : inputs) {
+                sequence += input->ne[1];
+            }
+            int64_t chunk_size = sequence;
+            if (ctx->backend != nullptr) {
+                auto buft        = ggml_backend_get_default_buffer_type(ctx->backend);
+                size_t alignment = ggml_backend_buft_get_alignment(buft);
+                // This is a conservative chunk budget, not an operation support limit.
+                size_t chunk_budget = ggml_backend_buft_get_max_size(buft);
+                chunk_budget -= chunk_budget % alignment;
+                size_t token_bytes = ggml_row_size(GGML_TYPE_F32, 3 * heads * head_dim) * inputs[0]->ne[2] * inputs[0]->ne[3];
+                chunk_size         = static_cast<int64_t>(std::min<size_t>(chunk_size, std::max<size_t>(1, chunk_budget / token_bytes)));
+            }
+            if (chunk_size == sequence) {
+                ggml_tensor* projected = nullptr;
+                for (size_t i = 0; i < inputs.size(); ++i) {
+                    auto input = prepare_input ? prepare_input(inputs[i], i) : inputs[i];
+                    auto part  = projection->forward(ctx, input);
+                    projected  = projected == nullptr ? part : ggml_concat(ctx->ggml_ctx, projected, part, 1);
+                }
+                return split_qkv(ctx, projected);
+            }
+
+            // Split Q/K/V before concatenating tokens to avoid materializing the full packed QKV.
+            std::vector<ggml_tensor*> chunks[3];
+            for (size_t i = 0; i < inputs.size(); ++i) {
+                auto input = inputs[i];
+                for (int64_t start = 0; start < input->ne[1]; start += chunk_size) {
+                    auto part = ggml_ext_slice(ctx->ggml_ctx, input, 1, start, std::min(start + chunk_size, input->ne[1]), false);
+                    if (!ggml_is_contiguous(part)) {
+                        part = ggml_cont(ctx->ggml_ctx, part);
+                    }
+                    // Keep normalization/modulation adjacent to the projection's input quantization.
+                    if (prepare_input) {
+                        part = prepare_input(part, i);
+                    }
+                    auto qkv = split_qkv(ctx, projection->forward(ctx, part));
+                    for (int j = 0; j < 3; ++j) {
+                        chunks[j].push_back(ggml_cont(ctx->ggml_ctx, qkv[j]));
+                    }
+                }
+            }
+            std::vector<ggml_tensor*> result;
+            for (auto& parts : chunks) {
+                result.push_back(ggml_ext_vec_concat(ctx->ggml_ctx, parts, 2));
+            }
+            return result;
         }
 
         ggml_tensor* project_output(GGMLRunnerContext* ctx, ggml_tensor* x) {
@@ -252,22 +316,40 @@ namespace MiniMaxH3 {
         }
 
         ggml_tensor* attend(GGMLRunnerContext* ctx,
-                            ggml_tensor* projected,
+                            const std::vector<ggml_tensor*>& qkv,
                             ggml_tensor* pe = nullptr) {
-            auto q_norm      = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
-            auto k_norm      = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
-            int64_t sequence = projected->ne[1];
-            int64_t batch    = projected->ne[2] * projected->ne[3];
-            auto view        = [&](int index) {
-                return ggml_view_4d(ctx->ggml_ctx, projected, head_dim, heads, sequence, batch,
-                                    head_dim * projected->nb[0], projected->nb[1], projected->nb[2],
-                                    index * heads * head_dim * projected->nb[0]);
-            };
-            auto q = view(0);
-            auto k = view(1);
-            auto v = view(2);
-            q      = q_norm->forward(ctx, q);
-            k      = k_norm->forward(ctx, k);
+            // Budget one F32 Q/K tensor per group, not the full attention working set.
+            const double head_bytes  = double(ggml_row_size(GGML_TYPE_F32, head_dim)) * qkv[0]->ne[2] * qkv[0]->ne[3];
+            const int64_t head_chunk = head_chunk_budget_gib > 0
+                                           ? static_cast<int64_t>(std::clamp(double(head_chunk_budget_gib) * (1024ULL * 1024 * 1024) / head_bytes,
+                                                                             1.0, double(heads)))
+                                           : heads;
+            if (head_chunk < heads) {
+                std::vector<ggml_tensor*> outputs;
+                for (int64_t start = 0; start < heads; start += head_chunk) {
+                    std::vector<ggml_tensor*> part;
+                    for (auto tensor : qkv) {
+                        part.push_back(ggml_ext_slice(ctx->ggml_ctx, tensor, 1, start, std::min(start + head_chunk, heads), false));
+                    }
+                    outputs.push_back(attend_heads(ctx, part, pe));
+                    // Keep each head group's temporaries out of the concatenation tree's live set.
+                    ctx->expand_graph(outputs.back());
+                }
+                return ggml_ext_vec_concat(ctx->ggml_ctx, outputs, 0);
+            }
+            return attend_heads(ctx, qkv, pe);
+        }
+
+        ggml_tensor* attend_heads(GGMLRunnerContext* ctx,
+                                  const std::vector<ggml_tensor*>& qkv,
+                                  ggml_tensor* pe) {
+            auto q_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
+            auto k_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
+            auto q      = qkv[0];
+            auto k      = qkv[1];
+            auto v      = qkv[2];
+            q           = q_norm->forward(ctx, q);
+            k           = k_norm->forward(ctx, k);
             if (pe != nullptr) {
                 q = apply_partial_rope(ctx, q, pe);
                 k = apply_partial_rope(ctx, k, pe);
@@ -279,7 +361,7 @@ namespace MiniMaxH3 {
                                               q,
                                               k,
                                               v,
-                                              static_cast<int>(heads),
+                                              static_cast<int>(qkv[0]->ne[1]),
                                               nullptr,
                                               true,
                                               ctx->flash_attn_enabled,
@@ -290,7 +372,7 @@ namespace MiniMaxH3 {
         ggml_tensor* forward(GGMLRunnerContext* ctx,
                              ggml_tensor* x,
                              ggml_tensor* pe = nullptr) {
-            return project_output(ctx, attend(ctx, project_qkv(ctx, x), pe));
+            return project_output(ctx, attend(ctx, project_qkv(ctx, {x}), pe));
         }
     };
 
@@ -447,16 +529,9 @@ namespace MiniMaxH3 {
             auto modulate = [&](ggml_tensor* value, const std::vector<ggml_tensor*>& row, int shift, int scale) {
                 return ggml_ext_modulate(ctx, value, row[shift], row[scale]);
             };
-            ggml_tensor* qkv = nullptr;
-            for (size_t i = 0; i < segments.size(); ++i) {
-                auto h = modulate(norm1->forward(ctx, inputs[i]), rows[i], 0, 1);
-                h      = attn->project_qkv(ctx, h);
-                if (qkv == nullptr) {
-                    qkv = h;
-                    continue;
-                }
-                qkv = ggml_concat(ctx->ggml_ctx, qkv, h, 1);
-            }
+            auto qkv      = attn->project_qkv(ctx, inputs, [&](ggml_tensor* input, size_t i) {
+                return modulate(norm1->forward(ctx, input), rows[i], 0, 1);
+            });
             auto attended = attn->attend(ctx, qkv, pe);
             std::vector<ggml_tensor*> projections;
             for (const auto& segment : segments) {
@@ -988,10 +1063,30 @@ namespace MiniMaxH3 {
         MiniMaxH3Runner(ggml_backend_t backend,
                         const String2TensorStorage& tensors,
                         const std::string& prefix                           = "model.diffusion_model",
-                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
+                        std::shared_ptr<RunnerWeightManager> weight_manager = nullptr,
+                        const char* model_args                              = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
               config(Config::detect_from_weights(tensors, prefix)),
               model(config) {
+            float head_chunk_budget_gib = DEFAULT_ATTN_CHUNK_BUDGET_GIB;
+            for (const auto& [key, value] : parse_key_value_args(model_args, "model arg")) {
+                if (key == "minimax_h3_attn_chunk_budget") {
+                    float parsed = 0.f;
+                    if (parse_strict_float(value, parsed) && std::isfinite(parsed) && parsed >= 0.f) {
+                        head_chunk_budget_gib = parsed;
+                    } else {
+                        LOG_WARN("ignoring invalid MiniMax-H3 model arg '%s=%s': expected a finite non-negative GiB budget", key.c_str(), value.c_str());
+                    }
+                }
+            }
+            std::vector<GGMLBlock*> blocks;
+            model.get_all_blocks(blocks);
+            for (auto block : blocks) {
+                if (auto attention = dynamic_cast<Attention*>(block)) {
+                    attention->head_chunk_budget_gib = head_chunk_budget_gib;
+                }
+            }
+            LOG_INFO("MiniMax-H3 attention chunk budget: %.3g GiB (0 disables grouping)", head_chunk_budget_gib);
             model.init(params_ctx, tensors, prefix);
         }
 
@@ -1131,7 +1226,8 @@ namespace MiniMaxH3 {
                 timestep_features = make_input(timestep_feature_input_cache);
             }
 
-            auto runner_ctx = get_context();
+            auto graph      = new_graph_custom(H3_GRAPH_SIZE);
+            auto runner_ctx = get_context(graph);
             auto output     = model.forward(&runner_ctx,
                                             video,
                                             audio,
@@ -1154,7 +1250,6 @@ namespace MiniMaxH3 {
                                                     output.second,
                                                     1.f + (audio_scale - 1.f) * sigma_a));
             auto merged   = merge_av_latents(compute_ctx, output.first, output.second);
-            auto graph    = new_graph_custom(H3_GRAPH_SIZE);
             ggml_build_forward_expand(graph, merged);
             return graph;
         }

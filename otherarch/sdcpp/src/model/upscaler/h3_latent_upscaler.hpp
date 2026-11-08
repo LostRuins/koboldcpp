@@ -75,7 +75,7 @@ namespace H3VUpsampler {
 
             const TensorStorage* embed_mid = find_weight("embed.2.weight");
             if (embed_mid != nullptr && embed_mid->n_dims >= 1) {
-                config.embed_dim = static_cast<int>(embed_mid->ne[0]);
+                config.embed_dim = static_cast<int>(embed_mid->logical_ne0());
             }
 
             std::set<int> in_res_idx, in_temporal_idx, out_res_idx, out_temporal_idx;

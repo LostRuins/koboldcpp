@@ -115,8 +115,9 @@ static ggml_type safetensors_dtype_to_ggml_type(const std::string& dtype) {
 
 struct ComfyQuantConfig {
     std::string format;
-    bool convrot   = false;
-    int group_size = 0;
+    bool convrot          = false;
+    int group_size        = 0;
+    int weight_group_size = 0;
 };
 
 static bool read_comfy_quant_config(std::ifstream& file,
@@ -146,6 +147,12 @@ static bool read_comfy_quant_config(std::ifstream& file,
         config.format             = json.value("format", "");
         config.convrot            = json.value("convrot", false);
         config.group_size         = json.value("convrot_groupsize", 0);
+        config.weight_group_size  = json.value("group_size", 0);
+        if (config.format == "convrot_w4a4" || config.format == "asym_w4a8_int8") {
+            // Packed W4 formats imply rotation, including exports without the INT8 convrot flag.
+            config.convrot    = true;
+            config.group_size = json.value("convrot_groupsize", 256);
+        }
     } catch (const std::exception&) {
         set_error(error, "parsing ComfyUI quantization metadata tensor failed: '" + tensor_name + "'");
         return false;
@@ -245,8 +252,8 @@ bool read_safetensors_file(const std::string& file_path,
         }
 #ifdef SD_USE_UPSTREAM_GGML
         if (1) {} else // kcpp: INT8 tensorwise/convrot is converted to F16 by the fallback below.
-        if (config.format == "int8_tensorwise") {
-            set_error(error, "INT8 tensorwise/convrot is not supported by this ggml build (tensor '" + name + "')");
+        if (config.format == "int8_tensorwise" || config.format == "convrot_w4a4" || config.format == "asym_w4a8_int8") {
+            set_error(error, "ComfyUI INT8/packed INT4 is not supported by this ggml build (tensor '" + name + "')");
             return false;
         }
 #endif
@@ -357,29 +364,58 @@ bool read_safetensors_file(const std::string& file_path,
         if (ends_with(name, ".weight")) {
             const std::string module_name = name.substr(0, name.size() - std::string(".weight").size());
             auto config                   = comfy_quant_configs.find(module_name);
-            if (config != comfy_quant_configs.end() && config->second.format == "int8_tensorwise") {
+            if (config != comfy_quant_configs.end() &&
+                (config->second.format == "int8_tensorwise" || config->second.format == "convrot_w4a4" || config->second.format == "asym_w4a8_int8")) {
+                const int w4_kind = config->second.format == "convrot_w4a4" ? 1 : config->second.format == "asym_w4a8_int8" ? 2
+                                                                                                                            : 0;
                 if (type != GGML_TYPE_I8) {
-                    set_error(error, "ComfyUI int8_tensorwise weight is not I8: '" + name + "'");
+                    set_error(error, "ComfyUI quantized weight is not I8: '" + name + "'");
                     return false;
                 }
+                if (w4_kind && (tensor_storage.n_dims != 2 || tensor_storage.ne[0] <= 0 ||
+                                tensor_storage.ne[0] > INT64_MAX / 2 || tensor_storage.ne[1] <= 0)) {
+                    set_error(error, "invalid packed INT4 weight shape: '" + name + "'");
+                    return false;
+                }
+                const int64_t input_features = tensor_storage.ne[0] * (w4_kind ? 2 : 1);
                 if (config->second.convrot) {
                     int group_size_remainder = config->second.group_size;
                     while (group_size_remainder > 1 && group_size_remainder % 4 == 0) {
                         group_size_remainder /= 4;
                     }
-                    if (group_size_remainder != 1 || tensor_storage.ne[0] % config->second.group_size != 0) {
+                    if (group_size_remainder != 1 || config->second.group_size > 256 || input_features % config->second.group_size != 0) {
                         set_error(error, "invalid ComfyUI convrot group size for tensor '" + name + "'");
                         return false;
                     }
                 }
-                tensor_storage.is_int8_tensorwise      = true;
+                if (w4_kind) {
+                    auto matches = [&](const std::string& suffix, const std::string& expected_dtype, const std::vector<int64_t>& expected_shape) {
+                        auto entry = header_.find(module_name + suffix);
+                        return entry != header_.end() && entry->value("dtype", "") == expected_dtype &&
+                               (*entry)["shape"] == expected_shape;
+                    };
+                    const int64_t n  = tensor_storage.ne[1];
+                    const bool valid = w4_kind == 1
+                                           ? (matches(".weight_scale", "F32", {n}) || matches(".weight_scale", "F32", {n, 1}))
+                                           : config->second.weight_group_size == 16 && input_features % 16 == 0 &&
+                                                 matches(".weight_codebook", "F32", {16}) &&
+                                                 (matches(".weight_s_channel", "F32", {n}) || matches(".weight_s_channel", "F32", {n, 1})) &&
+                                                 matches(".weight_s_rel", "F8_E4M3", {n, input_features / 16});
+                    if (!valid) {
+                        set_error(error, "invalid packed INT4 scales/codebook for tensor '" + name + "'");
+                        return false;
+                    }
+                }
+                tensor_storage.is_int8_tensorwise      = w4_kind == 0;
+                tensor_storage.w4_convrot_kind         = w4_kind;
                 tensor_storage.int8_convrot            = config->second.convrot;
                 tensor_storage.int8_convrot_group_size = config->second.group_size;
             }
-        } else if (ends_with(name, ".weight_scale")) {
-            const std::string module_name = name.substr(0, name.size() - std::string(".weight_scale").size());
+        } else if (ends_with(name, ".weight_scale") || ends_with(name, ".weight_s_channel")) {
+            const std::string module_name = name.substr(0, name.rfind('.'));
             auto config                   = comfy_quant_configs.find(module_name);
-            if (config != comfy_quant_configs.end() && config->second.format == "int8_tensorwise" &&
+            if (config != comfy_quant_configs.end() &&
+                (config->second.format == "int8_tensorwise" || config->second.format == "convrot_w4a4" || config->second.format == "asym_w4a8_int8") &&
                 tensor_storage.n_dims == 2 && tensor_storage.ne[0] == 1) {
                 tensor_storage.ne[0]  = tensor_storage.ne[1];
                 tensor_storage.ne[1]  = 1;

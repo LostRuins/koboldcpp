@@ -1,5 +1,6 @@
 #include "generation_metadata.h"
 
+#include <cctype>
 #include <filesystem>
 #include <map>
 
@@ -70,6 +71,7 @@ std::string generation_info_to_webui(const std::string& text) {
     const auto& sampling = info.at("sample_params");
     std::string result   = info.value("prompt", "");
     if (info.contains("loras")) {
+        bool prompt_trimmed = false;
         for (const auto& lora : info.at("loras")) {
             // WebUI tags cannot restrict a LoRA to the high-noise model.
             if (lora.value("is_high_noise", false))
@@ -83,8 +85,15 @@ std::string generation_info_to_webui(const std::string& text) {
                 name.erase(extension);
             if (name.empty() || name.find_first_of(":<>\r\n") != std::string::npos)
                 continue;
-            if (!result.empty())
-                result += " ";
+            if (!result.empty()) {
+                if (!prompt_trimmed) {
+                    while (!result.empty() && std::isspace(static_cast<unsigned char>(result.back())))
+                        result.pop_back();
+                    prompt_trimmed = true;
+                }
+                if (!result.empty())
+                    result += " ";
+            }
             result += "<lora:" + name + ":" + lora.at("multiplier").dump() + ">";
         }
     }

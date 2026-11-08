@@ -222,14 +222,28 @@ namespace sd {
                 return result;
             }
 
-            for (int64_t flat = 0; flat < result.numel(); ++flat) {
-                std::vector<int64_t> out_coord = tensor_unravel_index(flat, out_shape);
-                std::vector<int64_t> src_coord(static_cast<size_t>(dim()), 0);
-                for (size_t i = 0; i < dims.size(); ++i) {
-                    src_coord[dims[i]] = out_coord[i];
+            std::vector<int64_t> source_strides(dims.size(), 1), strides(dims.size());
+            for (size_t i = 1; i < dims.size(); ++i)
+                source_strides[i] = source_strides[i - 1] * shape_[i - 1];
+            for (size_t i = 0; i < dims.size(); ++i)
+                strides[i] = source_strides[dims[i]];
+            parallel_for(0, result.numel(), 65536, [&](int64_t begin, int64_t end) {
+                auto coord     = tensor_unravel_index(begin, out_shape);
+                int64_t source = 0;
+                for (size_t i = 0; i < dims.size(); ++i)
+                    source += coord[i] * strides[i];
+                for (int64_t flat = begin; flat < end; ++flat) {
+                    result.data()[flat] = data_[source];
+                    for (size_t i = 0; i < dims.size(); ++i) {
+                        ++coord[i];
+                        source += strides[i];
+                        if (coord[i] < out_shape[i])
+                            break;
+                        source -= coord[i] * strides[i];
+                        coord[i] = 0;
+                    }
                 }
-                result[flat] = index(src_coord);
-            }
+            });
 
             return result;
         }
@@ -1037,11 +1051,13 @@ namespace sd {
             auto x_contributors = make_interpolate_contributors(input_width, output_width, mode, antialias);
             auto y_contributors = make_interpolate_contributors(input_height, output_height, mode, antialias);
 
-            for (int64_t plane = 0; plane < plane_count; ++plane) {
-                const int64_t input_plane_offset  = plane * input_plane;
-                const int64_t output_plane_offset = plane * output_plane;
-                for (int64_t y = 0; y < output_height; ++y) {
-                    const auto& y_axis = y_contributors[static_cast<size_t>(y)];
+            parallel_for(0, plane_count * output_height, std::max<int64_t>(1, 16384 / output_width), [&](int64_t begin, int64_t end) {
+                for (int64_t row = begin; row < end; ++row) {
+                    const int64_t plane               = row / output_height;
+                    const int64_t y                   = row % output_height;
+                    const int64_t input_plane_offset  = plane * input_plane;
+                    const int64_t output_plane_offset = plane * output_plane;
+                    const auto& y_axis                = y_contributors[static_cast<size_t>(y)];
                     for (int64_t x = 0; x < output_width; ++x) {
                         const auto& x_axis = x_contributors[static_cast<size_t>(x)];
                         double value       = 0.0;
@@ -1055,7 +1071,7 @@ namespace sd {
                         output.data()[output_plane_offset + y * output_width + x] = static_cast<T>(value);
                     }
                 }
-            }
+            });
 
             return output;
         }

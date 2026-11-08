@@ -39,6 +39,25 @@ bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group_size);
 ggml_tensor* ggml_mul_mat_i8_tensorwise(ggml_context* ctx, ggml_tensor* weight, ggml_tensor* input, ggml_tensor* weight_scale, ggml_tensor* bias, int group_size, ggml_tensor* input_scale = nullptr);
 ggml_tensor* ggml_quantize_i8_convrot(ggml_context* ctx, ggml_tensor* input, int group_size);
 
+enum class SDW4Kind : int32_t { W4A4 = 1,
+                                W4A8 = 2 };
+
+struct SDW4Operation {
+    const ggml_tensor* weight;
+    const ggml_tensor* input;
+    const ggml_tensor* weight_scale;
+    const ggml_tensor* s_channel;
+    const ggml_tensor* s_rel;
+    const ggml_tensor* bias;
+    SDW4Kind kind;
+};
+
+ggml_ext_op_t sd_ggml_w4_op();
+bool sd_ggml_w4_describe(const ggml_tensor* node, SDW4Operation* operation);
+// Packed I8 [K/2, N], low nibble first. W4A8 uses a 16-entry F32 codebook
+// and F8_E4M3 [K/16, N] relative scales. F32 inputs get an explicit quantize node.
+ggml_tensor* ggml_mul_mat_w4_convrot(ggml_context* ctx, ggml_tensor* weight, ggml_tensor* input, ggml_tensor* weight_scale, ggml_tensor* s_channel, ggml_tensor* s_rel, ggml_tensor* bias, SDW4Kind kind, int group_size);
+
 enum ggml_sage_attn_mode {
     GGML_SAGE_ATTN_AUTO = 0,
     GGML_SAGE_ATTN_2,
@@ -60,6 +79,18 @@ struct SDSolAttentionParams {
     float scale;
     float tau;
 };
+
+struct SDWindowAttentionParams {
+    int32_t width, height, heads, planes;
+    int16_t window_height[4], window_width[4];
+    int32_t preserve_boundary;
+};
+
+ggml_ext_op_t sd_ggml_window_attn_op();
+bool sd_ggml_window_attn_describe(const ggml_tensor* node, SDWindowAttentionParams* params);
+// Contiguous F32 Q [D*heads, W*H], K/V [D*kv_heads, W*H*planes].
+// Returns Q's layout, or nullptr when the backend has no compatible kernel.
+ggml_tensor* sd_ggml_window_attn(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, const SDWindowAttentionParams& params);
 
 ggml_ext_op_t sd_ggml_sol_attn_op();
 bool sd_ggml_sol_attn_describe(const ggml_tensor* node, SDSolAttentionParams* params);

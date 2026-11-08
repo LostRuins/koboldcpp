@@ -63,16 +63,16 @@ namespace LingBotVideo {
                 }
 
                 if (ends_with(name, "patch_embedder.weight") && tensor_storage.n_dims == 2) {
-                    int64_t patch_dim    = tensor_storage.ne[0];
+                    int64_t patch_dim    = tensor_storage.logical_ne0();
                     config.hidden_size   = tensor_storage.ne[1];
                     int64_t patch_volume = config.patch_t * config.patch_h * config.patch_w;
                     if (patch_dim % patch_volume == 0) {
                         config.in_channels = patch_dim / patch_volume;
                     }
                 } else if (ends_with(name, "text_embedder.linear_1.weight") && tensor_storage.n_dims == 2) {
-                    config.text_dim = tensor_storage.ne[0];
+                    config.text_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "time_embedder.linear_1.weight") && tensor_storage.n_dims == 2) {
-                    config.freq_dim = tensor_storage.ne[0];
+                    config.freq_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "blocks.0.attn.norm_q.weight") && tensor_storage.n_dims == 1) {
                     int64_t head_dim = tensor_storage.ne[0];
                     if (head_dim > 0) {

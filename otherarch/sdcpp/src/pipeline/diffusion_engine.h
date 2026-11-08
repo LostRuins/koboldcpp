@@ -444,6 +444,10 @@ public:
                                 bool terminal_sigma_is_zero,
                                 int64_t* last_progress_us);
 
+    // set the kind of the control image of the next generations (ControlNet Union),
+    // false (after saying why) when the loaded ControlNet can't use it
+    bool set_control_type(sd_control_type_t type);
+
     void compute_sample_controls(const sd::Tensor<float>& control_image,
                                  const sd::Tensor<float>& noised_input,
                                  const sd::Tensor<float>& timesteps_tensor,

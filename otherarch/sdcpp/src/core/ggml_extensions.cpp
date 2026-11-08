@@ -301,6 +301,101 @@ ggml_tensor* ggml_quantize_i8_convrot(ggml_context* ctx, ggml_tensor* x, int gro
     return ggml_ext_op_create(ctx, sd_ggml_convrot_op(), &x, 1, &attr);
 }
 
+struct W4Attributes {
+    int64_t shape[3];
+    SDW4Kind kind;
+    int32_t has_bias;
+};
+
+static bool w4_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
+    if (!attributes || count < 3)
+        return false;
+    W4Attributes attr;
+    std::memcpy(&attr, attributes, sizeof(attr));
+    const bool codebook = attr.kind == SDW4Kind::W4A8;
+    if ((!codebook && attr.kind != SDW4Kind::W4A4) || (attr.has_bias != 0 && attr.has_bias != 1) ||
+        count != (codebook ? 5 : 3) + attr.has_bias)
+        return false;
+    for (int i = 0; i < count; ++i)
+        if (!inputs[i] || !ggml_is_contiguous(inputs[i]))
+            return false;
+    const auto* w = inputs[0];
+    const auto* x = inputs[1];
+    if (w->type != GGML_TYPE_I8 || w->ne[0] <= 0 || w->ne[0] > i8_size_limit / 2 ||
+        w->ne[1] <= 0 || w->ne[2] != 1 || w->ne[3] != 1)
+        return false;
+    const int64_t k = 2 * w->ne[0], n = w->ne[1];
+    int64_t rows = 1;
+    for (auto dim : attr.shape) {
+        if (dim <= 0 || dim > i8_size_limit / rows)
+            return false;
+        rows *= dim;
+    }
+    int64_t height;
+    if (!packed_height(k, rows, &height) || n > i8_size_limit / 4 / rows ||
+        x->type != GGML_TYPE_I8 || x->ne[0] != k || x->ne[1] != height || x->ne[2] != 1 || x->ne[3] != 1 ||
+        !scale_matches(inputs[2], codebook ? 16 : n) ||
+        (attr.has_bias && !scale_matches(inputs[count - 1], n)))
+        return false;
+    if (codebook && (k % 16 || !scale_matches(inputs[3], n) || inputs[4]->type != GGML_TYPE_F8_E4M3 ||
+                     inputs[4]->ne[0] != k / 16 || inputs[4]->ne[1] != n || inputs[4]->ne[2] != 1 || inputs[4]->ne[3] != 1))
+        return false;
+    out->type  = GGML_TYPE_F32;
+    out->ne[0] = n;
+    std::memcpy(out->ne + 1, attr.shape, sizeof(attr.shape));
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_w4_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.linear_w4_convrot.v1", sizeof(W4Attributes), w4_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_w4_describe(const ggml_tensor* node, SDW4Operation* op) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_w4_op() || !ggml_is_contiguous(node))
+        return false;
+    W4Attributes attr;
+    std::memcpy(&attr, ggml_ext_op_attributes(node), sizeof(attr));
+    const bool codebook = attr.kind == SDW4Kind::W4A8;
+    const int count     = (codebook ? 5 : 3) + (attr.has_bias != 0);
+    ggml_ext_tensor_desc out;
+    if (!w4_infer(node->src, count, &attr, &out) || node->type != out.type ||
+        std::memcmp(node->ne, out.ne, sizeof(out.ne)))
+        return false;
+    *op = {node->src[0], node->src[1], node->src[2], codebook ? node->src[3] : nullptr,
+           codebook ? node->src[4] : nullptr, attr.has_bias ? node->src[count - 1] : nullptr, attr.kind};
+    return true;
+}
+
+ggml_tensor* ggml_mul_mat_w4_convrot(ggml_context* ctx, ggml_tensor* w, ggml_tensor* x, ggml_tensor* ws, ggml_tensor* sc, ggml_tensor* sr, ggml_tensor* bias, SDW4Kind kind, int group) {
+    if (!w || !x || group < 0 || (group && !valid_group(group)))
+        return nullptr;
+    const int quant_group = group ? group : 1;
+    if (x->type == GGML_TYPE_F32)
+        x = ggml_quantize_i8_convrot(ctx, x, quant_group);
+    int packed_group;
+    if (!sd_ggml_convrot_describe(x, &packed_group) || packed_group != quant_group)
+        return nullptr;
+    const auto* logical    = x->src[0];
+    W4Attributes attr      = {{logical->ne[1], logical->ne[2], logical->ne[3]}, kind, bias ? 1 : 0};
+    ggml_tensor* inputs[6] = {w, x, ws};
+    int count              = 3;
+    if (kind == SDW4Kind::W4A8) {
+        inputs[count++] = sc;
+        inputs[count++] = sr;
+    } else if (sc || sr) {
+        return nullptr;
+    }
+    if (bias)
+        inputs[count++] = bias;
+    return ggml_ext_op_create(ctx, sd_ggml_w4_op(), inputs, count, &attr);
+}
+
 static bool sage_attn_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
     if (count != 3 || !attributes)
         return false;
@@ -404,6 +499,65 @@ ggml_tensor* ggml_sol_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, gg
     ggml_tensor* inputs[]             = {q, k, v};
     const SDSolAttentionParams params = {scale, tau};
     return ggml_ext_op_create(ctx, sd_ggml_sol_attn_op(), inputs, 3, &params);
+}
+
+static bool window_attn_infer(ggml_tensor* const* inputs, int count, const void* attributes, ggml_ext_tensor_desc* out) {
+    if (count != 3 || !attributes)
+        return false;
+    SDWindowAttentionParams p;
+    std::memcpy(&p, attributes, sizeof(p));
+    if (p.width <= 0 || p.height <= 0 || int64_t(p.width) * p.height > INT32_MAX / 4 ||
+        p.heads <= 0 || p.planes < 1 || p.planes > 4 || (p.preserve_boundary != 0 && p.preserve_boundary != 1))
+        return false;
+    for (int i = 0; i < p.planes; ++i)
+        if (p.window_height[i] <= 0 || p.window_width[i] <= 0 ||
+            (!p.preserve_boundary && (p.window_height[i] % 2 || p.window_width[i] % 2)))
+            return false;
+    for (int i = 0; i < 3; ++i) {
+        const auto* t = inputs[i];
+        if (!t || t->type != GGML_TYPE_F32 || !ggml_is_contiguous(t) || t->ne[2] != 1 || t->ne[3] != 1 ||
+            t->ne[1] != int64_t(p.width) * p.height * (i ? p.planes : 1))
+            return false;
+    }
+    const auto* q = inputs[0];
+    const auto* k = inputs[1];
+    if (q->ne[0] % p.heads || (q->ne[0] / p.heads != 64 && q->ne[0] / p.heads != 128) ||
+        k->ne[0] <= 0 || k->ne[0] > q->ne[0] || q->ne[0] % k->ne[0] ||
+        k->ne[0] % (q->ne[0] / p.heads) || !ggml_are_same_shape(k, inputs[2]))
+        return false;
+    *out = {GGML_TYPE_F32, {q->ne[0], q->ne[1], 1, 1}};
+    return true;
+}
+
+ggml_ext_op_t sd_ggml_window_attn_op() {
+    static const auto op = [] {
+        const ggml_ext_op_desc desc = {GGML_EXT_ABI_VERSION, "sd.window_attn.v1", sizeof(SDWindowAttentionParams), window_attn_infer};
+        auto result                 = ggml_ext_register_op(&desc);
+        GGML_ASSERT(result);
+        return result;
+    }();
+    return op;
+}
+
+bool sd_ggml_window_attn_describe(const ggml_tensor* node, SDWindowAttentionParams* params) {
+    if (!node || ggml_ext_op_get(node) != sd_ggml_window_attn_op() || node->src[3] || !ggml_is_contiguous(node))
+        return false;
+    const auto* attributes = ggml_ext_op_attributes(node);
+    ggml_ext_tensor_desc out;
+    if (!window_attn_infer(node->src, 3, attributes, &out) || node->type != out.type || std::memcmp(node->ne, out.ne, sizeof(out.ne)))
+        return false;
+    std::memcpy(params, attributes, sizeof(*params));
+    return true;
+}
+
+ggml_tensor* sd_ggml_window_attn(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, const SDWindowAttentionParams& params) {
+    ggml_tensor* inputs[] = {q, k, v};
+    ggml_ext_tensor_desc out;
+    if (!backend || !window_attn_infer(inputs, 3, &params, &out))
+        return nullptr;
+    sd_ggml_register_extensions(backend);
+    auto result = ggml_ext_op_create(ctx, sd_ggml_window_attn_op(), inputs, 3, &params);
+    return ggml_backend_supports_op(backend, result) ? result : nullptr;
 }
 
 void sd_ggml_register_extensions(ggml_backend_t backend) {

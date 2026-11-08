@@ -92,11 +92,11 @@ namespace Krea2 {
                     continue;
                 }
                 if (ends_with(name, "first.weight") && tensor_storage.n_dims == 2) {
-                    config.in_channels  = tensor_storage.ne[0] / (config.patch_size * config.patch_size);
+                    config.in_channels  = tensor_storage.logical_ne0() / (config.patch_size * config.patch_size);
                     config.out_channels = config.in_channels;
                     config.features     = tensor_storage.ne[1];
                 } else if (ends_with(name, "blocks.0.attn.qknorm.qnorm.scale") && tensor_storage.n_dims == 1) {
-                    detected_head_dim = tensor_storage.ne[0];
+                    detected_head_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "blocks.0.attn.wq.weight") && tensor_storage.n_dims == 2) {
                     if (detected_head_dim > 0) {
                         config.heads = tensor_storage.ne[1] / detected_head_dim;
@@ -106,11 +106,11 @@ namespace Krea2 {
                         config.kv_heads = tensor_storage.ne[1] / detected_head_dim;
                     }
                 } else if (ends_with(name, "txtfusion.projector.weight") && tensor_storage.n_dims == 2) {
-                    config.text_layers = tensor_storage.ne[0];
+                    config.text_layers = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "txtfusion.layerwise_blocks.0.prenorm.scale") && tensor_storage.n_dims == 1) {
-                    config.text_dim = tensor_storage.ne[0];
+                    config.text_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "txtfusion.layerwise_blocks.0.attn.qknorm.qnorm.scale") && tensor_storage.n_dims == 1) {
-                    detected_text_head_dim = tensor_storage.ne[0];
+                    detected_text_head_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "txtfusion.layerwise_blocks.0.attn.wq.weight") && tensor_storage.n_dims == 2) {
                     if (detected_text_head_dim > 0) {
                         config.text_heads = tensor_storage.ne[1] / detected_text_head_dim;

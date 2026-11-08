@@ -319,7 +319,7 @@ protected:
             tensor_storage_map.find(prefix + "to_k_ip.weight") != tensor_storage_map.end()) {
             has_ip            = true;
             int64_t inner_dim = d_head * n_head;
-            int64_t ip_dim    = tensor_storage_map.at(prefix + "to_k_ip.weight").ne[0];
+            int64_t ip_dim    = tensor_storage_map.at(prefix + "to_k_ip.weight").logical_ne0();
             blocks["to_k_ip"] = std::shared_ptr<GGMLBlock>(new Linear(ip_dim, inner_dim, false));
             blocks["to_v_ip"] = std::shared_ptr<GGMLBlock>(new Linear(ip_dim, inner_dim, false));
         }
@@ -573,6 +573,33 @@ public:
 
         x = ggml_add(ctx->ggml_ctx, x, x_in);
         return x;
+    }
+};
+
+class ResidualAttentionBlock : public GGMLBlock {
+public:
+    ResidualAttentionBlock(int64_t channels, int64_t n_head) {
+        blocks["ln_1"]       = std::shared_ptr<GGMLBlock>(new LayerNorm(channels));
+        blocks["attn"]       = std::shared_ptr<GGMLBlock>(new MultiheadAttention(channels, n_head, true, true, true));
+        blocks["ln_2"]       = std::shared_ptr<GGMLBlock>(new LayerNorm(channels));
+        blocks["mlp.c_fc"]   = std::shared_ptr<GGMLBlock>(new Linear(channels, channels * 4));
+        blocks["mlp.c_proj"] = std::shared_ptr<GGMLBlock>(new Linear(channels * 4, channels));
+    }
+
+    // x: [N, n_token, channels]
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        auto ln_1       = std::dynamic_pointer_cast<LayerNorm>(blocks["ln_1"]);
+        auto attn       = std::dynamic_pointer_cast<MultiheadAttention>(blocks["attn"]);
+        auto ln_2       = std::dynamic_pointer_cast<LayerNorm>(blocks["ln_2"]);
+        auto mlp_c_fc   = std::dynamic_pointer_cast<Linear>(blocks["mlp.c_fc"]);
+        auto mlp_c_proj = std::dynamic_pointer_cast<Linear>(blocks["mlp.c_proj"]);
+
+        x = ggml_add(ctx->ggml_ctx, x, attn->forward(ctx, ln_1->forward(ctx, x)));
+
+        auto h = mlp_c_fc->forward(ctx, ln_2->forward(ctx, x));
+        h      = ggml_ext_gelu_quick(ctx->ggml_ctx, h);
+        h      = mlp_c_proj->forward(ctx, h);
+        return ggml_add(ctx->ggml_ctx, x, h);
     }
 };
 

@@ -5,6 +5,39 @@
 #include "core/util.h"
 #include "name_conversion.h"
 
+std::string convert_relayvsr_tensor_name(std::string name) {
+    if (!starts_with(name, "wan."))
+        return name;
+    const std::vector<std::pair<std::string, std::string>> mappings = {
+        {"positive_conditioning", "prompt_embeds"},
+        {"lq_proj_in.linear.", "lq_proj.out_proj."},
+        {"lq_proj_in.", "lq_proj."},
+        {"text_embedding.0.", "condition_embedder.text_embedder.linear_1."},
+        {"text_embedding.2.", "condition_embedder.text_embedder.linear_2."},
+        {"time_embedding.0.", "condition_embedder.time_embedder.linear_1."},
+        {"time_embedding.2.", "condition_embedder.time_embedder.linear_2."},
+        {"time_projection.1.", "condition_embedder.time_proj."},
+        {"head.head.", "proj_out."},
+        {"head.modulation", "scale_shift_table"},
+        {".norm3.", ".norm2."},
+        {".modulation", ".scale_shift_table"},
+        {".ffn.0.", ".ffn.net.0.proj."},
+        {".ffn.2.", ".ffn.net.2."},
+        {".self_attn.", ".attn1."},
+        {".cross_attn.", ".attn2."},
+        {".q.", ".to_q."},
+        {".k.", ".to_k."},
+        {".v.", ".to_v."},
+        {".o.", ".to_out.0."},
+    };
+    for (const auto& mapping : mappings) {
+        auto pos = name.find(mapping.first);
+        if (pos != std::string::npos)
+            name.replace(pos, mapping.first.size(), mapping.second);
+    }
+    return name;
+}
+
 void replace_with_name_map(std::string& name, const std::vector<std::pair<std::string, std::string>>& name_map) {
     for (auto kv : name_map) {
         size_t pos = name.find(kv.first);
@@ -1839,6 +1872,15 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         }
         if (sd_version_is_sdxl(version) && is_diffusers_controlnet_name(name)) {
             name = convert_diffusers_controlnet_to_original_sdxl(name);
+        }
+        // controlnet union fusion: nn.MultiheadAttention has in_proj_weight/in_proj_bias,
+        // MultiheadAttention here has in_proj.weight/in_proj.bias
+        if (starts_with(name, "transformer_layes.")) {
+            const std::string from = "attn.in_proj_";
+            size_t pos             = name.find(from);
+            if (pos != std::string::npos) {
+                name.replace(pos, from.size(), "attn.in_proj.");
+            }
         }
     }
 
