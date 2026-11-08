@@ -100,6 +100,7 @@ cli_arg_overrides = set()
 
 handle = None
 common_backend_handle = None
+backend_variant_handle = None
 dll_directory_handles = []
 friendlymodelname = "inactive"
 friendlysdmodelname = "inactive"
@@ -975,7 +976,7 @@ default_option, cublas_option, hipblas_option, vulkan_option, noavx2_option, vul
 runopts = [opt for lib, opt in lib_option_pairs if file_exists(lib)]
 
 def init_library():
-    global handle, args, libname, common_backend_handle, dll_directory_handles
+    global handle, args, libname, common_backend_handle, backend_variant_handle, dll_directory_handles
     global lib_default,lib_failsafe,lib_noavx2,lib_vulkan_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2
 
     libname = lib_default
@@ -1049,6 +1050,10 @@ def init_library():
             if not os.path.isfile(route_path):
                 raise FileNotFoundError("Missing backend route DLL: " + route_path)
             dll_directory_handles.append(os.add_dll_directory(route_dir))
+            # Load the actual backend by absolute path before its forwarder.
+            # Windows 7 does not reliably apply AddDllDirectory search paths
+            # while resolving a forwarded export's target DLL.
+            backend_variant_handle = ctypes.CDLL(backend_path)
             common_backend_handle = ctypes.CDLL(route_path)
             handle = ctypes.CDLL(common_path)
         else:
