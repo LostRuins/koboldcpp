@@ -21,6 +21,7 @@
 #include "model/adapter/lora.hpp"
 #include "model_builders.h"
 #include "model_manager.h"
+#include "runtime/generation_progress.h"
 #include "stable-diffusion.h"
 
 class RNG;
@@ -203,6 +204,7 @@ public:
     std::unique_ptr<ConditioningCache> conditioning_cache_;
     std::vector<ModelManager::LoraSpec> conditioning_loras_;
     bool executing_ = false;
+    sd::GenerationProgress generation_progress;
 
     std::shared_ptr<Denoiser> denoiser;
     std::vector<float> file_alphas_cumprod;
@@ -258,6 +260,9 @@ public:
 
         explicit ExecutionScope(StableDiffusionGGML& sd)
             : operation(sd) {
+            if (operation.acquired) {
+                sd.generation_progress.report("preparing");
+            }
             ready = operation.acquired && sd.refresh_model_sources();
         }
 

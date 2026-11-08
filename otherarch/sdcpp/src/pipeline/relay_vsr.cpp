@@ -84,7 +84,7 @@ namespace sd {
                         sources.emplace(source->second, tensor);
                         ggml_set_name(tensor, source->second.c_str());
                     }
-                    runner->set_flash_attention_enabled(true);
+                    runtime.configure_runner(*runner, module, true, module == SDBackendModule::DIFFUSION);
                     return runtime.manager->register_param_tensors(component, std::move(sources),
                                                                    runtime.backends.params_backend_is_disk(module) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
                                                                    compute, params);

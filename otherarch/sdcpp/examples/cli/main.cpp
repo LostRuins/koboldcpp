@@ -35,12 +35,13 @@ std::regex format_specifier_regex("(?:[^%]|^)(?:%%)*(%\\d{0,3}d)");
 
 struct SDCliParams {
     std::string input_frames;
-    int video_upscale_factor = 0;
-    int vsr_window_size      = 16;
-    SDMode mode              = IMG_GEN;
-    std::string output_path  = "output.png";
-    int output_begin_idx     = -1;
-    int compression_quality  = 90;
+    int video_upscale_factor    = 0;
+    int vsr_window_size         = 16;
+    int vsr_temporal_chunk_size = 5;
+    SDMode mode                 = IMG_GEN;
+    std::string output_path     = "output.png";
+    int output_begin_idx        = -1;
+    int compression_quality     = 90;
     std::string image_path;
     std::string metadata_format = "text";
 
@@ -66,7 +67,7 @@ struct SDCliParams {
         ArgOptions options;
 
         options.string_options = {
-            {"", "--input-frames", "directory of ordered RGB frames for vid_upscale", 0, &input_frames},
+            {"", "--input-frames", "directory of ordered RGB frames for vid_upscale (use -i for a single image)", 0, &input_frames},
             {"-o",
              "--output",
              "path to write result image to. you can use printf-style %d format specifiers for image sequences (default: ./output.png) (eg. output_%03d.png). Single-file video outputs support .avi, .webm, and animated .webp",
@@ -95,8 +96,9 @@ struct SDCliParams {
         };
 
         options.int_options = {
-            {"", "--upscale-factor", "required video upscale factor (RelayVSR: 2 or 4)", &video_upscale_factor},
+            {"", "--upscale-factor", "required positive video upscale factor (RelayVSR: 2 or 4; SeedVR2: integer)", &video_upscale_factor},
             {"", "--vsr-window-size", "RelayVSR window including both endpoints (default: 16)", &vsr_window_size},
+            {"", "--vsr-temporal-chunk-size", "SeedVR2 input frames per independent chunk: 1 or 4n+1 (default: 5)", &vsr_temporal_chunk_size},
             {"",
              "--preview-interval",
              "preview interval: in each sampling pass, positive N updates every Nth denoiser step and -N previews only completed logical step N; 0 previews the final completed step of the first pass (base-resolution or high-noise). Default: 1",
@@ -227,8 +229,8 @@ struct SDCliParams {
     }
 
     bool validate() {
-        if (mode == VID_UPSCALE && (input_frames.empty() || video_upscale_factor <= 0 || vsr_window_size < 2)) {
-            LOG_ERROR("vid_upscale requires --input-frames, positive --upscale-factor, and --vsr-window-size >= 2");
+        if (mode == VID_UPSCALE && video_upscale_factor <= 0) {
+            LOG_ERROR("vid_upscale requires a positive --upscale-factor");
             return false;
         }
         if (mode != METADATA) {
@@ -540,7 +542,9 @@ bool save_results(const SDCliParams& cli_params,
         return sucessful_reults != 0;
     }
 
-    if ((cli_params.mode == VID_GEN && num_results > 1) || cli_params.mode == VID_UPSCALE) {
+    const bool video_upscale_output = cli_params.mode == VID_UPSCALE &&
+                                      (gen_params.init_image_path.empty() || ext_lower == ".avi" || ext_lower == ".webm");
+    if ((cli_params.mode == VID_GEN && num_results > 1) || video_upscale_output) {
         if (ext_lower != ".avi" && ext_lower != ".webp" && ext_lower != ".webm")
             ext = ".avi";
         std::string params = gen_params.embed_image_metadata
@@ -676,12 +680,23 @@ int main(int argc, const char* argv[]) {
     }
 
     if (cli_params.mode == VID_UPSCALE) {
+        if (cli_params.input_frames.empty() == gen_params.init_image_path.empty()) {
+            LOG_ERROR("vid_upscale requires exactly one input: -i/--init-img or --input-frames");
+            return 1;
+        }
+        ctx_params.prepare_backend_assignments();
         if (ctx_params.diffusion_model_path.empty() || ctx_params.vae_path.empty() || gen_params.fps <= 0) {
             LOG_ERROR("vid_upscale requires --diffusion-model, --vae and positive --fps");
             return 1;
         }
         std::vector<SDImageOwner> owned_frames;
-        if (!load_images_from_dir(cli_params.input_frames, owned_frames) || owned_frames.empty()) {
+        if (!gen_params.init_image_path.empty()) {
+            owned_frames.emplace_back();
+            if (!load_sd_image_from_file(owned_frames.back().put(), gen_params.init_image_path.c_str(), 0, 0, 3)) {
+                LOG_ERROR("load image from '%s' failed", gen_params.init_image_path.c_str());
+                return 1;
+            }
+        } else if (!load_images_from_dir(cli_params.input_frames, owned_frames) || owned_frames.empty()) {
             LOG_ERROR("vid_upscale input contains no readable frames");
             return 1;
         }
@@ -692,12 +707,22 @@ int main(int argc, const char* argv[]) {
             frames.push_back(frame.get());
         sd_video_upscaler_ctx_params_t params;
         sd_video_upscaler_ctx_params_init(&params);
-        params.diffusion_model_path = ctx_params.diffusion_model_path.c_str();
-        params.vae_path             = ctx_params.vae_path.c_str();
-        params.upscale_factor       = cli_params.video_upscale_factor;
-        params.n_threads            = ctx_params.n_threads;
-        params.backend              = ctx_params.effective_backend.c_str();
-        params.params_backend       = ctx_params.effective_params_backend.c_str();
+        params.diffusion_model_path  = ctx_params.diffusion_model_path.c_str();
+        params.vae_path              = ctx_params.vae_path.c_str();
+        params.upscale_factor        = cli_params.video_upscale_factor;
+        params.n_threads             = ctx_params.n_threads;
+        params.backend               = ctx_params.effective_backend.c_str();
+        params.params_backend        = ctx_params.effective_params_backend.c_str();
+        params.flash_attn_mode       = ctx_params.flash_attn_mode.c_str();
+        std::string conv_direct_mode = ctx_params.conv_direct_mode;
+        if (conv_direct_mode.empty()) {
+            conv_direct_mode = "auto";
+            if (ctx_params.diffusion_conv_direct)
+                conv_direct_mode += ",diffusion=on";
+            if (ctx_params.vae_conv_direct)
+                conv_direct_mode += ",vae=on";
+        }
+        params.conv_direct_mode = conv_direct_mode.c_str();
         std::unique_ptr<video_upscaler_ctx_t, decltype(&free_video_upscaler_ctx)> upscaler(
             new_video_upscaler_ctx(&params),
             free_video_upscaler_ctx);
@@ -706,11 +731,12 @@ int main(int argc, const char* argv[]) {
         sd_video_generation_result_t* output = nullptr;
         sd_video_upscale_params_t upscale_params;
         sd_video_upscale_params_init(&upscale_params);
-        upscale_params.frames      = frames.data();
-        upscale_params.frame_count = int(frames.size());
-        upscale_params.fps         = gen_params.fps;
-        upscale_params.window_size = cli_params.vsr_window_size;
-        upscale_params.seed        = gen_params.seed;
+        upscale_params.frames              = frames.data();
+        upscale_params.frame_count         = int(frames.size());
+        upscale_params.fps                 = gen_params.fps;
+        upscale_params.window_size         = cli_params.vsr_window_size;
+        upscale_params.temporal_chunk_size = cli_params.vsr_temporal_chunk_size;
+        upscale_params.seed                = gen_params.seed;
         if (!upscale_video(upscaler.get(), &upscale_params, &output))
             return 1;
         std::string video_info = output->generation_info;

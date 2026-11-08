@@ -531,6 +531,7 @@ namespace sd::pipeline {
 
         condition_params.ref_image_params = ref_image_params;
 
+        sd->generation_progress.report("conditioning", "extensions");
         sd->prepare_generation_extensions(request->pm_params,
                                           request->pulid_params,
                                           condition_params,
@@ -538,7 +539,8 @@ namespace sd::pipeline {
         sd->compute_ip_adapter_tokens(sd_img_gen_params->ip_adapter_image, sd_img_gen_params->ip_adapter_strength);
         int64_t prepare_start_ms         = ggml_time_ms();
         condition_params.zero_out_masked = false;
-        auto cond                        = sd->get_learned_condition(condition_params);
+        sd->generation_progress.report("conditioning", "positive_prompt");
+        auto cond = sd->get_learned_condition(condition_params);
         if (cond.empty()) {
             LOG_ERROR("failed to encode prompt");
             return std::nullopt;
@@ -584,6 +586,7 @@ namespace sd::pipeline {
                     // Keep source latents in CFG, but omit source images from the text encoder.
                     condition_params.ref_images = nullptr;
                 }
+                sd->generation_progress.report("conditioning", "negative_prompt");
                 uncond = sd->get_learned_condition(condition_params);
                 if (uncond.empty()) {
                     LOG_ERROR("failed to encode negative prompt");
@@ -615,6 +618,7 @@ namespace sd::pipeline {
                 if (use_ref_latent_img_cfg) {
                     condition_params.ref_images = &empty_ref_images;
                 }
+                sd->generation_progress.report("conditioning", "image_condition");
                 img_uncond = sd->get_learned_condition(condition_params);
                 if (img_uncond.empty()) {
                     LOG_ERROR("failed to encode image guidance prompt");
@@ -830,6 +834,7 @@ namespace sd::pipeline {
                 return {};
             }
 
+            sd->generation_progress.report("upscaling", "hires");
             sd::Tensor<float> upscaled_tensor;
             if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
                 upscaled_tensor = upscaler->upscale_tensor(decoded);
@@ -930,6 +935,7 @@ namespace sd::pipeline {
         ImageVaeAxesGuard axes_guard(sd, sd_img_gen_params, request);
 
         SamplePlan plan(sd, sd_img_gen_params, request);
+        sd->generation_progress.report("preparing", "inputs");
         auto latents_opt = prepare_image_generation_latents(sd,
                                                             sd_img_gen_params,
                                                             &request,
@@ -1027,6 +1033,7 @@ namespace sd::pipeline {
             }
             LOG_INFO("hires fix: upscaling to %dx%d", request.hires.target_width, request.hires.target_height);
 
+            sd->generation_progress.report("upscaling", "hires");
             std::unique_ptr<UpscalerGGML> hires_upscaler;
             if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
                 if (sd->get_cancel_flag() == SD_CANCEL_ALL) {

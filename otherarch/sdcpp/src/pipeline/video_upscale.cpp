@@ -2,10 +2,61 @@
 
 #include <climits>
 
+#include "core/ggml_runner.h"
+#include "core/probe/conv_direct.h"
+#include "core/probe/flash_attn.h"
 #include "core/util.h"
 
 namespace sd {
     namespace pipeline {
+
+        bool VideoUpscaleRuntime::flash_attention_for(SDBackendModule module) {
+            const auto mode = flash_attn_assignment.get(module);
+            if (mode == "on" || mode == "off")
+                return mode == "on";
+            const auto devices = backends.runtime_backends(module);
+            bool enabled = !devices.empty(), any_enabled = false;
+            for (auto backend : devices) {
+                auto it = flash_attn_by_backend.find(backend);
+                if (it == flash_attn_by_backend.end())
+                    it = flash_attn_by_backend.emplace(backend, sd_probe_flash_attention(backend, n_threads)).first;
+                enabled     = enabled && it->second;
+                any_enabled = any_enabled || it->second;
+            }
+            if (any_enabled && !enabled)
+                LOG_INFO("flash attention auto: %s -> off (compute devices disagree)", sd_backend_module_name(module));
+            return enabled;
+        }
+
+        bool VideoUpscaleRuntime::conv_direct_for(SDBackendModule module, bool conv3d) {
+            const auto mode = conv_direct_assignment.get(module);
+            if (mode == "on" || mode == "off")
+                return mode == "on";
+            auto& cache        = conv3d ? conv3d_direct_by_backend : conv2d_direct_by_backend;
+            const auto devices = backends.runtime_backends(module);
+            bool enabled = !devices.empty(), any_enabled = false;
+            for (auto backend : devices) {
+                auto it = cache.find(backend);
+                if (it == cache.end())
+                    it = cache.emplace(backend, sd_probe_conv_direct(backend, conv3d)).first;
+                enabled     = enabled && it->second;
+                any_enabled = any_enabled || it->second;
+            }
+            if (any_enabled && !enabled)
+                LOG_INFO("conv%dd direct auto: %s -> off (compute devices disagree)", conv3d ? 3 : 2, sd_backend_module_name(module));
+            return enabled;
+        }
+
+        void VideoUpscaleRuntime::configure_runner(GGMLRunner& runner, SDBackendModule module, bool conv2d, bool conv3d) {
+            const bool flash    = flash_attention_for(module);
+            const bool direct2d = conv2d && conv_direct_for(module, false);
+            const bool direct3d = conv3d && conv_direct_for(module, true);
+            runner.set_flash_attention_enabled(flash);
+            runner.set_conv2d_direct_enabled(direct2d);
+            runner.set_conv3d_direct_enabled(direct3d);
+            LOG_INFO("video upscale %s: flash attention %s, conv2d direct %s, conv3d direct %s",
+                     sd_backend_module_name(module), flash ? "on" : "off", direct2d ? "on" : "off", direct3d ? "on" : "off");
+        }
 
         VideoUpscaler::~VideoUpscaler() {
             if (model_)
@@ -26,6 +77,11 @@ namespace sd {
             executor_          = std::make_unique<sd::ParallelExecutor>(runtime_.n_threads);
             sd::ParallelScope scope(executor_.get());
             std::string error;
+            if (!sd_parse_flash_attention_assignment(params.flash_attn_mode ? params.flash_attn_mode : "", &runtime_.flash_attn_assignment, &error) ||
+                !sd_parse_conv_direct_assignment(params.conv_direct_mode ? params.conv_direct_mode : "", &runtime_.conv_direct_assignment, &error)) {
+                LOG_ERROR("video upscale operator configuration: %s", error.c_str());
+                return false;
+            }
             if (!runtime_.backends.init(params.backend, params.params_backend, nullptr, &error)) {
                 LOG_ERROR("video upscaler backend: %s", error.c_str());
                 return false;
@@ -41,6 +97,8 @@ namespace sd {
             const auto& weights = loader.get_tensor_storage_map();
             if (is_relay_vsr_model(weights))
                 model_ = create_relay_vsr_upscaler();
+            else if (is_seedvr2_model(weights))
+                model_ = create_seedvr2_upscaler();
             else {
                 LOG_ERROR("unsupported video upscale model architecture");
                 return false;
@@ -104,10 +162,11 @@ void sd_video_upscaler_ctx_params_init(sd_video_upscaler_ctx_params_t* params) {
 void sd_video_upscale_params_init(sd_video_upscale_params_t* params) {
     if (!params)
         return;
-    *params             = {};
-    params->fps         = 24;
-    params->seed        = 42;
-    params->window_size = 16;
+    *params                     = {};
+    params->fps                 = 24;
+    params->seed                = 42;
+    params->window_size         = 16;
+    params->temporal_chunk_size = 5;
 }
 
 video_upscaler_ctx_t* new_video_upscaler_ctx(const sd_video_upscaler_ctx_params_t* params) {
