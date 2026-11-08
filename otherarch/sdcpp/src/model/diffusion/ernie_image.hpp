@@ -42,7 +42,7 @@ namespace ErnieImage {
                     config.in_channels = tensor_storage.ne[2];
                     config.hidden_size = tensor_storage.ne[3];
                 } else if (ends_with(name, "text_proj.weight") && tensor_storage.n_dims == 2) {
-                    config.text_in_dim = tensor_storage.ne[0];
+                    config.text_in_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "layers.0.self_attention.norm_q.weight")) {
                     detected_head_dim = tensor_storage.ne[0];
                 } else if (ends_with(name, "layers.0.mlp.gate_proj.weight") && tensor_storage.n_dims == 2) {

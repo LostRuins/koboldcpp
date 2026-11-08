@@ -237,6 +237,10 @@ public:
     virtual sd::Tensor<float> compute(int n_threads,
                                       const DiffusionParams& diffusion_params) = 0;
 
+    virtual int get_patch_size() const {
+        return 1;
+    }
+
     void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors) {
         get_param_tensors(tensors, prefix);
     }

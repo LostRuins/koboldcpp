@@ -36,13 +36,13 @@ namespace Lens {
                     continue;
                 }
                 if (ends_with(name, "img_in.weight") && tensor_storage.n_dims == 2) {
-                    config.in_channels = tensor_storage.ne[0];
+                    config.in_channels = tensor_storage.logical_ne0();
                     int64_t inner_dim  = tensor_storage.ne[1];
                     if (config.attention_head_dim > 0) {
                         config.num_attention_heads = inner_dim / config.attention_head_dim;
                     }
                 } else if (ends_with(name, "txt_in.weight") && tensor_storage.n_dims == 2) {
-                    config.selected_layer_count = static_cast<int>(tensor_storage.ne[0] / config.joint_attention_dim);
+                    config.selected_layer_count = static_cast<int>(tensor_storage.logical_ne0() / config.joint_attention_dim);
                 } else if (ends_with(name, "proj_out.weight") && tensor_storage.n_dims == 2) {
                     int64_t patch_area  = config.patch_size * config.patch_size;
                     config.out_channels = tensor_storage.ne[1] / patch_area;

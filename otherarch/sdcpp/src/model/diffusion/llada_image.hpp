@@ -74,13 +74,13 @@ namespace LLaDAImage {
                 }
                 if (ends_with(name, "x_embedder.weight") && tensor_storage.n_dims == 2) {
                     int64_t patch_area = config.patch_size * config.patch_size;
-                    config.in_channels = tensor_storage.ne[0] / patch_area;
+                    config.in_channels = tensor_storage.logical_ne0() / patch_area;
                     config.hidden_size = tensor_storage.ne[1];
                 } else if (ends_with(name, "cap_embedder.1.weight") && tensor_storage.n_dims == 2) {
-                    config.cap_feat_dim = tensor_storage.ne[0];
+                    config.cap_feat_dim = tensor_storage.logical_ne0();
                     config.hidden_size  = tensor_storage.ne[1];
                 } else if (ends_with(name, "sigvq_embedder.1.weight") && tensor_storage.n_dims == 2) {
-                    config.semantic_feat_dim = tensor_storage.ne[0];
+                    config.semantic_feat_dim = tensor_storage.logical_ne0();
                 } else if (ends_with(name, "layers.0.attention.to_q.weight") && tensor_storage.n_dims == 2) {
                     detected_q_dim = tensor_storage.ne[1];
                 } else if (ends_with(name, "layers.0.attention.to_k.weight") && tensor_storage.n_dims == 2) {

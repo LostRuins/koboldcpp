@@ -158,7 +158,7 @@ namespace Flux {
                     }
                 }
                 if (ends_with(name, "txt_in.weight")) {
-                    config.context_in_dim = tensor_storage.ne[0];
+                    config.context_in_dim = tensor_storage.logical_ne0();
                     config.hidden_size    = tensor_storage.ne[1];
                 }
                 if (ends_with(name, "single_blocks.0.norm.key_norm.scale")) {
@@ -1435,6 +1435,10 @@ namespace Flux {
 
         std::string get_desc() override {
             return "flux";
+        }
+
+        int get_patch_size() const override {
+            return config.patch_size;
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {

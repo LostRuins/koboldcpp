@@ -18,7 +18,8 @@ static bool build_minimax_h3(const sd::model_builders::Context& ctx, const Token
     result.diffusion               = std::make_shared<MiniMaxH3::MiniMaxH3Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                                   tensor_storage_map,
                                                                                   "model.diffusion_model",
-                                                                                  weight_manager);
+                                                                                  weight_manager,
+                                                                                  sd_ctx_params->model_args);
     return true;
 }
 

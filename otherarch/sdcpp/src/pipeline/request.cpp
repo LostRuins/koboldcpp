@@ -135,6 +135,7 @@ namespace sd::pipeline {
         shifted_timestep            = sd_img_gen_params->sample_params.shifted_timestep;
         strength                    = sd_img_gen_params->strength;
         control_strength            = sd_img_gen_params->control_strength;
+        control_type                = sd_img_gen_params->control_type;
         eta                         = sd_img_gen_params->sample_params.eta;
         has_ref_images              = sd_img_gen_params->ref_images_count > 0;
         guidance                    = sd_img_gen_params->sample_params.guidance;

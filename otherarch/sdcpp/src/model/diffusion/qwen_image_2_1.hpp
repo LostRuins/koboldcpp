@@ -24,14 +24,14 @@ namespace Qwen {
                 return it == weights.end() ? nullptr : &it->second;
             };
             if (auto w = find("img_in.weight")) {
-                config.in_channels = w->ne[0];
+                config.in_channels = w->logical_ne0();
                 config.hidden_size = w->ne[1];
             }
             if (auto w = find("proj_out.weight")) {
                 config.out_channels = w->ne[1];
             }
             if (auto w = find("txt_in.in_layer.weight")) {
-                config.context_dim = w->ne[0];
+                config.context_dim = w->logical_ne0();
             }
             if (auto w = find("transformer_blocks.0.attn.norm_q.weight")) {
                 config.head_dim = w->ne[0];

@@ -32,16 +32,16 @@ namespace MOSSImage {
                 }
                 auto key = name.substr(prefix.size() + 1);
                 if (key == "video_embedder.weight") {
-                    config.channels = tensor.ne[0];
+                    config.channels = tensor.logical_ne0();
                     config.dim      = tensor.ne[1];
                 } else if (key == "text_embedder.proj.weight") {
-                    config.text_dim = tensor.ne[0];
+                    config.text_dim = tensor.logical_ne0();
                 } else if (key == "layers.0.proj.ffn_down.weight") {
-                    config.ffn_dim = tensor.ne[0];
+                    config.ffn_dim = tensor.logical_ne0();
                 } else if (key == "layers.0.q_norm.weight") {
                     config.head_dim = tensor.ne[0];
                 } else if (key == "time_embedding.0.weight") {
-                    config.freq_dim = tensor.ne[0];
+                    config.freq_dim = tensor.logical_ne0();
                 }
                 if (starts_with(key, "layers.")) {
                     depth = std::max<int64_t>(depth, std::stoi(key.substr(7)) + 1);

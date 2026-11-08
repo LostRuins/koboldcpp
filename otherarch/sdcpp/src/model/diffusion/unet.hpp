@@ -104,13 +104,13 @@ struct UNetConfig {
         }
         if (const TensorStorage* time_embed = find_weight("time_embed.0.weight")) {
             if (time_embed->n_dims == 2) {
-                config.model_channels = static_cast<int>(time_embed->ne[0]);
+                config.model_channels = static_cast<int>(time_embed->logical_ne0());
                 config.time_embed_dim = static_cast<int>(time_embed->ne[1]);
             }
         }
         if (const TensorStorage* label_emb = find_weight("label_emb.0.0.weight")) {
             if (label_emb->n_dims == 2) {
-                config.adm_in_channels = static_cast<int>(label_emb->ne[0]);
+                config.adm_in_channels = static_cast<int>(label_emb->logical_ne0());
                 config.time_embed_dim  = static_cast<int>(label_emb->ne[1]);
             }
         }
@@ -124,7 +124,7 @@ struct UNetConfig {
                 continue;
             }
             if (name.find("attn2.to_k.weight") != std::string::npos && tensor_storage.n_dims == 2) {
-                config.context_dim = static_cast<int>(tensor_storage.ne[0]);
+                config.context_dim = static_cast<int>(tensor_storage.logical_ne0());
                 break;
             }
         }
@@ -684,7 +684,8 @@ public:
         }
         sd::ggml_graph_cut::mark_graph_cut(h, "unet.middle_block", "h");
         if (controls.size() > 0) {
-            auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, true);
+            // not in place, it segfaults the Vulkan backend with SDXL ControlNets (seen on RADV)
+            auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[controls.size() - 1], control_strength, false);
             h       = ggml_add(ctx->ggml_ctx, h, cs);  // middle control
         }
         int control_offset = static_cast<int>(controls.size() - 2);
@@ -697,7 +698,8 @@ public:
                 hs.pop_back();
 
                 if (controls.size() > 0) {
-                    auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[control_offset], control_strength, true);
+                    // not in place, see the middle control
+                    auto cs = ggml_ext_scale(ctx->ggml_ctx, controls[control_offset], control_strength, false);
                     h_skip  = ggml_add(ctx->ggml_ctx, h_skip, cs);  // control net condition
                     control_offset--;
                 }

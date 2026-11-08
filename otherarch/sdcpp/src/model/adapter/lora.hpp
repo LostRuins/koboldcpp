@@ -1127,6 +1127,16 @@ public:
                                     ggml_tensor* output,
                                     const std::string& prefix,
                                     WeightAdapter::ForwardParams forward_params) override {
+        // Packed INT4 stores half the logical input width. Adapter shape checks
+        // and reshapes need the logical weight dimensions, without decoding it.
+        ggml_tensor logical_weight = *w;
+        if (forward_params.op_type == WeightAdapter::ForwardParams::op_type_t::OP_LINEAR &&
+            w->type == GGML_TYPE_I8 && x->ne[0] == 2 * w->ne[0]) {
+            logical_weight.ne[0] = x->ne[0];
+            for (int i = 1; i < GGML_MAX_DIMS; ++i)
+                logical_weight.nb[i] = logical_weight.nb[i - 1] * logical_weight.ne[i - 1];
+            w = &logical_weight;
+        }
         for (auto& lora_model : lora_models) {
             ggml_tensor* weight_diff = lora_model->get_weight_diff(prefix + "weight", backend, ctx, w, false);
             if (weight_diff != nullptr) {

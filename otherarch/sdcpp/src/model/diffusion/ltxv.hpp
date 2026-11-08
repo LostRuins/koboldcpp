@@ -168,7 +168,7 @@ namespace LTXV {
             LTXAVConfig config;
             auto patchify_proj_iter = tensor_storage_map.find(prefix + ".patchify_proj.weight");
             if (patchify_proj_iter != tensor_storage_map.end()) {
-                config.in_channels         = patchify_proj_iter->second.ne[0];
+                config.in_channels         = patchify_proj_iter->second.logical_ne0();
                 config.hidden_size         = patchify_proj_iter->second.ne[1];
                 int64_t video_heads        = infer_gate_heads(tensor_storage_map, prefix + ".transformer_blocks.0.attn1.to_gate_logits.bias", 32);
                 auto attn_layout           = infer_attention_layout(config.hidden_size, video_heads);
@@ -178,7 +178,7 @@ namespace LTXV {
 
             auto audio_patchify_proj_iter = tensor_storage_map.find(prefix + ".audio_patchify_proj.weight");
             if (audio_patchify_proj_iter != tensor_storage_map.end()) {
-                config.audio_in_channels         = audio_patchify_proj_iter->second.ne[0];
+                config.audio_in_channels         = audio_patchify_proj_iter->second.logical_ne0();
                 config.audio_hidden_size         = audio_patchify_proj_iter->second.ne[1];
                 config.audio_out_channels        = config.audio_in_channels;
                 int64_t audio_heads              = infer_gate_heads(tensor_storage_map, prefix + ".transformer_blocks.0.audio_attn1.to_gate_logits.bias", 32);
@@ -198,11 +198,11 @@ namespace LTXV {
 
             auto attn2_iter = tensor_storage_map.find(prefix + ".transformer_blocks.0.attn2.to_k.weight");
             if (attn2_iter != tensor_storage_map.end()) {
-                config.cross_attention_dim = attn2_iter->second.ne[0];
+                config.cross_attention_dim = attn2_iter->second.logical_ne0();
             }
             auto audio_attn2_iter = tensor_storage_map.find(prefix + ".transformer_blocks.0.audio_attn2.to_k.weight");
             if (audio_attn2_iter != tensor_storage_map.end()) {
-                config.audio_cross_attention_dim = audio_attn2_iter->second.ne[0];
+                config.audio_cross_attention_dim = audio_attn2_iter->second.logical_ne0();
             }
             if (tensor_storage_map.find(prefix + ".transformer_blocks.0.prompt_scale_shift_table") != tensor_storage_map.end()) {
                 config.cross_attention_adaln = true;

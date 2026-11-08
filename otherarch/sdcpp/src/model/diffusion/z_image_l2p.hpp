@@ -18,7 +18,7 @@ namespace ZImageL2P {
             config.patch_size                          = 16;
             auto x_embedder                            = tensors.find(prefix + ".x_embedder.weight");
             if (x_embedder != tensors.end()) {
-                config.patch_size = static_cast<int>(std::lround(std::sqrt(static_cast<double>(x_embedder->second.ne[0] / config.in_channels))));
+                config.patch_size = static_cast<int>(std::lround(std::sqrt(static_cast<double>(x_embedder->second.logical_ne0() / config.in_channels))));
             }
             // L2P ships split to_q/to_k/to_v, which name conversion maps to qkv.weight plus
             // .1/.2 parts; the base detection only sees the q part and undercounts kv heads.

@@ -31,12 +31,12 @@ namespace Fibo2 {
                 }
                 auto key = name.substr(prefix.size() + 1);
                 if (key == "x_embedder.weight") {
-                    config.channels = tensor.ne[0];
+                    config.channels = tensor.logical_ne0();
                     config.dim      = tensor.ne[1];
                 } else if (key == "perceiver.latent_queries") {
                     config.max_gist = tensor.ne[1];
                 } else if (key == "perceiver.layers.0.cross_attention.to_k.weight" || key == "perceiver.layers.0.cross_attention.to_kv.weight") {
-                    config.text_dim = tensor.ne[0];
+                    config.text_dim = tensor.logical_ne0();
                     config.fused_kv = key == "perceiver.layers.0.cross_attention.to_kv.weight";
                 } else if (key == "layers.0.attention.norm_q.weight") {
                     config.head_dim = tensor.ne[0];

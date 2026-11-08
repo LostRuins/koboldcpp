@@ -31,7 +31,7 @@ namespace SefiImage {
                     continue;
                 }
                 if (ends_with(name, "dual_time_embed.semantic_embedder.linear_1.weight") && tensor_storage.n_dims == 2) {
-                    config.timestep_guidance_in_dim = tensor_storage.ne[0];
+                    config.timestep_guidance_in_dim = tensor_storage.logical_ne0();
                     config.hidden_size              = tensor_storage.ne[1] * 2;
                 }
             }

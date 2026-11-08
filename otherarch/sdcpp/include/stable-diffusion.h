@@ -400,6 +400,19 @@ enum sd_hires_upscaler_t {
     SD_HIRES_UPSCALER_COUNT,
 };
 
+enum sd_control_type_t {
+    SD_CONTROL_TYPE_NONE,
+    SD_CONTROL_TYPE_OPENPOSE,
+    SD_CONTROL_TYPE_DEPTH,
+    SD_CONTROL_TYPE_SCRIBBLE,  // thick lines: scribble, hed, softedge, ted
+    SD_CONTROL_TYPE_CANNY,     // thin lines: canny, lineart, anime lineart, mlsd
+    SD_CONTROL_TYPE_NORMAL,
+    SD_CONTROL_TYPE_SEGMENT,
+    SD_CONTROL_TYPE_TILE,
+    SD_CONTROL_TYPE_REPAINT,  // inpaint, outpaint
+    SD_CONTROL_TYPE_COUNT,
+};
+
 typedef struct {
     bool enabled;
     enum sd_hires_upscaler_t upscaler;
@@ -444,6 +457,7 @@ typedef struct {
     bool circular_x;
     bool circular_y;
     sd_image_preprocess_params_t image_preprocess;
+    enum sd_control_type_t control_type;
 } sd_img_gen_params_t;
 
 typedef struct {
@@ -532,6 +546,10 @@ SD_API const char* sd_lora_apply_mode_name(enum lora_apply_mode_t mode);
 SD_API enum lora_apply_mode_t str_to_lora_apply_mode(const char* str);
 SD_API const char* sd_hires_upscaler_name(enum sd_hires_upscaler_t upscaler);
 SD_API enum sd_hires_upscaler_t str_to_sd_hires_upscaler(const char* str);
+SD_API const char* sd_control_type_name(enum sd_control_type_t control_type);
+// Also accepts the names of the kinds a type stands for (hed, lineart, mlsd, ...);
+// returns SD_CONTROL_TYPE_COUNT when the name is unknown.
+SD_API enum sd_control_type_t str_to_sd_control_type(const char* str);
 
 SD_API void sd_cache_params_init(sd_cache_params_t* cache_params);
 SD_API void sd_hires_params_init(sd_hires_params_t* hires_params);
@@ -597,6 +615,37 @@ SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
 // Reads model metadata only; returns 0 if the file is not a recognized RGB ESRGAN model.
 SD_API int get_upscaler_model_scale(const char* model_path);
+
+typedef struct video_upscaler_ctx_t video_upscaler_ctx_t;
+
+typedef struct {
+    const char* diffusion_model_path;
+    const char* vae_path;
+    // Explicit output scale; RelayVSR requires 2 or 4 matching both checkpoints.
+    int upscale_factor;
+    int n_threads;
+    const char* backend;
+    const char* params_backend;
+} sd_video_upscaler_ctx_params_t;
+
+typedef struct {
+    const sd_image_t* frames;
+    int frame_count;
+    int fps;
+    int64_t seed;
+    // RelayVSR reference window, including both endpoints; defaults to 16.
+    int window_size;
+} sd_video_upscale_params_t;
+
+SD_API void sd_video_upscaler_ctx_params_init(sd_video_upscaler_ctx_params_t* params);
+SD_API void sd_video_upscale_params_init(sd_video_upscale_params_t* params);
+SD_API video_upscaler_ctx_t* new_video_upscaler_ctx(const sd_video_upscaler_ctx_params_t* params);
+SD_API void free_video_upscaler_ctx(video_upscaler_ctx_t* ctx);
+// Frames are RGB, have equal dimensions, and remain owned by the caller.
+// Free the result with free_sd_video_generation_result().
+SD_API bool upscale_video(video_upscaler_ctx_t* ctx,
+                          const sd_video_upscale_params_t* params,
+                          sd_video_generation_result_t** result_out);
 
 typedef struct adetailer_ctx_t adetailer_ctx_t;
 

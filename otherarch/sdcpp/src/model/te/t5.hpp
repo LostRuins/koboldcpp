@@ -57,7 +57,7 @@ struct T5Config {
         }
         if (const TensorStorage* q = find_tensor("encoder.block.0.layer.0.SelfAttention.q.weight")) {
             if (q->n_dims == 2) {
-                config.model_dim  = q->ne[0];
+                config.model_dim  = q->logical_ne0();
                 int64_t inner_dim = q->ne[1];
                 config.inner_dim  = inner_dim;
                 // Flan-T5/T5 uses d_kv=64 for common sizes.
@@ -68,7 +68,7 @@ struct T5Config {
         }
         if (const TensorStorage* wi = find_tensor("encoder.block.0.layer.1.DenseReluDense.wi_0.weight")) {
             if (wi->n_dims == 2) {
-                config.model_dim = wi->ne[0];
+                config.model_dim = wi->logical_ne0();
                 config.ff_dim    = wi->ne[1];
             }
         }

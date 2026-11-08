@@ -61,17 +61,17 @@ struct MMDiTConfig {
             } else if (name.find("y_embedder.mlp.0.weight") != std::string::npos && tensor_storage.n_dims == 2) {
                 has_weight_config      = true;
                 has_hidden_size        = true;
-                config.adm_in_channels = tensor_storage.ne[0];
+                config.adm_in_channels = tensor_storage.logical_ne0();
                 config.hidden_size     = tensor_storage.ne[1];
             } else if (name.find("context_embedder.weight") != std::string::npos && tensor_storage.n_dims == 2) {
                 has_weight_config               = true;
                 has_context_embed               = true;
-                config.context_size             = tensor_storage.ne[0];
+                config.context_size             = tensor_storage.logical_ne0();
                 config.context_embedder_out_dim = tensor_storage.ne[1];
             } else if (name.find("final_layer.linear.weight") != std::string::npos && tensor_storage.n_dims == 2) {
                 has_weight_config  = true;
                 has_hidden_size    = true;
-                config.hidden_size = tensor_storage.ne[0];
+                config.hidden_size = tensor_storage.logical_ne0();
                 int64_t patch_area = static_cast<int64_t>(config.patch_size) * config.patch_size;
                 if (patch_area > 0) {
                     config.out_channels = tensor_storage.ne[1] / patch_area;

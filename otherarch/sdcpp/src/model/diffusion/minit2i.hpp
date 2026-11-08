@@ -59,14 +59,14 @@ namespace MiniT2I {
                     config.pca_channels = tensor_storage.ne[2];
                     config.hidden_size  = tensor_storage.ne[3];
                 } else if (ends_with(name, "txt_embedder.weight") && tensor_storage.n_dims == 2) {
-                    config.txt_input_size  = tensor_storage.ne[0];
+                    config.txt_input_size  = tensor_storage.logical_ne0();
                     config.txt_hidden_size = tensor_storage.ne[1];
                 } else if (ends_with(name, "pooled_embedder.weight") && tensor_storage.n_dims == 2) {
                     config.cond_vec_size = tensor_storage.ne[1];
                 } else if (ends_with(name, "double_blocks.0.img_qkv.weight") && tensor_storage.n_dims == 2) {
                     int64_t inner3     = tensor_storage.ne[1];
                     int64_t inner      = inner3 / 3;
-                    config.hidden_size = tensor_storage.ne[0];
+                    config.hidden_size = tensor_storage.logical_ne0();
                     if (config.hidden_size == 768) {
                         config.num_heads = 12;
                         config.head_dim  = 64;
@@ -79,7 +79,7 @@ namespace MiniT2I {
                     }
                 } else if (ends_with(name, "final_layer.linear.weight") && tensor_storage.n_dims == 2) {
                     int64_t patch_area = config.patch_size * config.patch_size;
-                    config.hidden_size = tensor_storage.ne[0];
+                    config.hidden_size = tensor_storage.logical_ne0();
                     config.in_channels = patch_area > 0 ? tensor_storage.ne[1] / patch_area : config.in_channels;
                 } else if (ends_with(name, "mask_token") && tensor_storage.n_dims >= 2) {
                     config.prompt_length = tensor_storage.ne[1];
