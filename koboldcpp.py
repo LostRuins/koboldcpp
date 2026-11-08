@@ -116,6 +116,7 @@ lastgeneratedcomfyimg = b''
 lastgeneratedcachedpayload = b''
 lastgeneratedcachedpayloadkey = ''
 currgenimgkey = ''
+image_recovery_lock = threading.Lock()
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
 password = "" #if empty, no auth key required
@@ -7758,25 +7759,41 @@ Change Mode<br>
         elif clean_path=='/view' or clean_path=='/view.png' or clean_path=='/api/view' or clean_path.startswith('/view_image'): #emulate comfyui
             content_type = 'image/png'
             response_body = lastgeneratedcomfyimg
+        elif clean_path.startswith('/sdapi/v1/recovery-status'):
+            parsed_url = urllib.parse.urlparse(self.path)
+            parsed_dict = urllib.parse.parse_qs(parsed_url.query)
+            genkey = parsed_dict.get('genkey', [''])[0]
+            with image_recovery_lock:
+                if genkey and genkey == currgenimgkey:
+                    recovery_status = 'running'
+                elif genkey and genkey == lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
+                    recovery_status = 'complete'
+                else:
+                    recovery_status = 'unknown'
+            response_body = json.dumps({"status": recovery_status}).encode()
         elif clean_path.startswith('/sdapi/v1/get_last.json'):
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
-            if genkey and genkey==lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
-                response_body = lastgeneratedcachedpayload
-            else:
-                response_body = None
+            with image_recovery_lock:
+                if genkey and genkey==lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
+                    response_body = lastgeneratedcachedpayload
+                else:
+                    response_body = None
         elif clean_path.startswith('/sdapi/v1/progress'):
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
             skip_current_image = parse_query_bool(parsed_dict, 'skip_current_image')
             # Only expose progress and previews for the requested active generation.
-            auth = bool(genkey and genkey==currgenimgkey)
+            with image_recovery_lock:
+                auth = bool(genkey and genkey==currgenimgkey)
             info = build_a1111_progress_response('idle')
             if auth:
                 active_info = a1111_progress_response(not skip_current_image)
-                if genkey == currgenimgkey:
+                with image_recovery_lock:
+                    still_active = genkey == currgenimgkey
+                if still_active:
                     info = active_info
             response_body = json.dumps(info).encode()
         elif clean_path=='/history' or clean_path=='/api/history' or clean_path.startswith('/api/history/') or clean_path.startswith('/history/'): #emulate comfyui
@@ -8039,6 +8056,24 @@ Change Mode<br>
                 response_body = (json.dumps({"success": "true", "done":"false"}).encode())
             else:
                 response_body = (json.dumps({"success": "false", "done":"false"}).encode())
+
+        elif clean_path.endswith('/sdapi/v1/interrupt'):
+            image_genkey = ""
+            try:
+                tempbody = json.loads(body)
+                if isinstance(tempbody, dict):
+                    image_genkey = str(tempbody.get('genkey', ''))
+            except Exception:
+                pass
+            # This endpoint is handled before acquiring modelbusy, allowing an
+            # explicit UI cancellation to stop an in-flight image generation.
+            # Requiring the active genkey prevents one client from cancelling a
+            # different client's generation.
+            with image_recovery_lock:
+                image_abort_requested = bool(image_genkey and image_genkey == currgenimgkey)
+                if image_abort_requested:
+                    handle.sd_abort_generation()
+            response_body = json.dumps({"success": image_abort_requested}).encode()
 
         elif clean_path.endswith('/api/extra/generate/check'):
             if not self.secure_endpoint():
@@ -8934,14 +8969,14 @@ Change Mode<br>
                 elif is_imggen: #image gen
                     keepalive_started = False
                     final_write_started = False
+                    recovery_genkey = ''
                     try:
-                        lastgeneratedcachedpayload = b''
-                        lastgeneratedcachedpayloadkey = ''
                         send_keepalive = bool(tryparseint(genparams.get('keepalive', False), 0))
                         recovery_params = copy.deepcopy(genparams)
                         recovery_genkey = genparams.get('genkey', '')
                         recovery_model = imageName if autoswapmode and imageName is not None else friendlysdmodelname
-                        currgenimgkey = recovery_genkey
+                        with image_recovery_lock:
+                            currgenimgkey = recovery_genkey
                         if is_comfyui_imggen:
                             lastgeneratedcomfyimg = b''
                             genparams = sd_comfyui_tranform_params(genparams)
@@ -8978,14 +9013,13 @@ Change Mode<br>
                         gendatextra = gen["data_extra"]
                         genfinalframe = gen["final_frame"]
                         geninfo = json.dumps(gen["info"]) # sdapi really expects a stringified JSON
-                        currgenimgkey = ''
                         genresp = None
                         if gendat:
                             recovery_prompt = recovery_params.get('prompt', '')
                             recovery_negative_prompt = recovery_params.get('negative_prompt', '')
                             if recovery_negative_prompt:
                                 recovery_prompt = f"{recovery_prompt} ### {recovery_negative_prompt}"
-                            lastgeneratedcachedpayload = json.dumps({
+                            completed_payload = json.dumps({
                                 "images": [gendat],
                                 "parameters": recovery_params,
                                 "info": geninfo,
@@ -8995,7 +9029,19 @@ Change Mode<br>
                                 "prompt": recovery_prompt,
                                 "models": [recovery_model],
                             }).encode()
-                            lastgeneratedcachedpayloadkey = recovery_genkey
+                            # Publish the completed slot before clearing the active
+                            # slot, so recovery-status never observes a gap between
+                            # "running" and "complete" for a successful request.
+                            with image_recovery_lock:
+                                if recovery_genkey:
+                                    lastgeneratedcachedpayload = completed_payload
+                                    lastgeneratedcachedpayloadkey = recovery_genkey
+                                if currgenimgkey == recovery_genkey:
+                                    currgenimgkey = ''
+                        else:
+                            with image_recovery_lock:
+                                if currgenimgkey == recovery_genkey:
+                                    currgenimgkey = ''
                         if is_comfyui_imggen:
                             if gendat:
                                 lastgeneratedcomfyimg = base64.b64decode(gendat)
@@ -9014,7 +9060,9 @@ Change Mode<br>
                         final_write_started = True
                         self.wfile.write(genresp)
                     except Exception as ex:
-                        currgenimgkey = ''
+                        with image_recovery_lock:
+                            if currgenimgkey == recovery_genkey:
+                                currgenimgkey = ''
                         if keepalive_started and not final_write_started:
                             # Headers are already committed; finish with a JSON error.
                             try:
