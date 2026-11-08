@@ -273,6 +273,25 @@ typedef struct {
 } sd_image_t;
 
 typedef struct {
+    sd_image_t image;
+    // Owned UTF-8 JSON using the sdcpp.generation/v1 schema.
+    char* generation_info;
+} sd_image_result_t;
+
+typedef struct {
+    sd_image_result_t* items;
+    int count;
+} sd_image_generation_result_t;
+
+typedef struct {
+    sd_image_t* frames;
+    int frame_count;
+    sd_audio_t* audio;
+    int fps;
+    char* generation_info;
+} sd_video_generation_result_t;
+
+typedef struct {
     // Semicolon-separated target=...,key=value rules. NULL preserves defaults.
     const char* rules;
 } sd_image_preprocess_params_t;
@@ -537,8 +556,12 @@ SD_API void sd_img_gen_params_init(sd_img_gen_params_t* sd_img_gen_params);
 SD_API char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params);
 SD_API bool generate_image(sd_ctx_t* sd_ctx,
                            const sd_img_gen_params_t* sd_img_gen_params,
-                           sd_image_t** images_out,
-                           int* num_images_out);
+                           sd_image_generation_result_t** result_out);
+
+// Results own their pixels, audio and generation_info, independently of the context.
+// Generation calls require result_out and set it to NULL on failure.
+SD_API void free_sd_image_generation_result(sd_image_generation_result_t* result);
+SD_API void free_sd_video_generation_result(sd_video_generation_result_t* result);
 
 enum sd_cancel_mode_t {
     // Stop the current generation as soon as possible.
@@ -552,13 +575,9 @@ enum sd_cancel_mode_t {
 SD_API void sd_cancel_generation(sd_ctx_t* sd_ctx, enum sd_cancel_mode_t mode);
 
 SD_API void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params);
-// If non-NULL, fps_out receives the effective encoding frame rate before preview callbacks.
 SD_API bool generate_video(sd_ctx_t* sd_ctx,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
-                           sd_image_t** frames_out,
-                           int* num_frames_out,
-                           sd_audio_t** audio_out,
-                           int* fps_out);
+                           sd_video_generation_result_t** result_out);
 
 typedef struct upscaler_ctx_t upscaler_ctx_t;
 
@@ -573,8 +592,7 @@ SD_API void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx);
 SD_API bool upscale(upscaler_ctx_t* upscaler_ctx,
                     sd_image_t input_image,
                     uint32_t upscale_factor,
-                    sd_image_t** images_out,
-                    int* num_images_out);
+                    sd_image_generation_result_t** result_out);
 
 SD_API int get_upscale_factor(upscaler_ctx_t* upscaler_ctx);
 // Reads model metadata only; returns 0 if the file is not a recognized RGB ESRGAN model.
@@ -598,8 +616,7 @@ SD_API bool adetail_image(adetailer_ctx_t* adetailer_ctx,
                           sd_image_t input_image,
                           const sd_adetailer_params_t* adetailer_params,
                           const sd_img_gen_params_t* inpaint_params,
-                          sd_image_t** images_out,
-                          int* num_images_out);
+                          sd_image_generation_result_t** result_out);
 
 SD_API bool convert(const char* input_path,
                     const char* vae_path,

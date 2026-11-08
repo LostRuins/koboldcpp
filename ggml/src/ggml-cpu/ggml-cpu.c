@@ -748,7 +748,7 @@ static void ggml_init_arm_arch_features(void) {}
 #endif
 #endif // __ARM_ARCH
 
-#if defined(__riscv) && defined(__riscv_v_intrinsic)
+#if defined(__riscv) && defined(__riscv_v)
 #include <riscv_vector.h>
 static void ggml_init_riscv_arch_features(void) {
     ggml_riscv_arch_features.rvv_vlen = __riscv_vlenb();
@@ -3403,7 +3403,6 @@ static bool ggml_thread_apply_affinity(bool * mask) {
     return m != 0;
 }
 
-static bool powethrottlemsgshown = false;
 static bool ggml_thread_apply_priority(int32_t prio) {
     // Note that on Windows the Process Priority Class must be updated in order to set Thread priority.
     // This is up to the applications.
@@ -3416,7 +3415,6 @@ static bool ggml_thread_apply_priority(int32_t prio) {
         case GGML_SCHED_PRIO_REALTIME: p = THREAD_PRIORITY_TIME_CRITICAL; break;
     }
 
-#ifndef USE_FAILSAFE
     if (prio != GGML_SCHED_PRIO_LOW) {
         // Tell Windows that this thread should not be throttled (needs its own CPU core).
         // Newer Windows 11 versions aggressively park (offline) CPU cores and often place
@@ -3429,19 +3427,22 @@ static bool ggml_thread_apply_priority(int32_t prio) {
         t.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
         t.StateMask   = 0;
 
-        if (!SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &t, sizeof(t))) {
+        typedef BOOL (WINAPI * set_process_information_t)(
+                HANDLE, PROCESS_INFORMATION_CLASS, LPVOID, DWORD);
+        set_process_information_t pSetProcessInformation = NULL;
+        HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+        if (kernel32 != NULL) {
+            pSetProcessInformation = (set_process_information_t) (void *)
+                    GetProcAddress(kernel32, "SetProcessInformation");
+        }
+
+        if (pSetProcessInformation != NULL &&
+                !pSetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &t, sizeof(t))) {
             // GGML_LOG_DEBUG("failed to disable process power throttling %d : (%d)\n", prio, (int) GetLastError());
             return false;
         }
         #endif
     }
-#else
-    if(!powethrottlemsgshown)
-    {
-        powethrottlemsgshown = true;
-        printf("\nPower Throttling skipped in compatibility mode.\n");
-    }
-#endif
 
     if (prio == GGML_SCHED_PRIO_NORMAL) {
         // Keep inherited policy/priority
@@ -4405,7 +4406,7 @@ void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
         _mm_storeu_ps(y + i, y_vec);
     }
 
-#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfhmin)
+#elif defined(__riscv_v) && defined(__riscv_zvfhmin)
     // calculate step size
     const int epr = __riscv_vsetvlmax_e16m2();
     const int step = epr * 2;
@@ -4475,7 +4476,7 @@ void ggml_cpu_bf16_to_fp32(const ggml_bf16_t * x, float * y, int64_t n) {
                                         (const __m128i *)(x + i))),
                                 16)));
     }
-#elif defined(__riscv_v_intrinsic) && defined(__riscv_zvfbfmin)
+#elif defined(__riscv_v) && defined(__riscv_zvfbfmin)
     // calculate step size
     const int epr = __riscv_vsetvlmax_e16m2();
     const int step = epr * 2;
@@ -4595,7 +4596,7 @@ int ggml_cpu_has_arm_fma(void) {
 }
 
 int ggml_cpu_has_riscv_v(void) {
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
     return 1;
 #else
     return 0;
@@ -4603,7 +4604,7 @@ int ggml_cpu_has_riscv_v(void) {
 }
 
 int ggml_cpu_get_rvv_vlen(void) {
-#if defined(__riscv) && defined(__riscv_v_intrinsic)
+#if defined(__riscv) && defined(__riscv_v)
     return ggml_riscv_arch_features.rvv_vlen;
 #else
     return 0;

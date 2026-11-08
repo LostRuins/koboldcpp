@@ -532,6 +532,7 @@ add_library(common2
             tools/mtmd/mtmd-audio.cpp
             tools/mtmd/mtmd-audio.h)
 target_include_directories(common2 PUBLIC . ./ggml/include ./ggml/src ./ggml/src/ggml-cpu ./include ./otherarch ./otherarch/tools ./vendor/stb ./vendor/nlohmann ./vendor ./vendor/hash ./otherarch/sdcpp ./otherarch/sdcpp/thirdparty ./tools ./common)
+target_compile_definitions(common2 PRIVATE _USE_MATH_DEFINES)
 target_compile_features(common2 PUBLIC cxx_std_17) # don't bump
 target_link_libraries(common2 PRIVATE ggml ${LLAMA_EXTRA_LIBS})
 set_target_properties(common2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -562,6 +563,7 @@ add_library(sdtype_adapter
             otherarch/sdcpp/src/core/segment_weight_pipeline.cpp
             otherarch/sdcpp/examples/cli/image_metadata.cpp
             otherarch/sdcpp/src/detailer.cpp
+            otherarch/sdcpp/src/generation_info.cpp
             otherarch/sdcpp/src/model_manager.cpp
             otherarch/sdcpp/src/model_manager_files.cpp
             otherarch/sdcpp/src/model_manager.h

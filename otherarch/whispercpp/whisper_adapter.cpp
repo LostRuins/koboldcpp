@@ -3,8 +3,10 @@
 
 #include "whisper.cpp"
 
+#include "engine/framework/io/json.h"
 #include "engine/framework/runtime/model.h"
-#include "engine/models/sheetsage/session.h"
+#include "engine/framework/runtime/session.h"
+#include "otherarch/audiocpp/upstream/generated/kcpp_transcription_registry_headers.inc"
 
 #include <algorithm>
 #include <cctype>
@@ -14,15 +16,16 @@
 #include <memory>
 #include <cstdio>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include <cstring>
 #include <mutex>
 #include <cinttypes>
 
 #define COMMON_SAMPLE_RATE 16000
-#define SHEETSAGE_SAMPLE_RATE 24000
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -32,15 +35,39 @@ static int whisperdebugmode = 0;
 static bool whisper_is_quiet = false;
 static whisper_context * whisper_ctx = nullptr;
 static std::string whisper_output_text = "";
-static bool is_audiocpp_sheetsage2 = false;
-static std::unique_ptr<engine::runtime::ILoadedVoiceModel> sheetsage2_model;
-static std::unique_ptr<engine::runtime::IVoiceTaskSession> sheetsage2_session;
+static std::string whisper_output_metadata = "";
+struct audiocpp_transcription_loader_entry {
+    const char * family;
+    std::shared_ptr<engine::runtime::IVoiceModelLoader> loader;
+    engine::runtime::VoiceTaskKind task;
+    int sample_rate;
+};
+
+static const std::vector<audiocpp_transcription_loader_entry> & audiocpp_transcription_loaders()
+{
+    static const std::vector<audiocpp_transcription_loader_entry> loaders = {
+#include "otherarch/audiocpp/upstream/generated/kcpp_transcription_registry_loaders.inc"
+    };
+    return loaders;
+}
+
+static const audiocpp_transcription_loader_entry * audiocpp_transcription_entry = nullptr;
+static std::string audiocpp_transcription_family;
+static std::unique_ptr<engine::runtime::ILoadedVoiceModel> audiocpp_transcription_model;
+static std::unique_ptr<engine::runtime::IVoiceTaskSession> audiocpp_transcription_session;
+static const audiocpp_transcription_loader_entry * audiocpp_alignment_entry = nullptr;
+static std::string audiocpp_alignment_family;
+static std::unique_ptr<engine::runtime::ILoadedVoiceModel> audiocpp_alignment_model;
+static std::unique_ptr<engine::runtime::IVoiceTaskSession> audiocpp_alignment_session;
 
 int total_transcribe_gens = 0;
 
 bool whispertype_is_speech_model_loaded()
 {
-    return whisper_ctx != nullptr && !is_audiocpp_sheetsage2;
+    if (audiocpp_transcription_entry != nullptr) {
+        return audiocpp_transcription_entry->task == engine::runtime::VoiceTaskKind::Asr;
+    }
+    return whisper_ctx != nullptr;
 }
 
 
@@ -75,6 +102,59 @@ static std::string output_txt(struct whisper_context * ctx) {
 
 void cb_log_disable(enum ggml_log_level , const char * , void * ) { }
 
+static void parse_audiocpp_transcription_options(
+    const whisper_generation_inputs & inputs,
+    std::unordered_map<std::string, std::string> & options)
+{
+    const std::string json = inputs.audiocpp_extra_params_json != nullptr
+        ? inputs.audiocpp_extra_params_json : "";
+    if (json.empty()) {
+        return;
+    }
+    const auto parsed = engine::io::json::parse(json);
+    if (!parsed.is_object()) {
+        throw std::runtime_error("Audio.cpp transcription options must be a JSON object");
+    }
+    for (const auto & [key, value] : parsed.as_object()) {
+        if (value.is_string()) {
+            options[key] = value.as_string();
+        } else if (value.is_number()) {
+            options[key] = engine::io::json::stringify_number(value.as_number());
+        } else if (value.is_bool()) {
+            options[key] = value.as_bool() ? "true" : "false";
+        }
+    }
+}
+
+static std::string audiocpp_transcription_metadata_json(
+    const engine::runtime::TaskResult & result,
+    int sample_rate)
+{
+    std::ostringstream json;
+    json.precision(10);
+    json << "{\"family\":" << engine::io::json::stringify_string(audiocpp_transcription_family)
+         << ",\"words\":[";
+    for (size_t i = 0; i < result.word_timestamps.size(); ++i) {
+        const auto & word = result.word_timestamps[i];
+        if (i != 0) {
+            json << ',';
+        }
+        json << "{\"word\":" << engine::io::json::stringify_string(word.word)
+             << ",\"start\":" << static_cast<double>(word.span.start_sample) / sample_rate
+             << ",\"end\":" << static_cast<double>(word.span.end_sample) / sample_rate
+             << '}';
+    }
+    json << "]}";
+    return json.str();
+}
+
+static std::string audiocpp_transcription_error_json(const std::string & error)
+{
+    return std::string("{\"family\":") +
+        engine::io::json::stringify_string(audiocpp_transcription_family) +
+        ",\"error\":" + engine::io::json::stringify_string(error) + "}";
+}
+
 bool whispertype_load_model(const whisper_load_model_inputs inputs)
 {
     whisper_is_quiet = inputs.quiet;
@@ -84,40 +164,107 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
     std::transform(extension.begin(), extension.end(), extension.begin(),
         [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     const std::string architecture = extension == ".gguf" ? gguf_get_model_arch(modelfile) : "";
-    const std::string audiocpp_family = architecture == "audiocpp"
-        ? gguf_get_string(modelfile, "audiocpp.model_spec.family")
-        : architecture;
-    is_audiocpp_sheetsage2 = audiocpp_family == "sheetsage2";
-    sheetsage2_session.reset();
-    sheetsage2_model.reset();
-
-    if (is_audiocpp_sheetsage2) {
-        printf("\nLoading Audio.cpp SheetSage2 Model: %s", modelfile.c_str());
+    const std::string embedded_audiocpp_family = extension == ".gguf"
+        ? gguf_get_string(modelfile, "audiocpp.model_spec.family") : "";
+    const std::string audiocpp_family = !embedded_audiocpp_family.empty()
+        ? embedded_audiocpp_family : architecture;
+    audiocpp_transcription_entry = nullptr;
+    audiocpp_transcription_family.clear();
+    audiocpp_transcription_session.reset();
+    audiocpp_transcription_model.reset();
+    audiocpp_alignment_entry = nullptr;
+    audiocpp_alignment_family.clear();
+    audiocpp_alignment_session.reset();
+    audiocpp_alignment_model.reset();
+    if (architecture == "audiocpp" || !embedded_audiocpp_family.empty()) {
+        const auto & loaders = audiocpp_transcription_loaders();
+        const auto it = std::find_if(loaders.begin(), loaders.end(),
+            [&audiocpp_family](const auto & entry) { return audiocpp_family == entry.family; });
+        if (it == loaders.end()) {
+            printf("\nAudio.cpp Transcription Load Error: unsupported model family '%s'.\n",
+                audiocpp_family.c_str());
+            return false;
+        }
+        audiocpp_transcription_entry = &*it;
+        audiocpp_transcription_family = audiocpp_family;
+        printf("\nLoading Audio.cpp %s Model: %s", audiocpp_family.c_str(), modelfile.c_str());
         try {
-            auto loader = engine::models::sheetsage::make_sheetsage2_loader();
             engine::runtime::ModelLoadRequest request;
             request.model_path = modelfile;
-            request.family_hint = "sheetsage2";
-            sheetsage2_model = loader->load(request);
+            request.family_hint = audiocpp_family;
+            audiocpp_transcription_model = audiocpp_transcription_entry->loader->load(request);
 
             engine::runtime::SessionOptions options;
             options.backend.type = engine::core::BackendType::BestAvailable;
             options.backend.device = std::max(0, inputs.kcpp_main_gpu);
             options.backend.threads = 4;
-            // A 300-second untiled attention score can exceed 3 GiB. Keep an
-            // individual score allocation below roughly 512 MiB by default.
-            options.options["sheetsage2.attention_tile_rows"] = "1024";
-            sheetsage2_session = sheetsage2_model->create_task_session(
-                {engine::runtime::VoiceTaskKind::Midi, engine::runtime::RunMode::Offline},
+            if (audiocpp_family == "sheetsage2") {
+                // A 300-second untiled attention score can exceed 3 GiB.
+                options.options["sheetsage2.attention_tile_rows"] = "1024";
+            }
+            const std::string aligner_filename = inputs.aligner_filename != nullptr
+                ? inputs.aligner_filename : "";
+            if (!aligner_filename.empty()) {
+                const std::string aligner_architecture = gguf_get_model_arch(aligner_filename);
+                const std::string embedded_aligner_family =
+                    gguf_get_string(aligner_filename, "audiocpp.model_spec.family");
+                const std::string aligner_family = !embedded_aligner_family.empty()
+                    ? embedded_aligner_family : aligner_architecture;
+                if (aligner_family == "qwen3_forced_aligner") {
+                    if (audiocpp_family == "qwen3_asr") {
+                        options.options["qwen3_asr.forced_aligner_path"] = aligner_filename;
+                    } else {
+                        throw std::runtime_error(
+                            "Qwen3 forced aligner requires a Qwen3-ASR transcription model");
+                    }
+                } else if (aligner_family == "mms_forced_aligner") {
+                    if (audiocpp_transcription_entry->task != engine::runtime::VoiceTaskKind::Asr) {
+                        throw std::runtime_error(
+                            "MMS forced aligner requires an ASR transcription model");
+                    }
+                    const auto aligner_it = std::find_if(loaders.begin(), loaders.end(),
+                        [&aligner_family](const auto & entry) {
+                            return aligner_family == entry.family &&
+                                entry.task == engine::runtime::VoiceTaskKind::Alignment;
+                        });
+                    if (aligner_it == loaders.end()) {
+                        throw std::runtime_error("MMS forced aligner support is not linked");
+                    }
+                    audiocpp_alignment_entry = &*aligner_it;
+                    audiocpp_alignment_family = aligner_family;
+                    engine::runtime::ModelLoadRequest aligner_request;
+                    aligner_request.model_path = aligner_filename;
+                    aligner_request.family_hint = aligner_family;
+                    audiocpp_alignment_model = audiocpp_alignment_entry->loader->load(aligner_request);
+                    engine::runtime::SessionOptions aligner_options;
+                    aligner_options.backend = options.backend;
+                    audiocpp_alignment_session = audiocpp_alignment_model->create_task_session(
+                        {engine::runtime::VoiceTaskKind::Alignment, engine::runtime::RunMode::Offline},
+                        aligner_options);
+                    printf("\nLoaded Audio.cpp MMS forced aligner: %s", aligner_filename.c_str());
+                } else {
+                    throw std::runtime_error(
+                        "unsupported transcription aligner family '" + aligner_family + "'");
+                }
+            }
+            audiocpp_transcription_session = audiocpp_transcription_model->create_task_session(
+                {audiocpp_transcription_entry->task, engine::runtime::RunMode::Offline},
                 options);
-            sheetsage2_session->prepare({});
-            printf("\nAudio.cpp SheetSage2 Load Complete.\n");
+            if (audiocpp_transcription_entry->task == engine::runtime::VoiceTaskKind::Midi) {
+                audiocpp_transcription_session->prepare({});
+            }
+            printf("\nAudio.cpp %s Load Complete.\n", audiocpp_family.c_str());
             return true;
         } catch (const std::exception & error) {
-            printf("\nAudio.cpp SheetSage2 Load Error: %s\n", error.what());
-            sheetsage2_session.reset();
-            sheetsage2_model.reset();
-            is_audiocpp_sheetsage2 = false;
+            printf("\nAudio.cpp %s Load Error: %s\n", audiocpp_family.c_str(), error.what());
+            audiocpp_transcription_session.reset();
+            audiocpp_transcription_model.reset();
+            audiocpp_transcription_entry = nullptr;
+            audiocpp_transcription_family.clear();
+            audiocpp_alignment_session.reset();
+            audiocpp_alignment_model.reset();
+            audiocpp_alignment_entry = nullptr;
+            audiocpp_alignment_family.clear();
             return false;
         }
     }
@@ -149,46 +296,142 @@ bool whispertype_load_model(const whisper_load_model_inputs inputs)
 whisper_generation_outputs whispertype_generate(const whisper_generation_inputs inputs)
 {
     whisper_generation_outputs output;
+    whisper_output_metadata.clear();
 
-    if (is_audiocpp_sheetsage2) {
-        auto * offline = sheetsage2_session
-            ? dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(sheetsage2_session.get())
+    if (audiocpp_transcription_entry != nullptr) {
+        auto * offline = audiocpp_transcription_session
+            ? dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(audiocpp_transcription_session.get())
             : nullptr;
         if (offline == nullptr) {
-            printf("\nWarning: Audio.cpp SheetSage2 is not initialized.\n");
+            printf("\nWarning: Audio.cpp %s is not initialized.\n", audiocpp_transcription_family.c_str());
             output.text = "";
             output.status = 0;
             return output;
         }
         if (!whisper_is_quiet) {
-            printf("\nAudio.cpp SheetSage2 Transcribing Music to ABC...");
+            printf("\nAudio.cpp %s Transcribing...", audiocpp_transcription_family.c_str());
         }
         try {
             std::vector<float> pcmf32;
-            if (!::read_audio(std::string(inputs.audio_data), SHEETSAGE_SAMPLE_RATE, pcmf32)) {
+            if (!::read_audio(std::string(inputs.audio_data),
+                    audiocpp_transcription_entry->sample_rate, pcmf32)) {
                 throw std::runtime_error("failed to decode input audio");
             }
             engine::runtime::TaskRequest request;
             request.audio_input = engine::runtime::AudioBuffer{
-                SHEETSAGE_SAMPLE_RATE, 1, std::move(pcmf32)};
-            auto result = offline->run(request);
-            if (!result.text_output.has_value() || result.text_output->text.empty()) {
-                throw std::runtime_error("model produced no ABC score");
+                audiocpp_transcription_entry->sample_rate, 1, std::move(pcmf32)};
+            parse_audiocpp_transcription_options(inputs, request.options);
+            const bool use_external_mms = audiocpp_alignment_family == "mms_forced_aligner" &&
+                audiocpp_alignment_session != nullptr;
+            std::string supplied_transcript;
+            std::unordered_map<std::string, std::string> alignment_options;
+            bool wants_external_alignment = false;
+            if (use_external_mms) {
+                if (const auto it = request.options.find("alignment_transcript"); it != request.options.end()) {
+                    supplied_transcript = it->second;
+                    request.options.erase(it);
+                }
+                if (const auto it = request.options.find("return_timestamps"); it != request.options.end()) {
+                    const std::string value = it->second;
+                    wants_external_alignment = value == "1" || value == "true" || value == "yes" || value == "on";
+                    request.options.erase(it);
+                }
+                wants_external_alignment = wants_external_alignment || !supplied_transcript.empty();
+                for (const char * key : {"text_normalization", "star_frequency", "merge_threshold_sec"}) {
+                    if (const auto it = request.options.find(key); it != request.options.end()) {
+                        alignment_options.emplace(it->first, it->second);
+                        request.options.erase(it);
+                    }
+                }
+                // These are Qwen timestamp post-processing controls and are not
+                // part of MMS's exact-transcript alignment contract.
+                request.options.erase("clamp_timestamps_to_audio");
+                request.options.erase("preserve_punctuation");
             }
+            if (audiocpp_transcription_entry->task == engine::runtime::VoiceTaskKind::Asr) {
+                // Fixed mode keeps the common text-only path self-contained;
+                // VAD/timestamp options may still be selected explicitly.
+                if (request.options.find("audio_chunk_mode") == request.options.end()) {
+                    request.options["audio_chunk_mode"] = "fixed";
+                }
+                const std::string langcode = inputs.langcode != nullptr ? inputs.langcode : "";
+                if (!langcode.empty() && langcode != "auto" && langcode != "Auto" &&
+                    request.options.find("language") == request.options.end() &&
+                    audiocpp_transcription_family != "audio8_asr") {
+                    request.options["language"] = langcode;
+                }
+                if (audiocpp_transcription_family == "qwen3_asr") {
+                    const std::string request_language =
+                        (langcode == "auto" || langcode == "Auto") ? "" : langcode;
+                    request.text_input = engine::runtime::Transcript{
+                        inputs.prompt != nullptr ? inputs.prompt : "", request_language};
+                }
+                audiocpp_transcription_session->prepare(
+                    engine::runtime::build_preparation_request(request));
+            }
+            engine::runtime::TaskResult result;
+            if (supplied_transcript.empty()) {
+                result = offline->run(request);
+            } else {
+                result.text_output = engine::runtime::Transcript{
+                    supplied_transcript, inputs.langcode != nullptr ? inputs.langcode : ""};
+            }
+            if (wants_external_alignment) {
+                auto * aligner = dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(
+                    audiocpp_alignment_session.get());
+                if (aligner == nullptr || !result.text_output.has_value()) {
+                    throw std::runtime_error("MMS forced aligner is not initialized");
+                }
+                std::string language = result.text_output->language;
+                if (language.empty() || language == "auto" || language == "Auto") {
+                    language = inputs.langcode != nullptr ? inputs.langcode : "";
+                }
+                std::transform(language.begin(), language.end(), language.begin(),
+                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                if (language == "english" || language == "eng") {
+                    language = "en";
+                } else if (language == "dutch" || language == "nld") {
+                    language = "nl";
+                }
+                if (language.empty() || language == "auto") {
+                    throw std::runtime_error("MMS forced alignment requires an explicit language");
+                }
+                engine::runtime::TaskRequest align_request;
+                align_request.audio_input = request.audio_input;
+                align_request.text_input = engine::runtime::Transcript{
+                    result.text_output->text, language};
+                align_request.options = std::move(alignment_options);
+                align_request.options["language"] = language;
+                align_request.options["return_timestamps"] = "true";
+                audiocpp_alignment_session->prepare(
+                    engine::runtime::build_preparation_request(align_request));
+                result = aligner->run(align_request);
+            }
+            if (!result.text_output.has_value()) {
+                throw std::runtime_error("model produced no text output");
+            }
+            whisper_output_metadata = audiocpp_transcription_metadata_json(
+                result, audiocpp_transcription_entry->sample_rate);
             whisper_output_text = std::move(result.text_output->text);
             const std::string ts = get_timestamp_str();
             if (whisper_is_quiet) {
-                printf("\n[%s] SheetSage2 Music Transcription Done.", ts.c_str());
+                printf("\n[%s] Audio.cpp %s Transcription Done.",
+                    ts.c_str(), audiocpp_transcription_family.c_str());
             } else {
-                printf("\n[%s] SheetSage2 ABC Output:\n%s", ts.c_str(), whisper_output_text.c_str());
+                printf("\n[%s] Audio.cpp %s Output:\n%s", ts.c_str(),
+                    audiocpp_transcription_family.c_str(), whisper_output_text.c_str());
             }
             output.text = whisper_output_text.c_str();
+            output.metadata_json = whisper_output_metadata.c_str();
             output.status = 1;
             total_transcribe_gens += 1;
             return output;
         } catch (const std::exception & error) {
-            printf("\nAudio.cpp SheetSage2 Generation Error: %s\n", error.what());
+            printf("\nAudio.cpp %s Generation Error: %s\n",
+                audiocpp_transcription_family.c_str(), error.what());
             output.text = "";
+            whisper_output_metadata = audiocpp_transcription_error_json(error.what());
+            output.metadata_json = whisper_output_metadata.c_str();
             output.status = 0;
             return output;
         }

@@ -9,13 +9,13 @@ static bool build_hidream_o1(const sd::model_builders::Context& ctx, const Token
     const auto version             = ctx.version;
     const auto& weight_manager     = ctx.weight_manager;
     result.conditioner             = std::make_shared<HiDreamO1::HiDreamO1Conditioner>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                                           tensor_storage_map,
-                                                                           weight_manager,
-                                                                           tokenizers);
+                                                                                       tensor_storage_map,
+                                                                                       weight_manager,
+                                                                                       tokenizers);
     result.diffusion               = std::make_shared<HiDreamO1::HiDreamO1Runner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
-                                                                    tensor_storage_map,
-                                                                    "model",
-                                                                    weight_manager);
+                                                                                  tensor_storage_map,
+                                                                                  "model",
+                                                                                  weight_manager);
     return true;
 }
 

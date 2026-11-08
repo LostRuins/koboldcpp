@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "family": "mms_forced_aligner",
+  "display_name": "Meta MMS-300M Forced Aligner",
+  "description": "Meta MMS-300M multilingual CTC forced aligner (Wav2Vec2ForCTC) that aligns an exact transcript to mono/stereo audio and returns word timestamps. The checkpoint covers 1,130 languages, but this port's native text normalization supports Dutch (nl/nld) and English (en/eng) Latin script only; text_normalization=pre_romanized accepts caller-supplied ASCII romanization, and unsupported non-Latin input is rejected. Checkpoint license: CC-BY-NC-4.0; GGUF conversion is local-only, no public redistribution is approved.",
+  "category": "speech_analysis",
+  "status": "community",
+  "tasks": [
+    "align"
+  ],
+  "modes": [
+    "offline"
+  ],
+  "languages": [
+    "multilingual"
+  ],
+  "capabilities": {
+    "align": [
+      "word_timestamps"
+    ]
+  },
+  "dependencies": [],
+  "options": {
+    "request": [
+      {
+        "name": "language",
+        "type": "string",
+        "description": "Language code. Built-in normalization supports nl/nld and en/eng; pre_romanized accepts any nonempty code.",
+        "required": true
+      },
+      {
+        "name": "text_normalization",
+        "type": "enum",
+        "description": "Transcript normalization mode; latin handles Dutch/English Latin script natively, pre_romanized trusts caller-supplied ASCII romanization.",
+        "values": [
+          "latin",
+          "pre_romanized"
+        ],
+        "required": false,
+        "default": "latin"
+      },
+      {
+        "name": "star_frequency",
+        "type": "enum",
+        "description": "Placement of the virtual <star> CTC target between words (segment) or at transcript edges (edges); matches the reference default segment.",
+        "values": [
+          "segment",
+          "edges"
+        ],
+        "required": false,
+        "default": "segment"
+      },
+      {
+        "name": "merge_threshold_sec",
+        "type": "float",
+        "description": "Close gaps at or below this threshold, rounded to alignment frames, by moving the later word start; word entries remain separate. Default 0.0 disables gap closure.",
+        "required": false,
+        "min": 0.0,
+        "default": 0.0
+      },
+      {
+        "name": "return_timestamps",
+        "type": "bool",
+        "description": "Compatibility option; word timestamps are always returned, including when false.",
+        "required": false,
+        "default": true
+      }
+    ],
+    "session": [
+      {
+        "name": "emission_window_sec",
+        "type": "float",
+        "description": "Center emission window length in seconds used to split long waveforms; must be > 0 and at most 3600. Rounded 16 kHz sample count must be a multiple of 320 (20 ms); default 30.",
+        "required": false,
+        "min": 0.02,
+        "max": 3600,
+        "default": 30.0
+      },
+      {
+        "name": "emission_context_sec",
+        "type": "float",
+        "description": "Left/right context appended to each emission window in seconds; must be nonnegative, at most 3600, and below emission_window_sec. Rounded 16 kHz sample count must be a multiple of 320 (20 ms); default 2.",
+        "required": false,
+        "min": 0.0,
+        "max": 3600,
+        "default": 2.0
+      },
+      {
+        "name": "max_alignment_cells",
+        "type": "int",
+        "description": "Hard cap on CTC DP cells (frames x states) allocated per request; alignment fails before allocation when exceeded; default 50000000.",
+        "required": false,
+        "min": 1,
+        "default": 50000000
+      },
+      {
+        "name": "max_target_tokens",
+        "type": "int",
+        "description": "Hard cap on flattened CTC target tokens per request; default 8192.",
+        "required": false,
+        "min": 1,
+        "default": 8192
+      },
+      {
+        "name": "weight_type",
+        "type": "enum",
+        "description": "Weight storage type; default native (tensors kept as stored in the checkpoint).",
+        "preset": "weight_type_conv",
+        "required": false,
+        "default": "native"
+      }
+    ],
+    "load": []
+  },
+  "runtime": {
+    "tags": [
+      "gguf"
+    ]
+  },
+  "ui": {
+    "recommended_package": "mms_forced_aligner_300m_f16",
+    "tags": [
+      "Align",
+      "GGUF"
+    ],
+    "docs": [
+      "docs/models/mms_forced_aligner.md",
+      "docs/speech_analysis.md",
+      "docs/gguf.md"
+    ]
+  },
+  "package_defaults": {
+    "download": {
+      "kind": "unsupported",
+      "reason": "CC-BY-NC-4.0 checkpoint: convert locally with audiocpp_gguf; no public audio.cpp GGUF distribution is approved."
+    }
+  },
+  "packages": [
+    {
+      "id": "mms_forced_aligner_300m_f16",
+      "display_name": "Meta MMS-300M Forced Aligner F16 GGUF",
+      "default": true,
+      "format": "gguf",
+      "precision": "f16",
+      "target_directory": "MMS-Forced-Aligner-GGUF",
+      "files": [
+        "MMS-Forced-Aligner-GGUF/mms-forced-aligner-f16.gguf"
+      ],
+      "strip_prefix": "MMS-Forced-Aligner-GGUF"
+    },
+    {
+      "id": "mms_forced_aligner_300m_safetensors",
+      "display_name": "Meta MMS-300M Forced Aligner Safetensors",
+      "format": "safetensors",
+      "precision": "native",
+      "target_directory": "mms-300m-1130-forced-aligner",
+      "files": [
+        "config.json",
+        "model.safetensors",
+        "special_tokens_map.json",
+        "tokenizer_config.json",
+        "vocab.json"
+      ],
+      "download": {
+        "kind": "huggingface_snapshot",
+        "repo": "MahmoudAshraf/mms-300m-1130-forced-aligner",
+        "revision": "49402e9577b1158620820667c218cd494cc44486",
+        "gated": false
+      }
+    },
+    {
+      "id": "mms_forced_aligner_300m_q8_0",
+      "display_name": "Meta MMS-300M Forced Aligner Q8_0 GGUF",
+      "format": "gguf",
+      "precision": "q8_0",
+      "target_directory": "MMS-Forced-Aligner-GGUF",
+      "files": [
+        "MMS-Forced-Aligner-GGUF/mms-forced-aligner-q8_0.gguf"
+      ],
+      "strip_prefix": "MMS-Forced-Aligner-GGUF"
+    }
+  ],
+  "sources": [
+    {
+      "format": "gguf",
+      "roots": {
+        "model": ".",
+        "weights": "$gguf"
+      },
+      "files": {
+        "config": "model:config.json",
+        "vocab": "model:vocab.json"
+      },
+      "optional_files": {
+        "special_tokens_map": "model:special_tokens_map.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "preprocessor_config": "model:preprocessor_config.json"
+      },
+      "tensors": {
+        "weights": "weights:"
+      }
+    },
+    {
+      "format": "safetensors",
+      "roots": {
+        "model": "."
+      },
+      "files": {
+        "config": "model:config.json",
+        "vocab": "model:vocab.json"
+      },
+      "optional_files": {
+        "special_tokens_map": "model:special_tokens_map.json",
+        "tokenizer_config": "model:tokenizer_config.json",
+        "preprocessor_config": "model:preprocessor_config.json"
+      },
+      "tensors": {
+        "weights": "model:model.safetensors"
+      }
+    }
+  ]
+}

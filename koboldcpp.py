@@ -53,7 +53,7 @@ bias_min_value = -100.0
 bias_max_value = 100.0
 logprobs_max = 10
 default_draft_amount = 4
-default_ttsmaxlen = 4096
+default_ttsmaxlen = 8192
 default_embeddingsmaxctx = 4096
 default_visionmaxres = 1024
 tools_max_temperature = 1.0 #chat requests with tools are clamped to this temperature; the horde worker declares it as a limit
@@ -100,6 +100,7 @@ cli_arg_overrides = set()
 
 handle = None
 common_backend_handle = None
+backend_variant_handle = None
 dll_directory_handles = []
 friendlymodelname = "inactive"
 friendlysdmodelname = "inactive"
@@ -116,6 +117,7 @@ lastgeneratedcomfyimg = b''
 lastgeneratedcachedpayload = b''
 lastgeneratedcachedpayloadkey = ''
 currgenimgkey = ''
+image_recovery_lock = threading.Lock()
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
 password = "" #if empty, no auth key required
@@ -178,6 +180,7 @@ multiplayer_dataformat = "" # used to tell what is the data payload in saved sto
 multiplayer_lastactive = {} # timestamp of last activity for each unique player
 websearch_lastquery = ""
 websearch_lastresponse = []
+KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME = "koboldcpp_websearch"
 preloaded_story = None
 chatcompl_adapter = None
 chatcompl_adapter_list = None #if using autoguess, will populate this will potential adapters
@@ -280,6 +283,7 @@ deprecated_keys = {
     "useswa",
     "jinja_tools",
     "multiuser",
+    "whispermodel",
 }
 
 saved_stdout = None
@@ -564,6 +568,7 @@ class sd_info_outputs(ctypes.Structure):
 
 class whisper_load_model_inputs(ctypes.Structure):
     _fields_ = [("model_filename", ctypes.c_char_p),
+                ("aligner_filename", ctypes.c_char_p),
                 ("executable_path", ctypes.c_char_p),
                 ("kcpp_main_gpu", ctypes.c_int),
                 ("devices_override", ctypes.c_char_p),
@@ -574,11 +579,13 @@ class whisper_generation_inputs(ctypes.Structure):
     _fields_ = [("prompt", ctypes.c_char_p),
                 ("audio_data", ctypes.c_char_p),
                 ("suppress_non_speech", ctypes.c_bool),
-                ("langcode", ctypes.c_char_p)]
+                ("langcode", ctypes.c_char_p),
+                ("audiocpp_extra_params_json", ctypes.c_char_p)]
 
 class whisper_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
-                ("data", ctypes.c_char_p)]
+                ("data", ctypes.c_char_p),
+                ("metadata_json", ctypes.c_char_p)]
 
 class tts_load_model_inputs(ctypes.Structure):
     _fields_ = [("threads", ctypes.c_int),
@@ -989,7 +996,7 @@ default_option, cublas_option, hipblas_option, vulkan_option, noavx2_option, vul
 runopts = [opt for lib, opt in lib_option_pairs if file_exists(lib)]
 
 def init_library():
-    global handle, args, libname, common_backend_handle, dll_directory_handles
+    global handle, args, libname, common_backend_handle, backend_variant_handle, dll_directory_handles
     global lib_default,lib_failsafe,lib_noavx2,lib_vulkan_failsafe,lib_cublas,lib_hipblas,lib_vulkan,lib_vulkan_noavx2
 
     libname = lib_default
@@ -1063,6 +1070,10 @@ def init_library():
             if not os.path.isfile(route_path):
                 raise FileNotFoundError("Missing backend route DLL: " + route_path)
             dll_directory_handles.append(os.add_dll_directory(route_dir))
+            # Load the actual backend by absolute path before its forwarder.
+            # Windows 7 does not reliably apply AddDllDirectory search paths
+            # while resolving a forwarded export's target DLL.
+            backend_variant_handle = ctypes.CDLL(backend_path)
             common_backend_handle = ctypes.CDLL(route_path)
             handle = ctypes.CDLL(common_path)
         else:
@@ -1452,7 +1463,7 @@ def old_cpu_check(): #return -1 for pass, 0 if has avx2, 1 if has avx, 2 if has 
         return -1 #cannot determine
 
 def has_valid_model():
-    return args.model_param or args.sdmodel or args.whispermodel or args.ttsmodel or args.embeddingsmodel or args.musicdiffusion or args.musicllm or args.mcpfile or args.nomodel or args.rpcmode=="host"
+    return args.model_param or args.sdmodel or args.transcribemodel or args.ttsmodel or args.embeddingsmodel or args.musicdiffusion or args.musicllm or args.mcpfile or args.nomodel or args.rpcmode=="host"
 
 def unpack_to_dir(destpath = ""):
     srcpath = os.path.abspath(os.path.dirname(__file__))
@@ -1648,7 +1659,7 @@ def get_capabilities():
     audioSupport = (has_audio_support) #todo: not always correct
     has_guidance = True if args.enableguidance else False
     has_jinja = True if args.jinja else False
-    has_mcp = True if (args.mcpfile and mcp_connections and len(mcp_connections) > 0) else False
+    has_mcp = bool(args.websearch or (args.mcpfile and mcp_connections))
     admin_type = (2 if args.admin and args.admindir and args.adminpassword else (1 if args.admin and args.admindir else 0))
     has_router = True if args.routermode else False
     musicfamily_raw = handle.music_get_family()
@@ -1887,7 +1898,7 @@ def read_gguf_metadata(file_path):
     except Exception:
         return None
 
-def extract_modelfile_params(filepath,sdfilepath,whisperfilepath,mmprojfilepath,draftmodelpath,ttsmodelpath,embdmodelpath,musicllmpath,musicditpath,musicvaepath):
+def extract_modelfile_params(filepath,sdfilepath,whisperfilepath,alignerfilepath,mmprojfilepath,draftmodelpath,ttsmodelpath,embdmodelpath,musicllmpath,musicditpath,musicvaepath):
     global modelfile_extracted_meta
     modelfile_extracted_meta = None
     sdfsize = 0
@@ -1903,6 +1914,8 @@ def extract_modelfile_params(filepath,sdfilepath,whisperfilepath,mmprojfilepath,
         sdfsize = os.path.getsize(sdfilepath)
     if whisperfilepath and os.path.exists(whisperfilepath):
         whisperfsize = os.path.getsize(whisperfilepath)
+    if alignerfilepath and os.path.exists(alignerfilepath):
+        whisperfsize += os.path.getsize(alignerfilepath)
     if mmprojfilepath and os.path.exists(mmprojfilepath):
         mmprojsize = os.path.getsize(mmprojfilepath)
     if draftmodelpath and os.path.exists(draftmodelpath):
@@ -2517,7 +2530,8 @@ def generate(genparams, stream_flag=False):
     if args.genlimit > 0 and max_length > args.genlimit:
         max_length = args.genlimit
     if max_length >= (max_context_length-min_remain_softlimit):
-        print(f"\n!!! ====== !!!\nWarning: You are trying to generate text with max_length ({max_length}) near or exceeding max_context_length limit ({max_context_length}).\nMost of the context will be removed, and your outputs will not be very coherent.\nConsider launching with increased --contextsize to avoid issues.\n!!! ====== !!!")
+        if not args.quiet:
+            print(f"\n!!! ====== !!!\nWarning: You are trying to generate text with max_length ({max_length}) near or exceeding max_context_length limit ({max_context_length}).\nMost of the context will be removed, and your outputs will not be very coherent.\nConsider launching with increased --contextsize to avoid issues.\n!!! ====== !!!")
         if max_length >= (max_context_length-min_remain_hardlimit):
             max_length = max_context_length-min_remain_hardlimit
 
@@ -3507,15 +3521,21 @@ def a1111_progress_response(preview=False):
         preview and status.get('preview') or None)
     return result
 
-def whisper_load_model(model_filename):
+def whisper_load_model(model_filename, aligner_filename=""):
     global args
     inputs = whisper_load_model_inputs()
     inputs.model_filename = model_filename.encode("UTF-8")
+    inputs.aligner_filename = aligner_filename.encode("UTF-8") if aligner_filename else b""
     inputs = set_backend_props(inputs)
     ret = handle.whisper_load_model(inputs)
     return ret
 
-def whisper_generate(genparams):
+def transcription_requests_timestamps(genparams):
+    value = genparams.get("return_timestamps", False)
+    explicit = value is True or (isinstance(value, str) and value.strip().lower() in ("1", "true", "yes", "on"))
+    return explicit or bool(str(genparams.get("transcript", "") or "").strip())
+
+def whisper_generate_result(genparams):
     global args
     prompt = genparams.get("prompt", "")
     audio_data = genparams.get("audio_data", "")
@@ -3525,14 +3545,38 @@ def whisper_generate(genparams):
     inputs.prompt = prompt.encode("UTF-8")
     inputs.audio_data = audio_data.encode("UTF-8")
     lc = genparams.get("langcode", genparams.get("language", "auto"))
-    lc = lc.strip().lower() if (lc and lc.strip().lower()!="") else "auto"
+    lc = lc.strip() if (lc and lc.strip()) else "auto"
     inputs.langcode = lc.encode("UTF-8")
     inputs.suppress_non_speech = genparams.get("suppress_non_speech", False)
+    audiocpp_options = {}
+    for key in ("max_tokens", "audio_chunk_mode", "audio_chunk_duration_sec",
+                "keep_tags", "enable_itn", "target_language", "punc",
+                "preserve_punctuation", "return_timestamps",
+                "clamp_timestamps_to_audio", "text_normalization",
+                "star_frequency", "merge_threshold_sec"):
+        if key in genparams and genparams[key] is not None:
+            audiocpp_options[key] = genparams[key]
+    supplied_transcript = str(genparams.get("transcript", "") or "").strip()
+    if supplied_transcript:
+        audiocpp_options["alignment_transcript"] = supplied_transcript
+    if transcription_requests_timestamps(genparams):
+        audiocpp_options["return_timestamps"] = True
+        audiocpp_options.setdefault("clamp_timestamps_to_audio", True)
+        audiocpp_options.setdefault("preserve_punctuation", True)
+    inputs.audiocpp_extra_params_json = json.dumps(audiocpp_options).encode("UTF-8")
     ret = handle.whisper_generate(inputs)
-    outstr = ""
+    result = {"status": ret.status, "text": ""}
     if ret.status==1:
-        outstr = ret.data.decode("UTF-8","ignore")
-    return outstr
+        result["text"] = ret.data.decode("UTF-8","ignore")
+    if ret.metadata_json:
+        try:
+            result.update(json.loads(ret.metadata_json.decode("UTF-8", "ignore")))
+        except (ValueError, TypeError):
+            pass
+    return result
+
+def whisper_generate(genparams):
+    return whisper_generate_result(genparams).get("text", "")
 
 def tts_load_model(ttc_model_filename,cts_model_filename):
     global args
@@ -3547,7 +3591,7 @@ def tts_load_model(ttc_model_filename,cts_model_filename):
         if ttst > 0:
             thds = ttst
     inputs.threads = thds
-    inputs.ttsmaxlen = args.ttsmaxlen if args.ttsmaxlen < 4096 else 4096
+    inputs.ttsmaxlen = args.ttsmaxlen
     inputs = set_backend_props(inputs)
     ret = handle.tts_load_model(inputs)
     return ret
@@ -4128,6 +4172,48 @@ def websearch(query):
     websearch_lastquery = query
     websearch_lastresponse = results
     return results
+
+def get_koboldcpp_websearch_mcp_tool():
+    return {
+        "name": KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME,
+        "description": "Search the web and return relevant results with excerpts from their pages.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The web search query.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    }
+
+def call_koboldcpp_websearch_mcp(request_id, callparams):
+    arguments = callparams.get("arguments", {})
+    query = arguments.get("query") if isinstance(arguments, dict) else None
+    if not isinstance(query, str) or not query.strip():
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -32602,
+                "message": "Invalid arguments: 'query' must be a non-empty string",
+            },
+        }
+    results = websearch(query)
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "content": [{
+                "type": "text",
+                "text": json.dumps(results, ensure_ascii=False),
+            }],
+            "structuredContent": {"results": results},
+        },
+    }
 
 def is_port_in_use(portNum):
     try:
@@ -7793,25 +7879,41 @@ Change Mode<br>
         elif clean_path=='/view' or clean_path=='/view.png' or clean_path=='/api/view' or clean_path.startswith('/view_image'): #emulate comfyui
             content_type = 'image/png'
             response_body = lastgeneratedcomfyimg
+        elif clean_path.startswith('/sdapi/v1/recovery-status'):
+            parsed_url = urllib.parse.urlparse(self.path)
+            parsed_dict = urllib.parse.parse_qs(parsed_url.query)
+            genkey = parsed_dict.get('genkey', [''])[0]
+            with image_recovery_lock:
+                if genkey and genkey == currgenimgkey:
+                    recovery_status = 'running'
+                elif genkey and genkey == lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
+                    recovery_status = 'complete'
+                else:
+                    recovery_status = 'unknown'
+            response_body = json.dumps({"status": recovery_status}).encode()
         elif clean_path.startswith('/sdapi/v1/get_last.json'):
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
-            if genkey and genkey==lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
-                response_body = lastgeneratedcachedpayload
-            else:
-                response_body = None
+            with image_recovery_lock:
+                if genkey and genkey==lastgeneratedcachedpayloadkey and lastgeneratedcachedpayload:
+                    response_body = lastgeneratedcachedpayload
+                else:
+                    response_body = None
         elif clean_path.startswith('/sdapi/v1/progress'):
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
             skip_current_image = parse_query_bool(parsed_dict, 'skip_current_image')
             # Only expose progress and previews for the requested active generation.
-            auth = bool(genkey and genkey==currgenimgkey)
+            with image_recovery_lock:
+                auth = bool(genkey and genkey==currgenimgkey)
             info = build_a1111_progress_response('idle')
             if auth:
                 active_info = a1111_progress_response(not skip_current_image)
-                if genkey == currgenimgkey:
+                with image_recovery_lock:
+                    still_active = genkey == currgenimgkey
+                if still_active:
                     info = active_info
             response_body = json.dumps(info).encode()
         elif clean_path=='/history' or clean_path=='/api/history' or clean_path.startswith('/api/history/') or clean_path.startswith('/history/'): #emulate comfyui
@@ -8077,6 +8179,24 @@ Change Mode<br>
                 response_body = (json.dumps({"success": "true", "done":"false"}).encode())
             else:
                 response_body = (json.dumps({"success": "false", "done":"false"}).encode())
+
+        elif clean_path.endswith('/sdapi/v1/interrupt'):
+            image_genkey = ""
+            try:
+                tempbody = json.loads(body)
+                if isinstance(tempbody, dict):
+                    image_genkey = str(tempbody.get('genkey', ''))
+            except Exception:
+                pass
+            # This endpoint is handled before acquiring modelbusy, allowing an
+            # explicit UI cancellation to stop an in-flight image generation.
+            # Requiring the active genkey prevents one client from cancelling a
+            # different client's generation.
+            with image_recovery_lock:
+                image_abort_requested = bool(image_genkey and image_genkey == currgenimgkey)
+                if image_abort_requested:
+                    handle.sd_abort_generation()
+            response_body = json.dumps({"success": image_abort_requested}).encode()
 
         elif clean_path.endswith('/api/extra/generate/check'):
             if not self.secure_endpoint():
@@ -8346,22 +8466,34 @@ Change Mode<br>
                         for conn in mcp_connections:
                             currtools = conn["tools"]
                             for tool in currtools:
-                                reply["result"]["tools"].append(tool)
+                                is_native_websearch = (
+                                    args.websearch and isinstance(tool, dict) and
+                                    tool.get("name", "") == KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME
+                                )
+                                if not is_native_websearch:
+                                    reply["result"]["tools"].append(tool)
+                    if args.websearch:
+                        reply["result"]["tools"].append(get_koboldcpp_websearch_mcp_tool())
                     response_body = (json.dumps(reply).encode())
                 elif method == "tools/call":
                     foundtool = False
                     callparams = tempbody.get("params",{})
                     callname = callparams.get("name","")
-                    with mcp_lock:
-                        for conn in mcp_connections:
-                            currtools = conn["tools"]
-                            currclient = conn["client"]
-                            for tool in currtools:
-                                if currclient and tool.get("name","")!="" and tool.get("name","")==callname:
-                                    foundtool = True
-                                    mcpresp = currclient.send(tempbody)
-                                    response_body = (json.dumps(mcpresp).encode())
-                                    break
+                    if args.websearch and callname == KOBOLDCPP_WEBSEARCH_MCP_TOOL_NAME:
+                        foundtool = True
+                        mcpresp = call_koboldcpp_websearch_mcp(request_id, callparams)
+                        response_body = (json.dumps(mcpresp).encode())
+                    else:
+                        with mcp_lock:
+                            for conn in mcp_connections:
+                                currtools = conn["tools"]
+                                currclient = conn["client"]
+                                for tool in currtools:
+                                    if currclient and tool.get("name","")!="" and tool.get("name","")==callname:
+                                        foundtool = True
+                                        mcpresp = currclient.send(tempbody)
+                                        response_body = (json.dumps(mcpresp).encode())
+                                        break
                     if not foundtool:
                         response_body = (json.dumps({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32602, "message": "Tool not found"}}).encode())
                 else:
@@ -8414,7 +8546,7 @@ Change Mode<br>
                 return
             ratelimitlookup[client_ip] = datetime.now()
         muint = int(args.queuelimit)
-        if muint < 2 and ((args.whispermodel and args.whispermodel!="") or (args.sdmodel and args.sdmodel!="") or (args.ttsmodel and args.ttsmodel!="") or (args.embeddingsmodel and args.embeddingsmodel!="")):
+        if muint < 2 and ((args.transcribemodel and args.transcribemodel!="") or (args.sdmodel and args.sdmodel!="") or (args.ttsmodel and args.ttsmodel!="") or (args.embeddingsmodel and args.embeddingsmodel!="")):
             muint = 2 # this prevents errors when using voice/img together with text
         if args.parallelrequests > 1 and muint <=0:
             muint = queue_concurrent_limit # required for batching
@@ -8585,14 +8717,11 @@ Change Mode<br>
                 except Exception:
                     genparams = None
                     if is_transcribe: #fallback handling of file uploads
-                        formdata = self.extract_formdata_from_file_upload(body)
-                        if "file" in formdata and formdata["file"]:
-                            b64wav = formdata["file"]
-                            genparams = {"audio_data":b64wav}
-                            if "prompt" in formdata and formdata["prompt"]:
-                                genparams["prompt"] = formdata["prompt"]
-                            if "language" in formdata and formdata["language"]:
-                                genparams["language"] = formdata["language"]
+                        formdata = self.extract_multipart_formdata(body)
+                        uploaded_files = formdata.get("files", {})
+                        if uploaded_files.get("file"):
+                            genparams = dict(formdata.get("fields", {}))
+                            genparams["audio_data"] = uploaded_files["file"][0]
                     elif is_oai_imgedit:
                         genparams = self.extract_oai_image_edit_formdata(body)
 
@@ -8963,14 +9092,14 @@ Change Mode<br>
                 elif is_imggen: #image gen
                     keepalive_started = False
                     final_write_started = False
+                    recovery_genkey = ''
                     try:
-                        lastgeneratedcachedpayload = b''
-                        lastgeneratedcachedpayloadkey = ''
                         send_keepalive = bool(tryparseint(genparams.get('keepalive', False), 0))
                         recovery_params = copy.deepcopy(genparams)
                         recovery_genkey = genparams.get('genkey', '')
                         recovery_model = imageName if autoswapmode and imageName is not None else friendlysdmodelname
-                        currgenimgkey = recovery_genkey
+                        with image_recovery_lock:
+                            currgenimgkey = recovery_genkey
                         if is_comfyui_imggen:
                             lastgeneratedcomfyimg = b''
                             genparams = sd_comfyui_tranform_params(genparams)
@@ -9007,14 +9136,13 @@ Change Mode<br>
                         gendatextra = gen["data_extra"]
                         genfinalframe = gen["final_frame"]
                         geninfo = json.dumps(gen["info"]) # sdapi really expects a stringified JSON
-                        currgenimgkey = ''
                         genresp = None
                         if gendat:
                             recovery_prompt = recovery_params.get('prompt', '')
                             recovery_negative_prompt = recovery_params.get('negative_prompt', '')
                             if recovery_negative_prompt:
                                 recovery_prompt = f"{recovery_prompt} ### {recovery_negative_prompt}"
-                            lastgeneratedcachedpayload = json.dumps({
+                            completed_payload = json.dumps({
                                 "images": [gendat],
                                 "parameters": recovery_params,
                                 "info": geninfo,
@@ -9024,7 +9152,19 @@ Change Mode<br>
                                 "prompt": recovery_prompt,
                                 "models": [recovery_model],
                             }).encode()
-                            lastgeneratedcachedpayloadkey = recovery_genkey
+                            # Publish the completed slot before clearing the active
+                            # slot, so recovery-status never observes a gap between
+                            # "running" and "complete" for a successful request.
+                            with image_recovery_lock:
+                                if recovery_genkey:
+                                    lastgeneratedcachedpayload = completed_payload
+                                    lastgeneratedcachedpayloadkey = recovery_genkey
+                                if currgenimgkey == recovery_genkey:
+                                    currgenimgkey = ''
+                        else:
+                            with image_recovery_lock:
+                                if currgenimgkey == recovery_genkey:
+                                    currgenimgkey = ''
                         if is_comfyui_imggen:
                             if gendat:
                                 lastgeneratedcomfyimg = base64.b64decode(gendat)
@@ -9043,7 +9183,9 @@ Change Mode<br>
                         final_write_started = True
                         self.wfile.write(genresp)
                     except Exception as ex:
-                        currgenimgkey = ''
+                        with image_recovery_lock:
+                            if currgenimgkey == recovery_genkey:
+                                currgenimgkey = ''
                         if keepalive_started and not final_write_started:
                             # Headers are already committed; finish with a JSON error.
                             try:
@@ -9083,7 +9225,18 @@ Change Mode<br>
                                 self.wfile.write(genresp)
                                 return
                             genparams["audio_data"] = voice_audio
-                        gendat = None
+                        wants_timestamps = transcription_requests_timestamps(genparams)
+                        if wants_timestamps and not args.transcribealigner:
+                            genresp = json.dumps({"detail": {
+                                "msg": "Timestamp output requires --transcribealigner with a supported forced-aligner GGUF.",
+                                "type": "model_unavailable",
+                            }}).encode()
+                            self.send_response(400)
+                            self.send_header('content-length', str(len(genresp)))
+                            self.end_headers(content_type='application/json')
+                            self.wfile.write(genresp)
+                            return
+                        transcription_result = None
                         if genparams.get("audio_data","") and fullwhispermodelpath=="" and has_audio_support: #if we have no whisper model but an audio-capable projector, use that instead
                             adapter_obj = {} if chatcompl_adapter is None else chatcompl_adapter
                             user_message_start = adapter_obj.get("user_start", "### Instruction:")
@@ -9101,10 +9254,34 @@ Change Mode<br>
                                 "audio": [rawaudio]
                             }
                             temp_poll_result = generate(genparams=temp_poll)
-                            gendat = temp_poll_result['text']
+                            transcription_result = {"status": 1, "text": temp_poll_result['text']}
                         else:
-                            gendat = whisper_generate(genparams)
+                            transcription_result = whisper_generate_result(genparams)
+                        gendat = transcription_result.get("text", "")
+                        if wants_timestamps and transcription_result.get("family") != "qwen3_asr":
+                            genresp = json.dumps({"detail": {
+                                "msg": "Word timestamps are currently supported only by Qwen3-ASR with --transcribealigner.",
+                                "type": "unsupported_model",
+                            }}).encode()
+                            self.send_response(400)
+                            self.send_header('content-length', str(len(genresp)))
+                            self.end_headers(content_type='application/json')
+                            self.wfile.write(genresp)
+                            return
+                        if transcription_result.get("status") != 1:
+                            error_message = transcription_result.get("error", "Audio transcription failed.")
+                            genresp = json.dumps({"detail": {
+                                "msg": error_message,
+                                "type": "generation_error",
+                            }}).encode()
+                            self.send_response(500)
+                            self.send_header('content-length', str(len(genresp)))
+                            self.end_headers(content_type='application/json')
+                            self.wfile.write(genresp)
+                            return
                         transcribe_response = {"text":gendat}
+                        if wants_timestamps:
+                            transcribe_response["words"] = transcription_result.get("words", [])
                         if clean_path.endswith('/api/extra/music/transcribe'):
                             transcribe_response["abc"] = gendat
                         genresp = json.dumps(transcribe_response).encode()
@@ -9863,6 +10040,7 @@ def show_gui():
     gen_defaults_overwrite_var = ctk.IntVar(value=0)
 
     whisper_model_var = ctk.StringVar()
+    transcribe_aligner_var = ctk.StringVar()
     tts_model_var = ctk.StringVar()
     wavtokenizer_var = ctk.StringVar()
     ttsgpu_var = ctk.IntVar(value=0)
@@ -10233,6 +10411,7 @@ def show_gui():
             filepath = model_var.get()
             sdfilepath = sd_model_var.get()
             whisperfilepath = whisper_model_var.get()
+            alignerfilepath = transcribe_aligner_var.get()
             mmprojfilepath = mmproj_var.get()
             draftmodelpath = draftmodel_var.get()
             ttsmodelpath = tts_model_var.get() if ttsgpu_var.get()==1 else ""
@@ -10240,7 +10419,7 @@ def show_gui():
             musicllmpath = musicllm_var.get()
             musicditpath = musicdiffusion_var.get()
             musicvaepath = musicvae_var.get()
-            extract_modelfile_params(filepath,sdfilepath,whisperfilepath,mmprojfilepath,draftmodelpath,ttsmodelpath,embdmodelpath,musicllmpath,musicditpath,musicvaepath)
+            extract_modelfile_params(filepath,sdfilepath,whisperfilepath,alignerfilepath,mmprojfilepath,draftmodelpath,ttsmodelpath,embdmodelpath,musicllmpath,musicditpath,musicvaepath)
             changed_gpulayers_estimate()
         pass
 
@@ -10903,12 +11082,14 @@ def show_gui():
 
     # audio tab
     audio_tab = tabcontent["Audio"]
-    makefileentry(audio_tab, "Audio Transcription:", "Select Whisper or SheetSage2 Model File", whisper_model_var, 1, width=280, filetypes=[("*.bin *.gguf","*.bin *.gguf")], tooltiptxt="Select a Whisper .bin for speech-to-text, or a SheetSage2 .gguf for music-to-ABC transcription.")
+    makefileentry(audio_tab, "Transcriber:", "Select Whisper or Audio.cpp Transcription Model", whisper_model_var, 1, width=280, singlerow=True, filetypes=[("*.bin *.gguf","*.bin *.gguf")], tooltiptxt="Select a Whisper .bin or Audio.cpp ASR .gguf for speech-to-text, or a SheetSage2 .gguf for music-to-ABC transcription.")
     whisper_model_var.trace_add("write", gui_changed_modelfile)
-    makefileentry(audio_tab, "TTS Model (Text-To-Speech):", "Select TTS GGUF Model File", tts_model_var, 3, width=280, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a TTS GGUF model file on disk to be loaded for Narration.")
+    makefileentry(audio_tab, "STT Aligner:", "Optional Qwen3 or MMS Forced Aligner GGUF", transcribe_aligner_var, 2, width=280, singlerow=True, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Optional Qwen3 or MMS Forced Aligner model used for word timestamps.")
+    transcribe_aligner_var.trace_add("write", gui_changed_modelfile)
+    makefileentry(audio_tab, "TTS Model:", "Select TTS GGUF Model File", tts_model_var, 3, width=280, singlerow=True, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a TTS GGUF model file on disk to be loaded for Narration.")
     tts_model_var.trace_add("write", gui_changed_modelfile)
     makelabelentry(audio_tab, "TTS Threads:" , tts_threads_var, 5, 50,padx=100,singleline=True,tooltip="How many threads to use during TTS generation.\nIf left blank, uses same value as threads.")
-    makelabelentry(audio_tab, "TTS Max Tokens:" , ttsmaxlen_var, 5, 50,padx=300,singleline=True,tooltip="Max allowed audiotokens to generate per TTS request.", labelpadx=190)
+    makelabelentry(audio_tab, "TTS Max Words:" , ttsmaxlen_var, 5, 50,padx=300,singleline=True,tooltip="Max allowed words to generate per TTS request.", labelpadx=190)
     makecheckbox(audio_tab, "TTS Use GPU", ttsgpu_var, 9, 0,tooltiptxt="Uses the GPU for TTS on supported model architectures.")
     ttsgpu_var.trace_add("write", gui_changed_modelfile)
     makefileentry(audio_tab, "WavTokenizer Model (Required for some models):", "Select WavTokenizer GGUF Model File", wavtokenizer_var, 11, width=280, filetypes=[("*.gguf","*.gguf")], tooltiptxt="Select a WavTokenizer GGUF model file on disk to be loaded for Narration.")
@@ -11283,7 +11464,8 @@ def show_gui():
         args.gendefaults = gen_defaults_var.get()  if gen_defaults_var.get() != "" else ""
         args.reasoningeffort = "default" # already incorporated into the editable generation defaults
         args.gendefaultsoverwrite = (gen_defaults_overwrite_var.get()==1)
-        args.whispermodel = whisper_model_var.get() if whisper_model_var.get() != "" else ""
+        args.transcribemodel = whisper_model_var.get() if whisper_model_var.get() != "" else ""
+        args.transcribealigner = transcribe_aligner_var.get() if transcribe_aligner_var.get() != "" else ""
         args.embeddingsmodel = embeddings_model_var.get()  if embeddings_model_var.get() != "" else ""
         args.embeddingsmaxctx = (0 if embeddings_ctx_var.get()=="" else int(embeddings_ctx_var.get()))
         args.embeddingsgpu = (embeddings_gpu_var.get()==1)
@@ -11607,7 +11789,8 @@ def show_gui():
         gen_defaults_var.set(gendefaults)
         gen_defaults_overwrite_var.set(1 if "gendefaultsoverwrite" in mydict and mydict["gendefaultsoverwrite"] else 0)
 
-        whisper_model_var.set(mydict["whispermodel"] if ("whispermodel" in mydict and mydict["whispermodel"]) else "")
+        whisper_model_var.set(mydict["transcribemodel"] if ("transcribemodel" in mydict and mydict["transcribemodel"]) else "")
+        transcribe_aligner_var.set(mydict["transcribealigner"] if ("transcribealigner" in mydict and mydict["transcribealigner"]) else "")
 
         tts_threads_var.set(str(mydict["ttsthreads"]) if ("ttsthreads" in mydict and mydict["ttsthreads"]) else str(default_threads))
         tts_model_var.set(mydict["ttsmodel"] if ("ttsmodel" in mydict and mydict["ttsmodel"]) else "")
@@ -11926,7 +12109,8 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
         return headers
 
     def make_url_request_horde(url, data, method='POST',addmykey=False,error_info=None):
-        ret = make_url_request(url, data, method, horde_headers(addmykey), error_info=error_info)
+        ret = make_url_request(url, data, method, horde_headers(addmykey),
+            timeout=args.reqtimeout, error_info=error_info)
         if not ret:
             print(f"Worker {worker_id} - Make sure your Horde API key and worker name is valid!")
         return ret
@@ -11983,7 +12167,7 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
                     try:
                         request = urllib.request.Request(genurl, data=json.dumps(payload).encode('utf-8'), headers=horde_headers(True))
                         request.add_header('Content-Type', 'application/json')
-                        with urllib.request.urlopen(request, timeout=600) as response:
+                        with urllib.request.urlopen(request, timeout=args.reqtimeout) as response:
                             if 'text/event-stream' not in response.headers.get('Content-Type', ''):
                                 generation = json.loads(response.read())
                                 return
@@ -12222,6 +12406,8 @@ def convert_invalid_args(args):
         dict = vars(args)
     if "usecuda" not in dict and "usecublas" in dict and dict["usecublas"]:
         dict["usecuda"] = dict["usecublas"]
+    if "whispermodel" in dict and dict["whispermodel"] and not dict.get("transcribemodel"):
+        dict["transcribemodel"] = dict["whispermodel"]
     if "usecuda" in dict and dict["usecuda"] and "lowvram" in dict["usecuda"]:
         dict["lowvram"] = True
     if "usecuda" in dict and dict["usecuda"] and "nommq" in dict["usecuda"]:
@@ -12773,7 +12959,7 @@ def get_kobold_agent_path():
     return os.path.join(base_path, "kcpp_agent.py")
 
 
-def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None):
+def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None, request_timeout=None):
     """Run the bundled agent script inside a frozen KoboldCpp process."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -12790,12 +12976,15 @@ def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None):
             sys.argv.extend(["--api-key", api_key])
         if load_session:
             sys.argv.extend(["--load-session", load_session])
+        if request_timeout is not None:
+            sys.argv.extend(["--request-timeout", str(request_timeout)])
         kcpp_agent.main()
     finally:
         sys.argv = old_argv
 
 
-def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=False, load_session=None):
+def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=False,
+                                 load_session=None, request_timeout=None):
     """Run the agent in a new or existing terminal, using the bundled runner when frozen."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -12811,6 +13000,8 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
         command.extend(["--agent-api-key" if is_frozen else "--api-key", api_key])
     if load_session:
         command.extend(["--agentload" if is_frozen else "--load-session", load_session])
+    if request_timeout is not None:
+        command.extend(["--reqtimeout" if is_frozen else "--request-timeout", str(request_timeout)])
 
     try:
         if same_terminal:
@@ -12907,6 +13098,9 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
                 print("Cannot launch Kobold Agent: no supported terminal emulator was found.")
             manual_command = ([sys.executable, "--run-bundled-agent"] if is_frozen
                               else [sys.executable, agent_path])
+            if request_timeout is not None:
+                manual_command.extend(["--reqtimeout" if is_frozen else "--request-timeout",
+                                       str(request_timeout)])
             print(f"Try running this in an existing terminal: {shlex.join(manual_command)}")
             return False
         return True
@@ -12916,7 +13110,8 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
 
 
 def launch_kobold_agent_after_mcp_load(
-    mcp_load_thread, base_url=None, api_key=None, same_terminal=False, load_session=None
+    mcp_load_thread, base_url=None, api_key=None, same_terminal=False, load_session=None,
+    request_timeout=None
 ):
     """Briefly wait for a complete MCP tool list, then launch regardless."""
     if mcp_load_thread is not None:
@@ -12929,7 +13124,9 @@ def launch_kobold_agent_after_mcp_load(
                 "launching KoboldCpp Agent anyway. Use /clear after loading finishes "
                 "to refresh MCP tools."
             )
-    return launch_kobold_agent_terminal(base_url, api_key, same_terminal, load_session)
+    return launch_kobold_agent_terminal(
+        base_url, api_key, same_terminal, load_session, request_timeout
+    )
 
 
 def register_koboldcpp():
@@ -13078,12 +13275,16 @@ def main(launch_args, default_args):
     args = launch_args #note: these are NOT shared with the child processes!
 
     if args.run_bundled_agent:
-        run_bundled_kobold_agent(args.agent_base_url, args.agent_api_key, args.agentload)
+        run_bundled_kobold_agent(
+            args.agent_base_url, args.agent_api_key, args.agentload, args.reqtimeout
+        )
         return
 
-    standalone_agent_args = cli_arg_overrides and cli_arg_overrides <= {"agent", "agentload"}
+    standalone_agent_args = cli_arg_overrides and cli_arg_overrides <= {
+        "agent", "agentload", "reqtimeout"
+    }
     if args.agent and (len(sys.argv) == 2 or standalone_agent_args):
-        launch_kobold_agent_terminal(load_session=args.agentload)
+        launch_kobold_agent_terminal(load_session=args.agentload, request_timeout=args.reqtimeout)
         return
 
     if (args.version) and len(sys.argv) <= 2:
@@ -13239,7 +13440,7 @@ def main(launch_args, default_args):
 
     if not args.admin: #run in single process mode
         if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
-            setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel) else False)
+            setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel) else False)
         kcpp_main_process(args,global_memory,using_gui_launcher)
         if global_memory["input_to_exit"]:
             print("===")
@@ -13251,7 +13452,7 @@ def main(launch_args, default_args):
             global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":initial_model, "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False})
 
             if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
-                setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel) else False)
+                setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel) else False)
 
             # invoke the main koboldcpp process
             original_args = copy.deepcopy(args)
@@ -13465,7 +13666,7 @@ def mk_lora_info(imgloras, multipliers):
 
 autoswap_model_fields = {
     "text": ["model", "model_param", "lora", "mmproj", "draftmodel"],
-    "stt": ["whispermodel"],
+    "stt": ["transcribemodel", "transcribealigner"],
     "tts": ["ttsmodel", "ttswavtokenizer"],
     "embed": ["embeddingsmodel"],
     "music": ["musicllm", "musicembeddings", "musicdiffusion", "musicvae"],
@@ -13474,7 +13675,7 @@ autoswap_model_fields = {
 
 autoswap_primary_fields = {
     "text": ["model", "model_param"],
-    "stt": ["whispermodel"],
+    "stt": ["transcribemodel"],
     "tts": ["ttsmodel"],
     "embed": ["embeddingsmodel"],
     "music": ["musicllm", "musicdiffusion"],
@@ -13571,8 +13772,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 tempName = os.path.basename(os.path.abspath(args.mmproj))
                 tempName = os.path.splitext(tempName)[0]
                 mmprojName = sanitize_string(tempName)
-        if args.whispermodel and args.whispermodel!="":
-            tempName = os.path.basename(os.path.abspath(args.whispermodel))
+        if args.transcribemodel and args.transcribemodel!="":
+            tempName = os.path.basename(os.path.abspath(args.transcribemodel))
             tempName = os.path.splitext(tempName)[0]
             sttName = sanitize_string(tempName)
         if args.ttsmodel and args.ttsmodel!="":
@@ -13736,10 +13937,14 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         dlfile = download_model_from_url(args.mmproj,[".gguf"],min_file_size=500000)
         if dlfile:
             args.mmproj = dlfile
-    if args.whispermodel and args.whispermodel!="":
-        dlfile = download_model_from_url(args.whispermodel,[".gguf",".bin"],min_file_size=500000)
+    if args.transcribemodel and args.transcribemodel!="":
+        dlfile = download_model_from_url(args.transcribemodel,[".gguf",".bin"],min_file_size=500000)
         if dlfile:
-            args.whispermodel = dlfile
+            args.transcribemodel = dlfile
+    if args.transcribealigner and args.transcribealigner!="":
+        dlfile = download_model_from_url(args.transcribealigner,[".gguf"],min_file_size=500000)
+        if dlfile:
+            args.transcribealigner = dlfile
     if args.draftmodel and args.draftmodel!="":
         dlfile = download_model_from_url(args.draftmodel,[".gguf"],min_file_size=500000)
         if dlfile:
@@ -13913,7 +14118,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             if args.gpulayers==-1 and args.model_param and os.path.exists(args.model_param):
                 if (not args.usecpu) and ((args.usecuda is not None) or (args.usevulkan is not None) or sys.platform=="darwin"):
                     if MaxMemory[0] > 0:
-                        extract_modelfile_params(args.model_param,args.sdmodel,args.whispermodel,args.mmproj,args.draftmodel,args.ttsmodel if args.ttsgpu else "",args.embeddingsmodel if args.embeddingsgpu else "", args.musicllm, args.musicdiffusion, args.musicvae)
+                        extract_modelfile_params(args.model_param,args.sdmodel,args.transcribemodel,args.transcribealigner,args.mmproj,args.draftmodel,args.ttsmodel if args.ttsgpu else "",args.embeddingsmodel if args.embeddingsgpu else "", args.musicllm, args.musicdiffusion, args.musicvae)
                         layeramt = autoset_gpu_layers(args.contextsize,args.sdquant,args.batchsize,args.musiclowvram)
                         print(f"Auto Recommended GPU Layers: {layeramt}")
                         args.gpulayers = layeramt
@@ -14130,20 +14335,38 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 exitcounter = 999
                 exit_with_error(3,"Could not load image model: " + imgmodel)
 
-    #handle whisper model
-    if args.whispermodel and args.whispermodel!="":
-        whispermodel = args.whispermodel
+    #handle audio transcription model
+    if args.transcribealigner and not args.transcribemodel:
+        if args.ignoremissing:
+            print("Ignoring --transcribealigner because no --transcribemodel was specified.")
+            args.transcribealigner = None
+        else:
+            exitcounter = 999
+            exit_with_error(2,"--transcribealigner requires --transcribemodel.")
+    if args.transcribemodel and args.transcribemodel!="":
+        whispermodel = args.transcribemodel
         if not whispermodel or not os.path.exists(whispermodel):
             if args.ignoremissing:
-                print(f"Ignoring missing whisper model file: {whispermodel}")
-                args.whispermodel = None
+                print(f"Ignoring missing transcription model file: {whispermodel}")
+                args.transcribemodel = None
             else:
                 exitcounter = 999
-                exit_with_error(2,f"Cannot find whisper model file: {whispermodel}")
+                exit_with_error(2,f"Cannot find transcription model file: {whispermodel}")
         else:
             whispermodel = os.path.abspath(whispermodel)
             fullwhispermodelpath = whispermodel
-            loadok = whisper_load_model(whispermodel)
+            alignermodel = args.transcribealigner
+            if alignermodel and not os.path.exists(alignermodel):
+                if args.ignoremissing:
+                    print(f"Ignoring missing transcription aligner model file: {alignermodel}")
+                    alignermodel = ""
+                    args.transcribealigner = None
+                else:
+                    exitcounter = 999
+                    exit_with_error(2,f"Cannot find transcription aligner model file: {alignermodel}")
+            if alignermodel:
+                alignermodel = os.path.abspath(alignermodel)
+            loadok = whisper_load_model(whispermodel, alignermodel)
             print("Load Audio Transcription Model OK: " + str(loadok))
             if not loadok:
                 exitcounter = 999
@@ -14310,7 +14533,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         with open(os.path.join(embddir, "kcpp_musicui.embd"), mode='rb') as f:
             embedded_musicui = f.read()
             embedded_musicui_gz = gzip.compress(embedded_musicui)
-            if args.musicllm or args.musicdiffusion or args.ttsmodel or args.whispermodel:
+            if args.musicllm or args.musicdiffusion or args.ttsmodel or args.transcribemodel:
                 print("Embedded MusicUI loaded.")
     except Exception:
         print("Could not find Embedded MusicUI.")
@@ -14422,7 +14645,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
             if args.sdmodel:
                 print(f"StableUI is available at {endpoint_url}/sdui/")
-            if args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel:
+            if args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel:
                 print(f"MusicUI is available at {endpoint_url}/musicui/")
         elif global_memory:
             val = global_memory["tunnel_url"]
@@ -14434,7 +14657,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 print(f"Starting llama.cpp secondary WebUI at {endpoint_url}/lcpp/")
                 if args.sdmodel:
                     print(f"StableUI is available at {endpoint_url}/sdui/")
-                if args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel:
+                if args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel:
                     print(f"MusicUI is available at {endpoint_url}/musicui/")
             global_memory["load_complete"] = True
         if args.launch:
@@ -14600,6 +14823,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     args.password,
                     same_terminal=args.cli,
                     load_session=args.agentload,
+                    request_timeout=args.reqtimeout,
                 )
                 if args.cli:
                     raise SystemExit(0 if success else 1)
@@ -14775,14 +14999,15 @@ if __name__ == '__main__':
     sdparsergroup.add_argument("--sdvaedevice", metavar=('[Device ID]'), help=f"VAE device for image generation. GPU index, -1 or 'main' for the main GPU, or 'CPU' (default: {default_sdvaedevice}).", type=sd_get_device_number, default=None)
     sdparsergroup.add_argument("--sdvramlimit", metavar=('[limit MB]'), help="If set, prevent VRAM usage from image gen from using more than this many MB.", type=int, default=0)
 
-    whisperparsergroup = parser.add_argument_group('Whisper Transcription Commands')
-    whisperparsergroup.add_argument("--whispermodel", metavar=('[filename]'), help="Specify a Whisper .bin for speech-to-text or SheetSage2 .gguf for music-to-ABC transcription.", default="")
+    whisperparsergroup = parser.add_argument_group('Audio Transcription Commands')
+    whisperparsergroup.add_argument("--transcribemodel", metavar=('[filename]'), help="Specify a Whisper .bin or Audio.cpp ASR .gguf for speech-to-text, or SheetSage2 .gguf for music-to-ABC transcription.", default="")
+    whisperparsergroup.add_argument("--transcribealigner", metavar=('[filename]'), help="Optional Qwen3 or MMS Forced Aligner GGUF used for word timestamps.", default="")
 
     ttsparsergroup = parser.add_argument_group('TTS Narration Commands')
     ttsparsergroup.add_argument("--ttsmodel", metavar=('[filename]'), help="Specify the TTS Text-To-Speech GGUF model.", default="")
     ttsparsergroup.add_argument("--ttswavtokenizer", metavar=('[filename]'), help="Specify the WavTokenizer GGUF model.", default="")
     ttsparsergroup.add_argument("--ttsgpu", help="Use the GPU for TTS.", action='store_true')
-    ttsparsergroup.add_argument("--ttsmaxlen", help="Limit number of audio tokens generated with TTS.",  type=int, default=default_ttsmaxlen)
+    ttsparsergroup.add_argument("--ttsmaxlen", help="Limit number of words generated with TTS.",  type=int, default=default_ttsmaxlen)
     ttsparsergroup.add_argument("--ttsthreads", metavar=('[threads]'), help="Use a different number of threads for TTS if specified. Otherwise, has the same value as --threads.", type=int, default=0)
     ttsparsergroup.add_argument("--ttsdir", metavar=('[directory]'), help="Select directory containing voices for voice cloning.", default="")
 
@@ -14821,6 +15046,7 @@ if __name__ == '__main__':
     deprecatedgroup = parser.add_argument_group('Deprecated Commands, DO NOT USE!')
     deprecatedgroup.add_argument("--hordeconfig", help=argparse.SUPPRESS, nargs='+')
     deprecatedgroup.add_argument("--sdconfig", help=argparse.SUPPRESS, nargs='+')
+    deprecatedgroup.add_argument("--whispermodel", help=argparse.SUPPRESS, metavar=('[filename]'))
     compatgroup.add_argument("--noblas", help=argparse.SUPPRESS, action='store_true')
     compatgroup3.add_argument("--nommap","--no-mmap", help=argparse.SUPPRESS, action='store_true')
     deprecatedgroup.add_argument("--nopipelineparallel", help=argparse.SUPPRESS, action='store_true') #now to automatically enable when ubatch < batchsize and multigpu

@@ -309,6 +309,7 @@ struct sd_info_outputs
 struct whisper_load_model_inputs
 {
     const char * model_filename = nullptr;
+    const char * aligner_filename = nullptr;
     const char * executable_path = nullptr;
     const int kcpp_main_gpu = -1;
     const char * devices_override = nullptr;
@@ -321,11 +322,13 @@ struct whisper_generation_inputs
     const char * audio_data = nullptr;
     const bool suppress_non_speech = false;
     const char * langcode = nullptr;
+    const char * audiocpp_extra_params_json = "";
 };
 struct whisper_generation_outputs
 {
     int status = -1;
     const char * text = "";
+    const char * metadata_json = "";
 };
 
 struct tts_load_model_inputs

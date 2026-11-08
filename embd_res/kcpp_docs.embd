@@ -370,6 +370,11 @@
                         "text": {
                            "type": "string"
                         },
+                        "words": {
+                           "type": "array",
+                           "description": "Forced-aligner word timestamps when requested.",
+                           "items": {"type": "object", "properties": {"word": {"type": "string"}, "start": {"type": "number"}, "end": {"type": "number"}}, "required": ["word", "start", "end"]}
+                        },
                         "abc": {
                            "type": "string",
                            "description": "SheetSage2 ABC notation. Present on /api/extra/music/transcribe."
@@ -790,7 +795,7 @@
                    },
                    "OpenAITranscriptionRequest": {
                       "type": "object",
-                      "properties": {"file": {"type": "string", "format": "binary"}, "model": {"type": "string"}, "prompt": {"type": "string"}, "language": {"type": "string", "description": "Language code, or auto when omitted."}},
+                      "properties": {"file": {"type": "string", "format": "binary"}, "model": {"type": "string"}, "prompt": {"type": "string"}, "language": {"type": "string", "description": "Language code, or auto when omitted. Required when transcript is supplied."}, "transcript": {"type": "string", "description": "Known transcript to align directly against the audio with the configured forced aligner, bypassing ASR."}, "return_timestamps": {"type": "boolean", "description": "Adds word timestamps from the configured forced aligner. Requires --transcribealigner."}},
                       "required": ["file"]
                    },
                    "OpenAISpeechRequest": {
@@ -1065,13 +1070,13 @@
                    "post": {
                       "security": [{"BearerAuth": []}],
                       "summary": "Create an OpenAI-compatible audio transcription",
-                      "description": "Accepts a multipart audio file plus optional prompt and language. Uses the loaded Whisper model, or an audio-capable multimodal projector when Whisper is unavailable.",
+                      "description": "Accepts a multipart audio file plus optional prompt and language. Uses the loaded Whisper or Audio.cpp ASR model, or an audio-capable multimodal projector when no transcription model is loaded. Set return_timestamps=true with Qwen3-ASR and --transcribealigner to include word timestamps.",
                       "requestBody": {"required": true, "content": {"multipart/form-data": {"schema": {"$ref": "#/components/schemas/OpenAITranscriptionRequest"}}}},
                       "tags": [
                          "v1"
                       ],
                       "responses": {
-                         "200": {"description": "Transcription text.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TranscriptionResult"}}}},
+                         "200": {"description": "Transcription text and optional word timestamps.", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TranscriptionResult"}}}},
                          "401": {"$ref": "#/components/responses/Unauthorized"}
                       }
                    }

@@ -13,6 +13,10 @@ Run the repository script against an Audio.cpp checkout or source snapshot:
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component supertonic
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component yue2
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component sheetsage2
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component qwen3_asr
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component audio8_asr
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component sense_asr
+./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component mms_forced_aligner
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component fish_audio
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component maya1
 ./tools/sync-audiocpp.ps1 -SourceRoot C:\path\to\audio.cpp -Component chatterbox
@@ -104,6 +108,9 @@ exact upstream commit cannot be recorded until a real checkout is supplied.
   cloning, CustomVoice packaged speakers, or VoiceDesign instructions. Base
   cloning automatically uses speaker-embedding-only mode when no reference
   transcript is supplied.
+- `mms_forced_aligner`: Meta MMS-300M CTC forced alignment for supplied audio
+  and transcripts. The native Audio.cpp normalizer supports English and Dutch;
+  other languages require caller-provided ASCII romanization.
 - Later candidates should be added only when their framework closure is small
   and measurable. Existing KoboldCpp MiniMax H3, ACE-Step, Kokoro, OuteTTS,
   Parler, Dia, and Orpheus implementations are not imported.
@@ -236,7 +243,7 @@ KoboldCpp maps its existing `instruction` field to Ming's `freeform` template
 unless `template_name` is supplied explicitly. Ming produces 44.1 kHz mono
 audio in Chinese, English, Japanese, Korean, German, French, or Spanish.
 
-Pass `sheetsage2-orig.gguf` through the existing `--whispermodel` slot to use
+Pass `sheetsage2-orig.gguf` through the existing `--transcribemodel` slot to use
 music-to-ABC transcription instead of Whisper speech-to-text. Both
 `/api/extra/transcribe` and `/v1/audio/transcriptions` return the generated ABC
 in their normal `text` field. The convenience `/api/extra/music/transcribe`
@@ -248,6 +255,39 @@ avoid the model's multi-gigabyte untiled attention allocation. This compatibilit
 bridge occupies the transcription slot, so Whisper and SheetSage2 cannot both be
 resident there at once.
 
+Qwen3-ASR, Audio8-ASR, and SenseVoice GGUF packages use that same
+`--transcribemodel` slot and the existing `/api/extra/transcribe` and
+`/v1/audio/transcriptions` endpoints. Qwen's existing `prompt` field is passed
+as transcription context, while `langcode`/`language` selects a language for
+Qwen3-ASR and SenseVoice; omit it or use `auto` for detection. Requests default
+to fixed-duration text-only chunking, so no separate Silero VAD or Qwen forced
+aligner weights are needed. The JSON endpoints also pass through `max_tokens`,
+`audio_chunk_mode`, `audio_chunk_duration_sec`, `keep_tags`, `enable_itn`,
+`target_language`, `punc`, and `preserve_punctuation` when a model supports
+them. In particular, `keep_tags=true` retains SenseVoice's language, emotion,
+and audio-event tags. Only one Whisper, SheetSage2, or Audio.cpp ASR model can
+occupy the transcription slot at a time.
+
+Qwen3-ASR word timestamps require a separate Qwen3 Forced Aligner package. Pass
+its GGUF with `--transcribealigner`; the recommended upstream package is
+`qwen3-forced-aligner-0.6b-q8_0.gguf`. Set `return_timestamps=true` on the
+KoboldCpp transcription endpoint to add an OpenAI-compatible `words` array to
+its normal JSON response. Each entry contains `word`, `start`, and `end` in
+seconds. Timestamp requests default to clamped word spans and
+punctuation-preserving transcript text. The aligner does not provide diarization.
+The supported alignment languages are English, Chinese, Cantonese, French,
+German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish.
+Supplying `transcript` together with an explicit `language` aligns that known
+text directly against the uploaded audio and bypasses the ASR generation pass.
+
+Alternatively, pass an Audio.cpp MMS-300M Forced Aligner GGUF with
+`--transcribealigner`. MMS runs as a separate CTC alignment session: a supplied
+`transcript` bypasses ASR, while a timestamp-only request first transcribes with
+Qwen3-ASR and then aligns that text against the original audio. Native text
+normalization accepts English (`en`/`eng`) and Dutch (`nl`/`nld`). Other
+languages require ASCII romanized input with `text_normalization` set to
+`pre_romanized`.
+
 ## Intentional compatibility changes
 
 - `otherarch/tts_adapter.cpp`: Kitten TTS 2 sessions fall back to CPU when the
@@ -257,6 +297,9 @@ resident there at once.
 - `src/framework/modules/attention/attention_internal.h`: KoboldCpp lowers
   Audio.cpp's optional private CUDA `ggml_mul_mat_pack4` projection to the
   standard portable linear operation. This keeps upstream GGML unchanged.
+- `src/models/qwen3_asr/session.cpp`: KoboldCpp accepts an
+  `alignment_transcript` request option and routes it directly through the
+  already-loaded forced aligner session.
 
 CosyVoice3's RKNN source files are present only because its loader references
 the optional execution-plan plumbing. `ENGINE_HAVE_RKNN` is not defined and

@@ -1,4 +1,5 @@
 #include "request.h"
+#include "conditioning/conditioner.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -6,6 +7,8 @@
 #include <ctime>
 
 #include "diffusion_engine.h"
+#include "generation.h"
+#include "model/vae/vae.hpp"
 #include "model_definition.h"
 #include "runtime/denoiser.hpp"
 
@@ -66,7 +69,7 @@ namespace sd::pipeline {
         return DISCRETE_SCHEDULER;
     }
 
-    static int64_t resolve_seed(int64_t seed) {
+    int64_t resolve_seed(int64_t seed) {
         if (seed >= 0) {
             return seed;
         }
@@ -127,6 +130,7 @@ namespace sd::pipeline {
         seed                        = sd_img_gen_params->seed;
         batch_count                 = sd_img_gen_params->batch_count;
         qwen_image_layers           = std::max(0, sd_img_gen_params->qwen_image_layers);
+        is_layered_image            = sd->version == VERSION_QWEN_IMAGE_LAYERED;
         clip_skip                   = sd_img_gen_params->clip_skip;
         shifted_timestep            = sd_img_gen_params->sample_params.shifted_timestep;
         strength                    = sd_img_gen_params->strength;
@@ -137,8 +141,18 @@ namespace sd::pipeline {
         pm_params                   = sd_img_gen_params->pm_params;
         pulid_params                = sd_img_gen_params->pulid_params;
         hires                       = sd_img_gen_params->hires;
+        vae_tiling_params           = sd_img_gen_params->vae_tiling_params;
         cache_params                = &sd_img_gen_params->cache;
+        sample_params               = sd_img_gen_params->sample_params;
         resolve(sd);
+        if (!sd_img_gen_params->control_image.data)
+            models.erase("control_net");
+        if (!sd_img_gen_params->ip_adapter_image.data)
+            models.erase("ip_adapter");
+        if (!pm_params.id_images || pm_params.id_images_count <= 0)
+            models.erase("photo_maker");
+        if (!pulid_params.id_embedding_path || !*pulid_params.id_embedding_path)
+            models.erase("pulid_weights");
     }
 
     GenerationRequest::GenerationRequest(StableDiffusionGGML* sd, const sd_vid_gen_params_t* sd_vid_gen_params) {
@@ -166,7 +180,20 @@ namespace sd::pipeline {
         guidance                    = sd_vid_gen_params->sample_params.guidance;
         high_noise_guidance         = sd_vid_gen_params->high_noise_sample_params.guidance;
         hires                       = sd_vid_gen_params->hires;
+        vae_tiling_params           = sd_vid_gen_params->vae_tiling_params;
+        sample_params               = sd_vid_gen_params->sample_params;
+        high_noise_sample_params    = sd_vid_gen_params->high_noise_sample_params;
+        use_high_noise              = sd->high_noise_diffusion_model != nullptr;
+        use_vace                    = sd->diffusion_model && (sd->diffusion_model->get_desc() == "Wan2.1-VACE-1.3B" ||
+                                                              sd->diffusion_model->get_desc() == "Wan2.x-VACE-14B");
+        shifted_timestep            = sample_params.shifted_timestep;
+        if (sd->config_ && sd->config_->animatediff_loaded && sd_version_supports_animatediff(sd->version))
+            frames = std::min(requested_frames, 32);
         resolve(sd);
+        models.erase("control_net");
+        models.erase("ip_adapter");
+        models.erase("photo_maker");
+        models.erase("pulid_weights");
         if (frames != requested_frames) {
             LOG_WARN("align video frames from %d to %d for %s",
                      requested_frames,
@@ -199,6 +226,10 @@ namespace sd::pipeline {
                  *target_width,
                  *target_height,
                  spatial_multiple);
+    }
+
+    int64_t GenerationRequest::seed_for_batch(int index) const {
+        return static_cast<int64_t>((static_cast<uint64_t>(seed) + index) & INT64_MAX);
     }
 
     void GenerationRequest::resolve_hires() {
@@ -307,6 +338,23 @@ namespace sd::pipeline {
     }
 
     void GenerationRequest::resolve(StableDiffusionGGML* sd) {
+        if (sd->config_) {
+            models = sd->config_->models;
+            if (!use_high_noise)
+                models.erase("high_noise_diffusion_model");
+            if (!sd->clip_vision)
+                models.erase("clip_vision");
+            if (!sd->audio_vae_model || frames <= 0)
+                models.erase("audio_vae");
+            if (!sd->audio_encoder || frames <= 0)
+                models.erase("audio_encoder");
+            if (!sd->config_->animatediff_loaded || !sd_version_supports_animatediff(sd->version) || frames <= 0)
+                models.erase("motion_module");
+            if (sd->uses_tae() && !sd->tae_preview_only())
+                models.erase("vae");
+            else
+                models.erase("taesd");
+        }
         if (sd_version_is_minit2i(sd->version) && (width != 512 || height != 512)) {
             width  = 512;
             height = 512;
@@ -314,7 +362,11 @@ namespace sd::pipeline {
         }
         align_generation_request_size();
         resolve_hires();
+        if (sd->first_stage_model)
+            vae_tiling_params = sd->first_stage_model->resolve_tiling_params(vae_tiling_params);
         seed = resolve_seed(seed);
+        if (sd->cond_stage_model)
+            clip_skip = sd->cond_stage_model->resolve_clip_skip(clip_skip);
 
         resolve_guidance(sd, &guidance, &use_uncond, &use_img_uncond, has_ref_images);
         if (sd->high_noise_diffusion_model) {
@@ -330,33 +382,44 @@ namespace sd::pipeline {
             LOG_WARN("timestep shifting is only supported for SDXL models!");
             shifted_timestep = 0;
         }
+        sample_params.guidance         = guidance;
+        sample_params.shifted_timestep = shifted_timestep;
+        sample_params.sample_method    = resolve_sample_method(sd, sample_params.sample_method);
+        sample_params.scheduler        = resolve_scheduler(sd, sample_params.scheduler, sample_params.sample_method);
+        sample_params.eta              = resolve_eta(sd, sample_params.eta, sample_params.sample_method);
+        if (frames > 0) {
+            high_noise_sample_params.guidance      = high_noise_guidance;
+            high_noise_sample_params.sample_method = resolve_sample_method(sd, high_noise_sample_params.sample_method);
+            high_noise_sample_params.scheduler     = resolve_scheduler(sd, high_noise_sample_params.scheduler, high_noise_sample_params.sample_method);
+            high_noise_sample_params.eta           = resolve_eta(sd, high_noise_sample_params.eta, high_noise_sample_params.sample_method);
+        }
     }
 
     SamplePlan::SamplePlan(StableDiffusionGGML* sd,
                            const sd_img_gen_params_t* sd_img_gen_params,
                            const GenerationRequest& request) {
-        sample_method     = sd_img_gen_params->sample_params.sample_method;
-        extra_sample_args = sd_img_gen_params->sample_params.extra_sample_args;
-        eta               = sd_img_gen_params->sample_params.eta;
-        sample_steps      = sd_img_gen_params->sample_params.sample_steps;
-        resolve(sd, &request, &sd_img_gen_params->sample_params);
+        sample_method     = request.sample_params.sample_method;
+        extra_sample_args = request.sample_params.extra_sample_args;
+        eta               = request.sample_params.eta;
+        sample_steps      = request.sample_params.sample_steps;
+        resolve(sd, &request, &request.sample_params);
     }
 
     SamplePlan::SamplePlan(StableDiffusionGGML* sd,
                            const sd_vid_gen_params_t* sd_vid_gen_params,
                            const GenerationRequest& request) {
-        sample_method     = sd_vid_gen_params->sample_params.sample_method;
-        extra_sample_args = sd_vid_gen_params->sample_params.extra_sample_args;
-        eta               = sd_vid_gen_params->sample_params.eta;
-        sample_steps      = sd_vid_gen_params->sample_params.sample_steps;
+        sample_method     = request.sample_params.sample_method;
+        extra_sample_args = request.sample_params.extra_sample_args;
+        eta               = request.sample_params.eta;
+        sample_steps      = request.sample_params.sample_steps;
         if (sd->high_noise_diffusion_model) {
-            high_noise_sample_steps      = sd_vid_gen_params->high_noise_sample_params.sample_steps;
-            high_noise_sample_method     = sd_vid_gen_params->high_noise_sample_params.sample_method;
-            high_noise_extra_sample_args = sd_vid_gen_params->high_noise_sample_params.extra_sample_args;
-            high_noise_eta               = sd_vid_gen_params->high_noise_sample_params.eta;
+            high_noise_sample_steps      = request.high_noise_sample_params.sample_steps;
+            high_noise_sample_method     = request.high_noise_sample_params.sample_method;
+            high_noise_extra_sample_args = request.high_noise_sample_params.extra_sample_args;
+            high_noise_eta               = request.high_noise_sample_params.eta;
         }
         moe_boundary = sd_vid_gen_params->moe_boundary;
-        resolve(sd, &request, &sd_vid_gen_params->sample_params);
+        resolve(sd, &request, &request.sample_params);
     }
 
     void SamplePlan::resolve(StableDiffusionGGML* sd,
@@ -382,10 +445,10 @@ namespace sd::pipeline {
                 }
             }
         } else {
-            scheduler_t scheduler = resolve_scheduler(sd,
-                                                      sample_params->scheduler,
-                                                      sample_method);
-            int sample_seq_len    = sd->get_image_seq_len(request->height, request->width);
+            scheduler          = resolve_scheduler(sd,
+                                                   sample_params->scheduler,
+                                                   sample_method);
+            int sample_seq_len = sd->get_image_seq_len(request->height, request->width);
             if (sd_version_is_ltxav(sd->version) && request->frames > 0) {
                 int latent_frames = ((request->frames - 1) / 8) + 1;
                 sample_seq_len *= latent_frames;

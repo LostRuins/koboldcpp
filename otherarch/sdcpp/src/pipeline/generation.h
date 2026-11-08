@@ -2,6 +2,7 @@
 #define __SD_PIPELINE_GENERATION_H__
 
 #include "conditioning/conditioner.hpp"
+#include "json.hpp"
 #include "stable-diffusion.h"
 
 class StableDiffusionGGML;
@@ -54,14 +55,16 @@ namespace sd::pipeline {
     bool generate_image(StableDiffusionGGML* sd,
                         const sd_img_gen_params_t* sd_img_gen_params,
                         sd_image_t** images_out,
-                        int* num_images_out);
+                        int* num_images_out,
+                        std::vector<nlohmann::json>* infos_out = nullptr);
 
     bool generate_video(StableDiffusionGGML* sd,
                         const sd_vid_gen_params_t* sd_vid_gen_params,
                         sd_image_t** frames_out,
                         int* num_frames_out,
                         sd_audio_t** audio_out,
-                        int* fps_out);
+                        int* fps_out,
+                        nlohmann::json* info_out = nullptr);
 
     sd::Tensor<float> upscale_ltx_spatial_video_latent(StableDiffusionGGML* sd,
                                                        const char* model_path,

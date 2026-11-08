@@ -502,7 +502,7 @@ static int cts_offset = 151672;
 static int space_id = 151670;
 static int code_terminate_id = 151670;
 static int nthreads = 4;
-static int tts_max_len = 4096;
+static int tts_max_len = 8192;
 
 static std::string save_tts_audio_base64(const std::vector<float> & audio, int sample_rate, bool use_mp3)
 {
@@ -1198,7 +1198,7 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
 
     // main loop
     n_decode = 0;
-    n_predict = tts_max_len; //max 4096 tokens
+    n_predict = 4096; //max 4096 tokens
 
     while (n_decode <= n_predict)
     {

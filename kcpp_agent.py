@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """A tiny, cross-platform OpenAI Chat Completions-compatible local agent, for use in KoboldCpp.
 
-Nine built-in tools, plus tools exposed by an MCP server:
+Ten built-in tools, plus tools exposed by an MCP server:
   - read
   - write
   - edit
+  - delete
   - shell
   - glob
   - grep
@@ -33,6 +34,7 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import threading
@@ -56,7 +58,13 @@ NORMAL_TOOL_RESULT_DISPLAY_CHARS = 8000
 COMPACT_TOOL_RESULT_DISPLAY_CHARS = 600
 MAX_AGENT_STEPS = 48
 MAX_FETCH_BYTES = 4000000
-MAX_VIEW_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_VIEW_IMAGE_BYTES = 16 * 1024 * 1024
+SUPPORTED_ATTACHMENT_MIME_TYPES = frozenset({
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+})
 MAX_MCP_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_PROJECT_INSTRUCTION_CHARS = 12000
 DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:5001/v1")
@@ -67,6 +75,7 @@ API_SSL_CONTEXT = ssl._create_unverified_context()
 COLOR_STDOUT = False
 COLOR_STDERR = False
 DEFAULT_TEMPERATURE = 0.4
+DEFAULT_REQUEST_TIMEOUT = 600
 ESCAPE_DISAMBIGUATION_SECONDS = 0.05
 ESCAPE_SEQUENCE_QUIET_SECONDS = 0.01
 ESCAPE_SEQUENCE_DRAIN_SECONDS = 0.10
@@ -611,6 +620,26 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "delete",
+            "description": "Delete a file or directory. Directory deletion requires allow_delete_directories=true and is only permitted within the current working directory tree.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file or directory."},
+                    "allow_delete_directories": {
+                        "type": "boolean",
+                        "description": "Allow recursive deletion of a directory (default: false). Target directory must be within the current working directory.",
+                        "default": False,
+                    },
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "shell",
             "description": f"Run a command in {SHELL_DESCRIPTION} and return stdout, stderr, and exit code. Can be used to execute arbitrary commands or applications on the local system. Large output may be truncated, so prefer focused commands.",
             "parameters": {
@@ -850,6 +879,106 @@ def tool_edit(args: dict[str, Any]) -> str:
 
     path.write_text(updated, encoding="utf-8")
     return f"Edited {path}; replaced {replaced} occurrence(s)"
+
+
+def path_is_windows_junction(path: Path) -> bool:
+    """Return whether path is a Windows directory junction without following it."""
+    if os.name != "nt":
+        return False
+    try:
+        path_stat = path.lstat()
+    except OSError:
+        return False
+    attributes = getattr(path_stat, "st_file_attributes", 0)
+    reparse_tag = getattr(path_stat, "st_reparse_tag", 0)
+    return bool(
+        attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+        and reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+    )
+
+
+def nested_mount_in_directory(path: Path) -> Path | None:
+    """Find a nested mount point without traversing symbolic links or junctions."""
+    pending = [path]
+    while pending:
+        current = pending.pop()
+        with os.scandir(current) as entries:
+            for entry in entries:
+                child = Path(entry.path)
+                if entry.is_symlink() or path_is_windows_junction(child):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    if os.path.ismount(child):
+                        return child
+                    pending.append(child)
+    return None
+
+
+def tool_delete(
+    args: dict[str, Any],
+    *,
+    shell_enabled: bool = False,
+) -> str:
+    path = Path(args["path"])
+    allow_directories = args.get("allow_delete_directories", False)
+    if not isinstance(allow_directories, bool):
+        raise ValueError("allow_delete_directories must be true or false")
+    shell_retry_hint = (
+        "Caution: If this is intentional, you can optionally reattempt this using the 'shell' tool instead."
+    )
+
+    def safety_error(message: str) -> ValueError:
+        if shell_enabled:
+            message += f". {shell_retry_hint}"
+        return ValueError(message)
+
+    if path.is_symlink():
+        path.unlink()
+        return f"Deleted symbolic link {path}"
+    if path_is_windows_junction(path):
+        path.rmdir()
+        return f"Deleted directory junction {path}"
+    if path.is_file():
+        path.unlink()
+        return f"Deleted {path}"
+    if not path.exists():
+        raise FileNotFoundError(f"No such file or directory: {path}")
+    if not path.is_dir():
+        raise safety_error(f"Refusing to delete unsupported file type: {path}")
+    if not allow_directories:
+        raise IsADirectoryError(
+            f"Refusing to delete directory without allow_delete_directories=true: {path}"
+        )
+
+    resolved_path = path.resolve(strict=True)
+    workdir = Path.cwd().resolve()
+    if resolved_path == workdir:
+        raise safety_error(f"Refusing to delete the working directory root: {path}")
+    try:
+        workdir.relative_to(resolved_path)
+    except ValueError:
+        pass
+    else:
+        raise safety_error(
+            f"Refusing to delete a directory containing the working directory: {path}"
+        )
+    try:
+        resolved_path.relative_to(workdir)
+    except ValueError:
+        raise safety_error(
+            f"Refusing to recursively delete a directory outside the working directory: {path}"
+        ) from None
+    if os.path.ismount(resolved_path):
+        raise safety_error(f"Refusing to recursively delete a mount point: {path}")
+    nested_mount = nested_mount_in_directory(resolved_path)
+    if nested_mount is not None:
+        raise safety_error(
+            "Refusing to recursively delete a directory containing a mount point: "
+            f"{nested_mount}"
+        )
+
+    shutil.rmtree(path)
+    return f"Deleted directory recursively: {path}"
 
 
 def tool_shell(args: dict[str, Any]) -> str:
@@ -1191,6 +1320,7 @@ TOOL_IMPL = {
     "read": tool_read,
     "write": tool_write,
     "edit": tool_edit,
+    "delete": tool_delete,
     "shell": tool_shell,
     "ask_user": tool_ask_user,
     "glob": tool_glob,
@@ -1515,8 +1645,8 @@ def write_path_requires_confirmation(
     args: dict[str, Any],
     workdir: Path | None = None,
 ) -> bool:
-    """Return whether an auto-mode write/edit needs explicit confirmation."""
-    if name not in {"write", "edit"}:
+    """Return whether an auto-mode write/edit/delete needs explicit confirmation."""
+    if name not in {"write", "edit", "delete"}:
         return False
     return not path_is_within_workdir(args.get("path"), workdir)
 
@@ -1530,7 +1660,7 @@ def auto_mode_manual_confirmation_reason(
     if name == "shell":
         return "Shell commands require explicit confirmation in auto mode."
     if write_path_requires_confirmation(name, args, workdir):
-        return "Write/edit outside the working directory requires explicit confirmation."
+        return "Write/edit/delete outside the working directory requires explicit confirmation."
     return None
 
 
@@ -1567,7 +1697,7 @@ def deterministic_auto_approval(
 ) -> str | None:
     """Return an approval label for clearly safe auto-mode built-in calls."""
     path_value: Any
-    if name in {"read", "write", "edit", "view_image"}:
+    if name in {"read", "write", "edit", "delete", "view_image"}:
         path_value = args.get("path")
     elif name in {"glob", "grep"}:
         path_value = args.get("path", ".")
@@ -1586,6 +1716,35 @@ def deterministic_auto_approval(
     return "Approved automatically (action inside workdir)."
 
 
+def read_image_data_url(
+    path: Path,
+    *,
+    supported_formats_only: bool = False,
+) -> tuple[str, str, int]:
+    """Read an image from disk and return its data URL, MIME type, and size."""
+    if not path.is_file():
+        raise FileNotFoundError(f"No such image file: {path}")
+
+    with path.open("rb") as image_file:
+        image_bytes = image_file.read(MAX_VIEW_IMAGE_BYTES + 1)
+    if not image_bytes:
+        raise ValueError("image file is empty")
+    if len(image_bytes) > MAX_VIEW_IMAGE_BYTES:
+        raise ValueError(f"image file exceeds {MAX_VIEW_IMAGE_BYTES // (1024 * 1024)} MiB limit")
+
+    mime_type = mimetypes.guess_type(path.name)[0] or "image/unknown"
+    if supported_formats_only and mime_type not in SUPPORTED_ATTACHMENT_MIME_TYPES:
+        supported = ", ".join(sorted(
+            mime_type.removeprefix("image/")
+            for mime_type in SUPPORTED_ATTACHMENT_MIME_TYPES
+        ))
+        raise ValueError(f"unsupported image format; supported formats: {supported}")
+    if not mime_type.startswith("image/"):
+        mime_type = "image/unknown"
+    image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    return image_url, mime_type, len(image_bytes)
+
+
 def tool_view_image(
     args: dict[str, Any],
     base_url: str,
@@ -1596,24 +1755,12 @@ def tool_view_image(
     reasoning_effort: str | None = None,
 ) -> str:
     path = Path(args["path"]).expanduser()
-    if not path.is_file():
-        raise FileNotFoundError(f"No such image file: {path}")
     inquiry = args.get("inquiry_prompt")
     if inquiry is not None and not isinstance(inquiry, str):
         raise ValueError("inquiry must be a string")
     inquiry = (inquiry or "").strip() or "Describe this image in detail."
 
-    with path.open("rb") as image_file:
-        image_bytes = image_file.read(MAX_VIEW_IMAGE_BYTES + 1)
-    if not image_bytes:
-        raise ValueError("image file is empty")
-    if len(image_bytes) > MAX_VIEW_IMAGE_BYTES:
-        raise ValueError(f"image file exceeds {MAX_VIEW_IMAGE_BYTES // (1024 * 1024)} MiB limit")
-
-    mime_type = mimetypes.guess_type(path.name)[0] or "image/unknown"
-    if not mime_type.startswith("image/"):
-        mime_type = "image/unknown"
-    image_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode('ascii')}"
+    image_url, _, _ = read_image_data_url(path)
     prompt = (
         f"{inquiry}\n\nDo not hallucinate results if no image is visible. If the image is missing or cannot be viewed, respond with 'Error: Image Vision Failed'."
     )
@@ -2414,6 +2561,7 @@ def print_runtime_status(
     reasoning_effort: str | None = None,
     autocompact_tokens: int | None = None,
     mcp_status: str = "off",
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
 ) -> None:
     max_tokens_status = str(max_tokens) if max_tokens is not None else "server default"
     print(color("Current status:", ANSI_BOLD_CYAN))
@@ -2421,6 +2569,7 @@ def print_runtime_status(
     print(color("Endpoint:", ANSI_CYAN) + f" {base_url}")
     print(color("Working directory:", ANSI_CYAN) + f" {Path.cwd()}")
     print(color("Max output tokens:", ANSI_CYAN) + f" {max_tokens_status}")
+    print(color("Request timeout:", ANSI_CYAN) + f" {request_timeout} seconds")
     print(color("Reasoning effort:", ANSI_CYAN) + f" {reasoning_effort or 'default'}")
     print(color("Max agent steps:", ANSI_CYAN) + f" {max_agent_steps}")
     autocompact_status = (
@@ -2449,10 +2598,12 @@ def print_runtime_help(
     reasoning_effort: str | None = None,
     autocompact_tokens: int | None = None,
     mcp_status: str = "off",
+    request_timeout: int = DEFAULT_REQUEST_TIMEOUT,
 ) -> None:
     rows = (
         ("/help", "Show this help"),
         ("/paste", "Enter multiline input; finish with /end."),
+        ("/attach IMAGE", "Attach a JPEG, PNG, WebP, or GIF to the next user turn"),
         ("/save FILE", "Save conversation and settings as JSON"),
         ("/load FILE", "Load conversation and settings from JSON"),
         ("/clear", "Clear history and refresh MCP tools"),
@@ -2462,6 +2613,7 @@ def print_runtime_help(
         ("/usage", "Show token usage for the latest model request"),
         ("/autocompact [N|off]", "Show, set, or disable automatic compaction by context tokens"),
         ("/maxsteps [N]", "Show or set the maximum model turns per user message (N >= 1)"),
+        ("/timeout [SECONDS]", "Show or set the request timeout in seconds (SECONDS >= 1)"),
         ("/workdir", "Show the current working directory"),
         ("/workdir PATH", "Change directory and clear the session"),
         ("/mcp", "Configure the MCP endpoint or turn MCP off"),
@@ -2489,7 +2641,7 @@ def print_runtime_help(
     print_runtime_status(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
         tool_confirmation, max_agent_steps, reasoning_effort, autocompact_tokens,
-        mcp_status,
+        mcp_status, request_timeout,
     )
     print()
 
@@ -2608,6 +2760,7 @@ def run_agent(
     max_agent_steps: int = MAX_AGENT_STEPS,
     load_session: Path | None = None,
     reasoning_effort: str | None = None,
+    request_timeout_override: int | None = None,
 ) -> None:
     global MAX_TOOL_RESULT_CHARS
 
@@ -2625,7 +2778,11 @@ def run_agent(
         confirmation_mode = session["confirmation_mode"]
         tool_confirmation = session["tool_confirmation"]
         no_color = session["no_color"]
-        request_timeout = session["request_timeout"]
+        request_timeout = (
+            session["request_timeout"]
+            if request_timeout_override is None
+            else request_timeout_override
+        )
         MAX_TOOL_RESULT_CHARS = session["max_tool_result_chars"]
         configure_colors(disabled=no_color)
     else:
@@ -2722,6 +2879,7 @@ def run_agent(
     )
     last_usage: dict[str, int] | None = None
     pending_interruption = session["pending_interruption"] if session is not None else False
+    pending_attachments: list[dict[str, Any]] = []
 
     def compact_current_session(
         *,
@@ -2765,6 +2923,7 @@ def run_agent(
         base_url, model, confirmation_mode, show_reasoning, verbose, max_tokens,
         tool_confirmation, max_agent_steps, reasoning_effort, autocompact_tokens,
         mcp_status_text(base_url, mcp_follows_model, mcp_endpoint, mcp_api_key),
+        request_timeout,
     )
     print("\nKoboldCpp Agent has full shell access, exercise caution when approving commands.")
     print("Type " + color("/help", ANSI_YELLOW) + " for runtime commands.\n")
@@ -2808,6 +2967,36 @@ def run_agent(
                 mcp_status_text(
                     base_url, mcp_follows_model, mcp_endpoint, mcp_api_key
                 ),
+                request_timeout,
+            )
+            continue
+        if command == "/attach":
+            requested = command_arg
+            if len(requested) >= 2 and requested[0] == requested[-1] and requested[0] in "\"'":
+                requested = requested[1:-1]
+            if not requested:
+                print("Usage: /attach IMAGE\n")
+                continue
+            path = Path(requested).expanduser()
+            try:
+                image_url, mime_type, image_size = read_image_data_url(
+                    path,
+                    supported_formats_only=True,
+                )
+                resolved_path = path.resolve()
+            except (OSError, ValueError) as exc:
+                print(f"Cannot attach image: {exc}\n")
+                continue
+            pending_attachments.append({
+                "type": "image_url",
+                "image_url": {"url": image_url},
+            })
+            count = len(pending_attachments)
+            noun = "attachment" if count == 1 else "attachments"
+            print(
+                f"Attached for next turn: {resolved_path} "
+                f"({mime_type}, {image_size:,} bytes). "
+                f"{count} pending {noun}.\n"
             )
             continue
         if command == "/maxsteps":
@@ -2818,6 +3007,15 @@ def run_agent(
                     print("Usage: /maxsteps [N] (N must be a positive integer)\n")
                     continue
             print(f"Max agent steps: {max_agent_steps}\n")
+            continue
+        if command == "/timeout":
+            if command_arg:
+                try:
+                    request_timeout = positive_int(command_arg)
+                except (ValueError, argparse.ArgumentTypeError):
+                    print("Usage: /timeout [SECONDS] (SECONDS must be a positive integer)\n")
+                    continue
+            print(f"Request timeout: {request_timeout} seconds.\n")
             continue
         if command == "/usage":
             if command_arg:
@@ -2882,6 +3080,7 @@ def run_agent(
                 print(f"Cannot load session: {exc}\n")
                 continue
             messages[:] = session["messages"]
+            pending_attachments.clear()
             last_usage = None
             temperature = float(session["temperature"])
             max_tokens = session["max_tokens"]
@@ -2912,6 +3111,7 @@ def run_agent(
                 mcp_status_text(
                     base_url, mcp_follows_model, mcp_endpoint, mcp_api_key
                 ),
+                request_timeout,
             )
             print()
             continue
@@ -2946,12 +3146,14 @@ def run_agent(
                 disabled_tools.remove(name)
             refresh_mcp_tools()
             messages[:] = [{"role": "system", "content": system_prompt(disabled_tools)}]
+            pending_attachments.clear()
             last_usage = None
             pending_interruption = False
             print(f"{name} is now {setting}. Conversation cleared.\n")
             continue
         if command == "/clear" and not command_arg:
             messages[:] = [{"role": "system", "content": system_prompt(disabled_tools)}]
+            pending_attachments.clear()
             last_usage = None
             pending_interruption = False
             refresh_mcp_tools()
@@ -2982,6 +3184,7 @@ def run_agent(
                 print(f"Cannot change working directory: {exc}\n")
                 continue
             messages[:] = [{"role": "system", "content": system_prompt(disabled_tools)}]
+            pending_attachments.clear()
             last_usage = None
             pending_interruption = False
             refresh_mcp_tools()
@@ -3103,15 +3306,35 @@ def run_agent(
             print(f"Unknown command: {command}. Type /help for available commands.\n")
             continue
 
+        attachments = pending_attachments
+        pending_attachments = []
         if pending_interruption:
             corrected_text = f"{INTERRUPTED_TASK_NOTICE}\n{user_text}"
             if messages[-1]["role"] == "user":
-                messages[-1]["content"] += f"\n\n{corrected_text}"
+                existing_content = messages[-1].get("content")
+                if isinstance(existing_content, str) and not attachments:
+                    messages[-1]["content"] = f"{existing_content}\n\n{corrected_text}"
+                else:
+                    if isinstance(existing_content, str):
+                        content_parts = [{"type": "text", "text": existing_content}]
+                    elif isinstance(existing_content, list):
+                        content_parts = list(existing_content)
+                    else:
+                        content_parts = []
+                    content_parts.append({"type": "text", "text": corrected_text})
+                    content_parts.extend(attachments)
+                    messages[-1]["content"] = content_parts
             else:
-                messages.append({"role": "user", "content": corrected_text})
+                content: str | list[dict[str, Any]] = corrected_text
+                if attachments:
+                    content = [{"type": "text", "text": corrected_text}, *attachments]
+                messages.append({"role": "user", "content": content})
             pending_interruption = False
         else:
-            messages.append({"role": "user", "content": user_text})
+            content = user_text
+            if attachments:
+                content = [{"type": "text", "text": user_text}, *attachments]
+            messages.append({"role": "user", "content": content})
 
         # Continue calling the model until it returns a normal assistant answer.
         for _ in range(max_agent_steps):
@@ -3318,6 +3541,15 @@ def run_agent(
                                             args, base_url, api_key, model,
                                             max_tokens, request_timeout, reasoning_effort,
                                         )
+                                    elif name == "delete":
+                                        shell_enabled = any(
+                                            tool["function"]["name"] == "shell"
+                                            for tool in available_tools
+                                        )
+                                        result = tool_delete(
+                                            args,
+                                            shell_enabled=shell_enabled,
+                                        )
                                     else:
                                         result = TOOL_IMPL[name](args)
                                 except subprocess.TimeoutExpired:
@@ -3418,7 +3650,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--request-timeout",
         type=positive_int,
-        default=600,
+        default=DEFAULT_REQUEST_TIMEOUT,
         metavar="SECONDS",
         help="Model request timeout in seconds (default: %(default)s)",
     )
@@ -3428,9 +3660,9 @@ def parse_args() -> argparse.Namespace:
         default="on",
         help=(
             "Default tool confirmation: 'on' asks, 'off' approves, and 'auto' "
-            "approves non-destructive built-in actions inside the working directory "
+            "approves eligible built-in actions inside the working directory "
             "and asks when automatic review does not approve. Shell commands and "
-            "write/edit paths outside the working directory always ask in auto mode "
+            "write/edit/delete paths outside the working directory always ask in auto mode "
             "(default: %(default)s). "
             "Per-tool overrides take precedence; ask_user prompts directly unless overridden."
         ),
@@ -3493,6 +3725,10 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
 
     args = parse_args()
+    request_timeout_explicit = any(
+        value == "--request-timeout" or value.startswith("--request-timeout=")
+        for value in sys.argv[1:]
+    )
     MAX_TOOL_RESULT_CHARS = args.max_tool_result_chars
     configure_colors(disabled=args.no_color)
     try:
@@ -3510,6 +3746,9 @@ def main() -> None:
             request_timeout=args.request_timeout,
             no_color=args.no_color,
             load_session=args.load_session,
+            request_timeout_override=(
+                args.request_timeout if request_timeout_explicit else None
+            ),
         )
     except KeyboardInterrupt:
         print("\nExiting.")

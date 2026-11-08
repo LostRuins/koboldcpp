@@ -13,7 +13,7 @@ Current version indicated by LITEVER below.
 <head>
 	<script id="init-config">
 	/* split: src/config/init-config.js */
-	const LITEVER = 353;
+	const LITEVER = 354;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -11883,17 +11883,21 @@ Current version indicated by LITEVER below.
 			let old_notes = personal_notes;
 			let old_newlineaftermemory = newlineaftermemory;
 
-			let old_extrastopseq = localsettings.extrastopseq;
-			let old_regexreplace_data = localsettings.regexreplace_data;
-			let old_tokenbans = localsettings.tokenbans;
-			let old_placeholder_tags_data = localsettings.placeholder_tags_data;
-			let old_logitbiasdict = localsettings.logitbiasdict;
-			let old_thinking_action = localsettings.thinking_action;
-			let old_start_thinking_tag = localsettings.start_thinking_tag;
-			let old_stop_thinking_tag = localsettings.stop_thinking_tag;
-			let old_think_injected = localsettings.think_injected;
-			let old_strip_thinking_mode = localsettings.strip_thinking_mode;
-			let old_hide_think_stream = localsettings.hide_think_stream;
+			const copy_token_regex_settings = function(target, source) {
+				if(source.extrastopseq !== undefined) target.extrastopseq = source.extrastopseq;
+				if(source.regexreplace_data !== undefined) target.regexreplace_data = source.regexreplace_data;
+				if(source.tokenbans !== undefined) target.tokenbans = source.tokenbans;
+				if(source.placeholder_tags_data !== undefined) target.placeholder_tags_data = source.placeholder_tags_data;
+				if(source.logitbiasdict !== undefined) target.logitbiasdict = source.logitbiasdict;
+				if(source.thinking_action !== undefined) target.thinking_action = source.thinking_action;
+				if(source.start_thinking_tag !== undefined) target.start_thinking_tag = source.start_thinking_tag;
+				if(source.stop_thinking_tag !== undefined) target.stop_thinking_tag = source.stop_thinking_tag;
+				if(source.think_injected !== undefined) target.think_injected = source.think_injected;
+				if(source.strip_thinking_mode !== undefined) target.strip_thinking_mode = source.strip_thinking_mode;
+				if(source.hide_think_stream !== undefined) target.hide_think_stream = source.hide_think_stream;
+			};
+			const old_token_regex_settings = {};
+			copy_token_regex_settings(old_token_regex_settings, localsettings);
 
 			//determine if oldui file or newui file format
 			restart_new_game(false);
@@ -12113,19 +12117,14 @@ Current version indicated by LITEVER below.
 						}
 
 					}
+					else if(loadstopseq)
+					{
+						// Token and regex settings can be loaded independently of general settings.
+						copy_token_regex_settings(localsettings, storyobj.savedsettings);
+					}
 					if(!loadstopseq)
 					{
-						localsettings.extrastopseq = old_extrastopseq;
-						localsettings.regexreplace_data = old_regexreplace_data;
-						localsettings.tokenbans = old_tokenbans;
-						localsettings.placeholder_tags_data = old_placeholder_tags_data;
-						localsettings.logitbiasdict = old_logitbiasdict;
-						localsettings.thinking_action = old_thinking_action;
-						localsettings.start_thinking_tag = old_start_thinking_tag;
-						localsettings.stop_thinking_tag = old_stop_thinking_tag;
-						localsettings.think_injected = old_think_injected;
-						localsettings.strip_thinking_mode = old_strip_thinking_mode;
-						localsettings.hide_think_stream = old_hide_think_stream;
+						copy_token_regex_settings(localsettings, old_token_regex_settings);
 					}
 
 					restore_protected_fields(localsettings,tmp_essentials);
@@ -14212,6 +14211,28 @@ Current version indicated by LITEVER below.
 	var worker_data_showonly = []; //only for table display, dont mix
 	//track worker earn rates
 	var first_seen_workers = {};
+	function worker_supports_vision(elem)
+	{
+		return !!(elem && elem.chat && Array.isArray(elem.chat.features) && elem.chat.features.includes("vision"));
+	}
+	function get_worker_job_icons(elem)
+	{
+		if(!elem || typeof elem!="object") { return ""; }
+		let icons = [];
+		if(elem.accepts_chat_jobs)
+		{
+			icons.push('<span role="img" aria-label="Accepts chat jobs" title="Accepts chat jobs">💬</span>');
+		}
+		if(elem.accepts_prompt_jobs)
+		{
+			icons.push('<span role="img" aria-label="Accepts prompt jobs" title="Accepts prompt jobs">📝</span>');
+		}
+		if(worker_supports_vision(elem))
+		{
+			icons.push('<span role="img" aria-label="Vision enabled" title="Vision enabled">👁️</span>');
+		}
+		return icons.join(" ");
+	}
 	function track_kudos_earnings(wdata)
 	{
 		if(wdata && wdata.length>0)
@@ -14243,7 +14264,7 @@ Current version indicated by LITEVER below.
 					tokenspersec = 0;
 				}
 				worker_data_showonly[i].tokenspersec = parseFloat(tokenspersec);
-				worker_data_showonly[i].jobtypes = (elem.accepts_chat_jobs ? 2 : 0) + (elem.accepts_prompt_jobs ? 1 : 0);
+				worker_data_showonly[i].jobtypes = (worker_supports_vision(elem) ? 4 : 0) + (elem.accepts_chat_jobs ? 2 : 0) + (elem.accepts_prompt_jobs ? 1 : 0);
 				if(elem.models.length>0)
 				{
 					worker_data_showonly[i].defaultmodel = elem.models[0];
@@ -14332,38 +14353,92 @@ Current version indicated by LITEVER below.
 
 	function show_worker_details(workerIndex) {
 		let elem = worker_data_showonly[workerIndex];
-		if (!elem) { return; }
-
-		let tokenspersec = elem.performance.replace(" tokens per second", "");
-		if (tokenspersec.toLowerCase()=="no requests fulfilled yet")
-		{
-			tokenspersec = 0;
-		}
-
-		let acceptedJobs = [];
-		if (elem.accepts_chat_jobs) { acceptedJobs.push("Chat"); }
-		if (elem.accepts_prompt_jobs) { acceptedJobs.push("Prompt"); }
-		if (acceptedJobs.length==0) { acceptedJobs.push("None"); }
+		if (!elem || typeof elem!="object") { return; }
 
 		let kudosRate = "";
-		if(first_seen_workers.hasOwnProperty(elem.id))
+		if(elem.id!==undefined && elem.kudos_rewards!==undefined && first_seen_workers.hasOwnProperty(elem.id))
 		{
 			let firstseen = first_seen_workers[elem.id];
-			let kudosdiff = elem.kudos_rewards - firstseen.startkudos;
+			let kudosdiff = Number(elem.kudos_rewards) - Number(firstseen.startkudos);
 			if(kudosdiff>0)
 			{
 				let hrspassed = ((performance.now() - firstseen.timestamp) / 1000)/3600.0;
-				kudosRate = ` (${(kudosdiff/hrspassed).toFixed(0)}/hr)`;
+				if(hrspassed>0)
+				{
+					kudosRate = ` (${(kudosdiff/hrspassed).toFixed(0)}/hr)`;
+				}
 			}
 		}
 
-		let details =
-			`<b>Capabilities:</b> ${escape_html(String(elem.max_length))} / ${escape_html(String(elem.max_context_length))} (${escape_html(String(tokenspersec))} T/s)<br><br>` +
-			`<b>Jobs:</b> ${escape_html(acceptedJobs.join(", "))}<br><br>` +
-			`<b>Uptime:</b> ${escape_html(String(format_uptime(elem.uptime)))} (${escape_html(String(elem.requests_fulfilled))} jobs)<br><br>` +
-			`<b>Kudos:</b> ${escape_html(elem.kudos_rewards.toFixed(0) + kudosRate)}`;
+		const displayOnlyFields = new Set(["tokenspersec", "jobtypes", "defaultmodel"]);
+		const labelFor = function(key) {
+			let label = String(key).replace(/_/g, " ");
+			return label.charAt(0).toUpperCase() + label.slice(1);
+		};
+		const valueToHtml = function(value, fieldName, seen, isTopLevel=false) {
+			if(value===null)
+			{
+				return '<span style="color:gray">None</span>';
+			}
+			if(typeof value=="boolean")
+			{
+				return value ? "Yes" : "No";
+			}
+			if(typeof value=="string")
+			{
+				return value=="" ? '<span style="color:gray">Empty</span>' : escape_html(value);
+			}
+			if(typeof value=="number" || typeof value=="bigint")
+			{
+				let displayValue = String(value);
+				if(isTopLevel && fieldName=="uptime" && typeof value=="number" && Number.isFinite(value))
+				{
+					displayValue = `${format_uptime(value)} (${value} seconds)`;
+				}
+				if(isTopLevel && fieldName=="kudos_rewards")
+				{
+					displayValue += kudosRate;
+				}
+				return escape_html(displayValue);
+			}
+			if(Array.isArray(value))
+			{
+				if(value.length==0) { return '<span style="color:gray">Empty list</span>'; }
+				if(seen.has(value)) { return '<span style="color:gray">Circular reference</span>'; }
+				seen.add(value);
+				let simpleValues = value.every(item => item===null || typeof item!="object");
+				let list = simpleValues
+					? value.map(item => valueToHtml(item, "", seen)).join(", ")
+					: `<div style="margin-left:1em">${value.map(item => `<div>${valueToHtml(item, "", seen)}</div>`).join("")}</div>`;
+				seen.delete(value);
+				return list;
+			}
+			if(typeof value=="object")
+			{
+				if(seen.has(value)) { return '<span style="color:gray">Circular reference</span>'; }
+				seen.add(value);
+				let properties = Object.keys(value).filter(key => value[key]!==undefined);
+				let nested = properties.length==0
+					? '<span style="color:gray">Empty object</span>'
+					: properties.map(key => `<div><b>${escape_html(labelFor(key))}:</b> ${valueToHtml(value[key], key, seen)}</div>`).join("");
+				seen.delete(value);
+				return `<div style="margin-left:1em">${nested}</div>`;
+			}
+			return escape_html(String(value));
+		};
 
-		msgbox(details, `Worker Details - ${elem.name.substring(0, 40)}`, true, false, hide_msgbox);
+		let fields = Object.keys(elem).filter(key => elem[key]!==undefined && !displayOnlyFields.has(key));
+		let jobCapabilities = get_worker_job_icons(elem);
+		let jobsDetails = jobCapabilities==""
+			? ""
+			: `<div style="margin-bottom:0.6em"><b>Jobs:</b> ${jobCapabilities}</div>`;
+		let detailsContent = fields.length==0
+			? (jobsDetails || '<span style="color:gray">No worker details provided.</span>')
+			: jobsDetails + fields.map(key => `<div style="margin-bottom:0.6em"><b>${escape_html(labelFor(key))}:</b> ${valueToHtml(elem[key], key, new WeakSet(), true)}</div>`).join("");
+		let details = `<div style="box-sizing:border-box; padding:0.75em 1em; text-align:left; line-height:1.4">${detailsContent}</div>`;
+		let workerName = (typeof elem.name=="string" && elem.name!="") ? ` - ${elem.name.substring(0, 40)}` : "";
+
+		msgbox(details, `Worker Details${workerName}`, true, false, hide_msgbox);
 	}
 
 	function show_workers() {
@@ -14371,8 +14446,6 @@ Current version indicated by LITEVER below.
 
 		let str = "";
 		let timenow = performance.now();
-		const chatJobIndicator = '<span role="img" aria-label="Accepts chat jobs" title="Accepts chat jobs">💬</span>';
-		const promptJobIndicator = '<span role="img" aria-label="Accepts prompt jobs" title="Accepts prompt jobs">📝</span>';
 		for (var i = 0; i < worker_data_showonly.length; ++i) {
 			let elem = worker_data_showonly[i];
 			let tokenspersec = elem.performance.replace(" tokens per second", "");
@@ -14403,9 +14476,7 @@ Current version indicated by LITEVER below.
 				if (n > 0) { allmdls += "<br>"; }
 				allmdls += escape_html(elem.models[n].substring(0, 40));
 			}
-			let jobCapabilities = "";
-			if (elem.accepts_chat_jobs) { jobCapabilities = chatJobIndicator; }
-			if (elem.accepts_prompt_jobs) { jobCapabilities += `${jobCapabilities ? " " : ""}${promptJobIndicator}`; }
+			let jobCapabilities = get_worker_job_icons(elem);
 			if (!jobCapabilities) { jobCapabilities = "&mdash;"; }
 			let kudos_per_hr = "";
 			if(first_seen_workers.hasOwnProperty(elem.id))

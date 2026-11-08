@@ -1,4 +1,5 @@
 #include "generation.h"
+#include "generation_info.h"
 
 #include <algorithm>
 #include <cmath>
@@ -774,8 +775,8 @@ namespace sd::pipeline {
                         int source_index = std::min(reference.frame_count - 1,
                                                     static_cast<int>(std::floor(frame * source_fps / 24.0)));
                         auto source      = ensure_image_tensor_channels(
-                                 sd_image_to_tensor(reference.frames[source_index]),
-                                 3);
+                            sd_image_to_tensor(reference.frames[source_index]),
+                            3);
                         if (source.empty()) {
                             LOG_ERROR("invalid frame %d in MiniMax-H3 reference video %d",
                                       source_index + 1,
@@ -943,7 +944,7 @@ namespace sd::pipeline {
                                                                keyframes.shape()[2],
                                                                1,
                                                                1},
-                                                         conditioned_mask);
+                                                              conditioned_mask);
                     latents.denoise_mask    = sd::ops::concat(latents.denoise_mask, keyframe_mask, 2);
                     latents.video_positions = build_ltxv_video_positions(latents.init_latent.shape()[0],
                                                                          latents.init_latent.shape()[1],
@@ -1231,10 +1232,10 @@ namespace sd::pipeline {
                                               inactive.shape()[1],
                                               inactive.shape()[2]});   // [t, h/vae_scale_factor, vae_scale_factor, w/vae_scale_factor, vae_scale_factor]
             mask_context      = mask_context.permute({1, 3, 4, 0, 2})  // [vae_scale_factor, vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
-                               .reshape({inactive.shape()[0],
-                                         inactive.shape()[1],
-                                         inactive.shape()[2],
-                                         request->vae_scale_factor * request->vae_scale_factor});  // [vae_scale_factor*vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
+                                    .reshape({inactive.shape()[0],
+                                              inactive.shape()[1],
+                                              inactive.shape()[2],
+                                              request->vae_scale_factor * request->vae_scale_factor});  // [vae_scale_factor*vae_scale_factor, t, h/vae_scale_factor, w/vae_scale_factor]
 
             if (!ref_image_latent.empty()) {
                 vace_context  = sd::ops::concat(ref_image_latent, vace_context, 2);  // [b, 2*c, t+1, h/vae_scale_factor, w/vae_scale_factor]
@@ -1519,9 +1520,9 @@ namespace sd::pipeline {
 
         auto& upsampler                   = scope.runner;
         upsampler                         = std::make_unique<LTXVUpsampler::LatentUpsamplerRunner>(sd->backend_for(SDBackendModule::UPSCALER),
-                                                                           model_manager->loader().get_tensor_storage_map(),
-                                                                           prefix,
-                                                                           model_manager);
+                                                                                                   model_manager->loader().get_tensor_storage_map(),
+                                                                                                   prefix,
+                                                                                                   model_manager);
         const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
         upsampler->set_max_graph_vram_bytes(max_graph_vram_bytes);
         if (upsampler->model == nullptr) {
@@ -1711,7 +1712,13 @@ namespace sd::pipeline {
         img_gen_params.ref_image_args    = sd_vid_gen_params->ref_image_args;
 
         sd->animatediff_num_frames = n_frames;
-        bool ok                    = generate_image(sd, &img_gen_params, frames_out, num_frames_out);
+        bool ok                    = false;
+        try {
+            ok = generate_image(sd, &img_gen_params, frames_out, num_frames_out);
+        } catch (...) {
+            sd->animatediff_num_frames = 0;
+            throw;
+        }
         sd->animatediff_num_frames = 0;
         return ok;
     }
@@ -1721,14 +1728,24 @@ namespace sd::pipeline {
                         sd_image_t** frames_out,
                         int* num_frames_out,
                         sd_audio_t** audio_out,
-                        int* fps_out) {
+                        int* fps_out,
+                        nlohmann::json* info_out) {
+        if (info_out)
+            *info_out = nlohmann::json();
+        GenerationRequest request(sd, sd_vid_gen_params);
+        const auto info = sd::generation_info(request, *sd_vid_gen_params);
         if (sd->config_->animatediff_loaded && sd_version_supports_animatediff(sd->version)) {
             LOG_INFO("AnimateDiff dispatch: %d frames, %dx%d",
                      sd_vid_gen_params->video_frames, sd_vid_gen_params->width, sd_vid_gen_params->height);
             if (fps_out != nullptr) {
                 *fps_out = std::max(1, sd_vid_gen_params->fps);
             }
-            return generate_animatediff_video(sd, sd_vid_gen_params, frames_out, num_frames_out);
+            auto params   = *sd_vid_gen_params;
+            params.seed   = request.seed;
+            const bool ok = generate_animatediff_video(sd, &params, frames_out, num_frames_out);
+            if (ok && info_out)
+                *info_out = info;
+            return ok;
         }
 
         sd->reset_cancel_flag();
@@ -1738,7 +1755,6 @@ namespace sd::pipeline {
         int64_t t0            = ggml_time_ms();
         sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
         sd->apply_circular_axes(sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);
-        GenerationRequest request(sd, sd_vid_gen_params);
         sd::ImagePreprocessor preprocessing(sd_vid_gen_params->image_preprocess.rules);
         sd_vid_gen_params_t processed_params = *sd_vid_gen_params;
         if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
@@ -1873,9 +1889,9 @@ namespace sd::pipeline {
                                                     embeds.img_uncond,
                                                     sd::Tensor<float>(),
                                                     0.f,
-                                                    sd_vid_gen_params->sample_params.guidance,
+                                                    request.guidance,
                                                     plan.eta,
-                                                    sd_vid_gen_params->sample_params.shifted_timestep,
+                                                    request.shifted_timestep,
                                                     plan.sample_method,
                                                     sd->is_flow_denoiser(),
                                                     plan.extra_sample_args,
@@ -1996,7 +2012,7 @@ namespace sd::pipeline {
             std::vector<float> hires_sigma_sched =
                 make_hires_sigma_schedule(sd,
                                           request.hires,
-                                          sd_vid_gen_params->sample_params,
+                                          request.sample_params,
                                           hires_sample_method,
                                           plan.sample_steps,
                                           sd->get_image_seq_len(hires_request.height, hires_request.width) * T,
@@ -2019,13 +2035,13 @@ namespace sd::pipeline {
                                         x_t,
                                         std::move(noise),
                                         embeds.cond,
-                                      hires_request.use_uncond ? embeds.uncond : SDCondition(),
+                                        hires_request.use_uncond ? embeds.uncond : SDCondition(),
                                         embeds.img_uncond,
                                         sd::Tensor<float>(),
                                         0.f,
-                                        sd_vid_gen_params->sample_params.guidance,
+                                        request.guidance,
                                         hires_eta,
-                                        sd_vid_gen_params->sample_params.shifted_timestep,
+                                        request.shifted_timestep,
                                         hires_sample_method,
                                         sd->is_flow_denoiser(),
                                         plan.extra_sample_args,
@@ -2167,6 +2183,14 @@ namespace sd::pipeline {
                       fps);
             if (want_samples > 0 && want_samples < generated_audio->sample_count) {
                 generated_audio->sample_count = want_samples;
+            }
+        }
+        if (info_out) {
+            try {
+                *info_out = info;
+            } catch (...) {
+                free_sd_audio(generated_audio);
+                throw;
             }
         }
         if (audio_out != nullptr) {

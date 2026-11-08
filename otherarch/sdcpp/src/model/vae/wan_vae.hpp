@@ -1287,9 +1287,11 @@ namespace WAN {
         ggml_tensor* decode_tiled_chunk(GGMLRunnerContext* ctx,
                                         ggml_tensor* z,
                                         int chunk_idx,
-                                        int64_t b = 1) {
+                                        int64_t b         = 1,
+                                        int decode_frames = 1) {
             // z: [b*c, t, h, w]
             GGML_ASSERT(b == 1);
+            GGML_ASSERT(decode_frames >= 1);
 
             auto decoder = std::dynamic_pointer_cast<Decoder3d>(blocks["decoder"]);
             auto conv2   = std::dynamic_pointer_cast<CausalConv3d>(blocks["conv2"]);
@@ -1303,11 +1305,13 @@ namespace WAN {
             }
 
             ggml_tensor* out = nullptr;
-            for (int64_t frame = 0; frame < x->ne[2]; ++frame) {
+            for (int64_t frame = 0; frame < x->ne[2];) {
                 const int global_frame = chunk_idx + static_cast<int>(frame);
-                auto in                = ggml_ext_slice(ctx->ggml_ctx, x, 2, frame, frame + 1);
-                _conv_idx              = 0;
-                auto out_frame         = decoder->forward(ctx, in, b, _feat_map, _conv_idx, global_frame);
+                // The first latent frame bypasses temporal upsampling and primes the causal caches.
+                const int64_t count = !is_2D && global_frame > 0 ? std::min<int64_t>(decode_frames, x->ne[2] - frame) : 1;
+                auto in             = ggml_ext_slice(ctx->ggml_ctx, x, 2, frame, frame + count);
+                _conv_idx           = 0;
+                auto out_frame      = decoder->forward(ctx, in, b, _feat_map, _conv_idx, global_frame);
                 if (is_2D && global_frame > 0) {
                     auto repeated = out_frame;
                     for (int repeat = 1; repeat < 4; ++repeat) {
@@ -1316,6 +1320,7 @@ namespace WAN {
                     out_frame = repeated;
                 }
                 out = out == nullptr ? out_frame : ggml_concat(ctx->ggml_ctx, out, out_frame, 2);
+                frame += count;
             }
             return unpatchify(ctx->ggml_ctx, out, patch_size, b);
         }
@@ -1455,7 +1460,7 @@ namespace WAN {
             return gf;
         }
 
-        ggml_cgraph* build_temporal_tile_graph(const sd::Tensor<float>& z_tensor, int chunk_idx) {
+        ggml_cgraph* build_temporal_tile_graph(const sd::Tensor<float>& z_tensor, int chunk_idx, int decode_frames) {
             ggml_cgraph* gf = new_graph_custom(std::max<size_t>(20480, 10240 * z_tensor.shape()[2]));
 
             ae.clear_cache();
@@ -1469,7 +1474,8 @@ namespace WAN {
 
             auto runner_ctx = get_context(gf);
 
-            ggml_tensor* out = ae.decode_tiled_chunk(&runner_ctx, z, chunk_idx);
+            ggml_tensor* out = ae.decode_tiled_chunk(&runner_ctx, z, chunk_idx, 1,
+                                                     version == VERSION_WAN2_2_TI2V ? decode_frames : 1);
 
             for (size_t feat_idx = 0; feat_idx < ae._feat_map.size(); feat_idx++) {
                 ggml_tensor* feat_cache = ae._feat_map[feat_idx];
@@ -1492,8 +1498,19 @@ namespace WAN {
             stateful_config.overlap                 = 0;
             auto plan                               = make_vae_temporal_tile_plan(input.shape()[2], stateful_config);
 
-            LOG_VERBOSE("Wan VAE stateful temporal tiling: tile_frames=%d, total latent frames=%lld, tiles=%d",
+            if (sd_version_is_wan(version) && !ae.is_2D && plan.tiles.size() > 1 &&
+                plan.tiles.size() <= 3 && plan.tile_frames > 2 &&
+                plan.tiles.back().end - plan.tiles.back().start == 1) {
+                // Longer plans retain full middle tiles, so balancing their tail cannot shrink the largest decoded output.
+                auto& previous = plan.tiles[plan.tiles.size() - 2];
+                auto& last     = plan.tiles.back();
+                --previous.end;
+                --last.start;
+            }
+
+            LOG_VERBOSE("Wan VAE stateful temporal tiling: tile_frames=%d, decode_frames=%d, total latent frames=%lld, tiles=%d",
                         plan.tile_frames,
+                        version == VERSION_WAN2_2_TI2V && !ae.is_2D ? config.decode_frames : 1,
                         (long long)input.shape()[2],
                         (int)plan.tiles.size());
 
@@ -1507,7 +1524,7 @@ namespace WAN {
                             (long long)tile.start,
                             (long long)tile.end);
                 auto get_graph = [&]() -> ggml_cgraph* {
-                    return build_temporal_tile_graph(input_tile, static_cast<int>(tile.start));
+                    return build_temporal_tile_graph(input_tile, static_cast<int>(tile.start), config.decode_frames);
                 };
                 return restore_trailing_singleton_dims(
                     GGMLRunner::compute(get_graph, n_threads, false),

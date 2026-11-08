@@ -1775,8 +1775,11 @@ public:
         ggml_set_input(time_in_.tensor);
         ggml_set_input(spks_in_.tensor);
         ggml_set_input(cond_in_.tensor);
+        // The key mask is identical for every attention head. Keep a singleton
+        // head dimension so backends can broadcast it; ggml-cuda flash attention
+        // only supports masks with mask->ne[2] == 1.
         attention_mask_ =
-            engine::core::make_tensor(ctx, GGML_TYPE_F16, engine::core::TensorShape::from_dims({batch_, weights.config.heads, frames, frames}));
+            engine::core::make_tensor(ctx, GGML_TYPE_F16, engine::core::TensorShape::from_dims({batch_, 1, frames, frames}));
         ggml_set_input(attention_mask_.tensor);
         ggml_set_output(x_in_.tensor);
         ggml_set_output(mu_in_.tensor);

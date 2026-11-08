@@ -183,7 +183,7 @@ namespace sd::backend_fit {
         vm_statistics64_data_t stats{};
         mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
         const bool ok                = host_page_size(host, &page_size) == KERN_SUCCESS &&
-                        host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count) == KERN_SUCCESS;
+                                       host_statistics64(host, HOST_VM_INFO64, (host_info64_t)&stats, &count) == KERN_SUCCESS;
         mach_port_deallocate(mach_task_self(), host);
         if (ok) {
             return ((int64_t)stats.free_count + stats.inactive_count) * page_size;
@@ -262,10 +262,10 @@ namespace sd::backend_fit {
 
             const auto& runtime_devices = plan.runtimes[ci].devices;
             const bool fits_runtime     = !runtime_devices.empty() &&
-                                      std::all_of(runtime_devices.begin(), runtime_devices.end(), [&](size_t di) {
+                                          std::all_of(runtime_devices.begin(), runtime_devices.end(), [&](size_t di) {
                                           const int64_t headroom = headroom_for(ci, di);
                                           return headroom <= remaining[di] && comp.params_bytes <= remaining[di] - headroom;
-                                      });
+                                          });
             if (fits_runtime) {
                 decision.params_location = ParamsLocation::MAIN_GPU;
                 decision.params_device   = runtime_devices.front();
