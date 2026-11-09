@@ -7,6 +7,7 @@
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -447,7 +448,19 @@ bool sd_backend_is_cpu(ggml_backend_t backend) {
         return false;
     }
     auto dev = ggml_backend_get_device(backend);
-    return dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU;
+    if (dev == nullptr) {
+        return false;
+    }
+    // ggml_backend_dev_type() can query the driver on every call (CUDA reads all device
+    // properties), and this check runs inside per-tensor residency loops.
+    static std::mutex mutex;
+    static std::unordered_map<ggml_backend_dev_t, bool> is_cpu_by_device;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = is_cpu_by_device.find(dev);
+    if (it == is_cpu_by_device.end()) {
+        it = is_cpu_by_device.emplace(dev, ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU).first;
+    }
+    return it->second;
 }
 
 static int cuda_compiled_arch(ggml_backend_t backend) {

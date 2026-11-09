@@ -1723,6 +1723,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
         std::vector<std::string> dit_prefix_vec = {
             "transformer_blocks",
             "single_transformer_blocks",
+            "token_refiner",
         };
         for (const auto& prefix : dit_prefix_vec) {
             if (starts_with(name, prefix)) {
