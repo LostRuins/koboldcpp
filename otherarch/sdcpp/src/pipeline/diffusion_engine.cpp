@@ -2458,6 +2458,15 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                                         : sampling_init_latent;
     sd::Tensor<float> denoised                    = x_t;
 
+#ifdef SD_USE_UPSTREAM_GGML
+    // workaround for sd.cpp #2149
+    const auto diffusion_backends = backend_manager.runtime_backends(SDBackendModule::DIFFUSION);
+    const bool batch_cfg_backend_ok = std::none_of(diffusion_backends.begin(), diffusion_backends.end(),
+            [](ggml_backend_t backend) { return sd_backend_is(backend, "MTL"); });
+#else
+    const bool batch_cfg_backend_ok = true;
+#endif
+
     auto denoise = [&](const sd::Tensor<float>& x, float sigma, int step) -> sd::guidance::GuiderOutput {
         if (get_cancel_flag() == SD_CANCEL_ALL) {
             LOG_VERBOSE("cancelling generation");
@@ -2780,6 +2789,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
         }
 
         const bool batch_cfg_ok = config_->params.batched_cfg &&
+                                  batch_cfg_backend_ok &&
                                   sd_version_is_unet(version) &&
                                   !uncond.empty() &&
                                   img_uncond.empty() &&
