@@ -7402,7 +7402,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     gen_payload = {"prompt": prefix+prompt,"max_length": max_length,"temperature": temperature,"top_k": top_k,"top_p": top_p,"rep_pen": rep_pen,"ban_eos_token":ban_eos_token, "stop_sequence":stops}
                     respjson = make_url_request(f'{epurl}/api/v1/generate', gen_payload)
-                    reply = html.escape(respjson["results"][0]["text"])
+                    reply = respjson["results"][0]["text"]
                     if chatmode:
                         reply = " "+reply.strip()
                 status = "Generation Completed"
@@ -7431,30 +7431,38 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         <input type="submit" value="Image Mode">
         </form>'''
 
+        def escape_html(value):
+            return html.escape(str(value), quote=True)
+
         bodycontent = f'''<b><u>{"Image Mode" if imgmode else ("Chat Mode" if chatmode else "Story Mode")}</u></b><br>'''
         optionscontent = ""
         if imgmode:
             randimg = f'<img src="view_image{random.randint(100, 999)}.png" width="320" width="320">'
-            bodycontent += f'''<p>Generated Image: {prompt if prompt else "None"}</p>
+            bodycontent += f'''<p>Generated Image: {escape_html(prompt) if prompt else "None"}</p>
             {randimg if prompt else ""}<br>
             <label>Image Prompt: </label><input type="text" size="40" value="" name="imgprompt">
             <input type="hidden" name="generate" value="Generate" />
             <input type="submit" value="Generate"> (Be patient)'''
         elif chatmode:
-            oldconvo = prompt.strip().replace(f"{human_name}:",f"<b>{human_name}:</b>").replace(f"{bot_name}:",f"<b>{bot_name}:</b>").replace("\n","<br>")
-            oldconvo += f'''<input type="hidden" name="human_name" value="{human_name}"><input type="hidden" name="bot_name" value="{bot_name}">'''
+            safe_human_name = escape_html(human_name)
+            safe_bot_name = escape_html(bot_name)
+            oldconvo = escape_html(prompt.strip())
+            oldconvo = oldconvo.replace(f"{safe_human_name}:", f"<b>{safe_human_name}:</b>")
+            oldconvo = oldconvo.replace(f"{safe_bot_name}:", f"<b>{safe_bot_name}:</b>")
+            oldconvo = oldconvo.replace("\n", "<br>")
+            oldconvo += f'''<input type="hidden" name="human_name" value="{safe_human_name}"><input type="hidden" name="bot_name" value="{safe_bot_name}">'''
             newconvo = '''Start a new conversation.<br>
             <label>Your Name: </label> <input type="text" size="10" value="User" name="human_name"><br>
             <label>Bot Name: </label> <input type="text" size="10" value="Assistant" name="bot_name"><br>'''
             clnprompt = prompt.replace("\n","1HdNl1")
             bodycontent += f'''<p>{newconvo if prompt=="" else oldconvo}</p>
-            <input type="hidden" name="prompt" value="{clnprompt}">
+            <input type="hidden" name="prompt" value="{escape_html(clnprompt)}">
             <label>Say: </label><input type="text" size="40" value="" name="chatmsg">
             <input type="hidden" name="generate" value="Send" />
             <input type="submit" value="Send"> (Be patient)'''
         else:
             bodycontent += f'''
-<textarea name="prompt" cols="60" rows="8" wrap="soft" placeholder="Enter Prompt Here">{prompt}</textarea><br>
+<textarea name="prompt" cols="60" rows="8" wrap="soft" placeholder="Enter Prompt Here">{escape_html(prompt)}</textarea><br>
 <input type="hidden" name="generate" value="Generate" />
 <input type="submit" value="Generate"> (Be patient)
 '''
@@ -7482,7 +7490,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 <form action="/noscript">
 {bodycontent}
 <hr>
-<b>{status}</b><br>
+<b>{escape_html(status)}</b><br>
 <hr>
 {optionscontent}
 <input type="hidden" name="chatmode" value="{chatmode}">
