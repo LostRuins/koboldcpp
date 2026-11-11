@@ -8,6 +8,10 @@
 //Python will ALWAYS provide the memory, we just write to it.
 
 #include <cstring>
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <cmath>
 #include <time.h>
 #include <mutex>
@@ -9468,7 +9472,24 @@ size_t gpttype_save_states_file(const std::string & path, int only_slot, int kee
     {
         return 0;
     }
-    FILE * f = fopen(path.c_str(), "wb");
+    // All slots (only_slot < 0) is the keep-across-reload handoff, read back seconds later and then deleted: on Windows
+    // it is created short-lived, so the cache manager keeps it in RAM and avoids writing it to disk while memory allows.
+    FILE * f = nullptr;
+#if defined(_WIN32)
+    if(only_slot < 0)
+    {
+        const int fd = _open(path.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY | _O_SHORT_LIVED, 0644);
+        if(fd >= 0)
+        {
+            f = _fdopen(fd, "wb");
+            if(!f) { _close(fd); }
+        }
+    }
+#endif
+    if(!f)
+    {
+        f = fopen(path.c_str(), "wb");
+    }
     if(!f)
     {
         fprintf(stderr, "KV Save States File: cannot open %s\n", path.c_str());

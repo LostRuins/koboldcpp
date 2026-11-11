@@ -14462,6 +14462,12 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 global_memory["restore_states"] = None
                 restored = handle.load_states_file(kept["path"].encode("UTF-8"), -1)
                 print(f"Restored {restored} SmartCache save states kept across the reload")
+                # A handoff file only: gone once read, so it never lingers on disk (and a short-lived file whose pages
+                # were never flushed is never written at all).
+                try:
+                    os.remove(kept["path"])
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Could not restore kept save states: {e}")
 
