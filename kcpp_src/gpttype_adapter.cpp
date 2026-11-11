@@ -8131,9 +8131,13 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                         n_past -=1;
                         embd_inp.insert(embd_inp.begin(), 1, tail);
                     }
-                    else if(maxedpos==n_past)
+                    else if(maxedpos>=n_past)
                     {
-                        n_past += 1;
+                        // Recurrent state restores can retain a position cursor that is
+                        // ahead of the logical token count (and the gap can accumulate
+                        // over multiple cache-only turns). Always resume after the
+                        // memory module's actual last position.
+                        n_past = maxedpos + 1;
                     }
                     //it is generally preferable to not have the embd_inp array empty unless doing so would cause an error
                     // if(embd_inp.size()==0 && current_context_tokens.size()>0)
