@@ -1110,7 +1110,7 @@ def init_library():
     handle.load_state_kv.argtypes = [ctypes.c_int]
     handle.load_state_kv.restype = ctypes.c_bool
     handle.clear_state_kv.restype = ctypes.c_bool
-    handle.save_states_file.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    handle.save_states_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
     handle.save_states_file.restype = ctypes.c_size_t
     handle.load_states_file.argtypes = [ctypes.c_char_p, ctypes.c_int]
     handle.load_states_file.restype = ctypes.c_int
@@ -8171,14 +8171,18 @@ Change Mode<br>
                     targetfile = ""
                 # keepstates: write the SmartCache save states to the admin folder first, and read them back once the
                 # same text model is loaded again (unload_model then initial_model), so saved prompts are not reprocessed.
+                # true keeps every slot; a number keeps only that many of the most recently used ones.
                 keepstates = False
+                keeprecent = 0
                 try:
-                    keepstates = bool(isinstance(tempbody, dict) and tempbody.get('keepstates', False))
+                    kv = tempbody.get('keepstates', False) if isinstance(tempbody, dict) else False
+                    keepstates = bool(kv)
+                    keeprecent = int(kv) if (not isinstance(kv, bool) and isinstance(kv, (int, float)) and kv > 0) else 0
                 except Exception:
                     keepstates = False
                 if targetfile and targetfile!="" and keepstates and savestate_limit>0 and friendlymodelname!="inactive" and args.model_param:
                     statespath = os.path.join(os.path.abspath(args.admindir), "kcpp_savestates.bin")
-                    written = handle.save_states_file(statespath.encode("UTF-8"), -1)
+                    written = handle.save_states_file(statespath.encode("UTF-8"), -1, keeprecent)
                     global_memory["restore_states"] = {"path": statespath, "model": os.path.abspath(args.model_param)} if written > 0 else None
                 if targetfile and targetfile!="":
                     if targetfile=="unload_model" or targetfile=="initial_model": #special request to simply unload model or swap back top intial model
@@ -8401,7 +8405,7 @@ Change Mode<br>
                     statefile = kv_state_file_path(tempbody if isinstance(tempbody, dict) else None)
                     if statefile and result > 0:
                         # Also written to a file in the admin directory, to outlive a reload (#2520).
-                        result = result if handle.save_states_file(statefile.encode("UTF-8"), targetslot) > 0 else 0
+                        result = result if handle.save_states_file(statefile.encode("UTF-8"), targetslot, 0) > 0 else 0
                     tokencnt = handle.calc_new_state_tokencount()
                     response_body = (json.dumps({"success": (result>0), "new_state_size":result, "new_tokens":tokencnt}).encode())
                 else:

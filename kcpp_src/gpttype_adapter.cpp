@@ -9454,7 +9454,7 @@ bool gpttype_load_state_kv(int slot)
 // media signature, last_used. Only for the same model and context size: a mismatch fails at restore, and the
 // slot is then simply dropped.
 static const char kcpp_states_magic[8] = {'K','C','P','P','S','S','1','\0'};
-size_t gpttype_save_states_file(const std::string & path, int only_slot)
+size_t gpttype_save_states_file(const std::string & path, int only_slot, int keep_recent)
 {
     if(kcpp_data==nullptr || file_format != FileFormat::GGUF_GENERIC)
     {
@@ -9485,11 +9485,25 @@ size_t gpttype_save_states_file(const std::string & path, int only_slot)
     const size_t first = only_slot >= 0 ? (size_t)only_slot : 0;
     const size_t last = only_slot >= 0 ? (size_t)only_slot + 1 : savestates.size();
     put_u64((uint64_t)(last - first));
+    // keep_recent > 0 (all slots only): just the most recently used ones are written, the others as empty, so a reload
+    // reads back the prompts that matter without writing (and re-reading) every slot.
+    int64_t oldest_kept = 0;
+    if(only_slot < 0 && keep_recent > 0)
+    {
+        std::vector<int64_t> used;
+        for(size_t slot = first; slot < last; ++slot)
+        {
+            if(smartcache_slot_usable((int)slot)) { used.push_back(savestates[slot].last_used); }
+        }
+        std::sort(used.begin(), used.end(), std::greater<int64_t>());
+        if((int)used.size() > keep_recent) { oldest_kept = used[keep_recent - 1]; }
+    }
     int saved = 0;
     for(size_t slot = first; slot < last; ++slot)
     {
         const auto & st = savestates[slot];
-        const bool usable = smartcache_slot_usable((int)slot);
+        // Ties on the oldest kept time stop at keep_recent slots.
+        const bool usable = smartcache_slot_usable((int)slot) && st.last_used >= oldest_kept && (keep_recent <= 0 || only_slot >= 0 || saved < keep_recent);
         const uint64_t main_size = usable ? st.current_savestate_size : 0;
         const uint64_t draft_size = usable ? st.current_draft_savestate_size : 0;
         put_u64(main_size);
