@@ -153,6 +153,8 @@ size_t gpttype_calc_old_state_tokencount(int slot);
 size_t gpttype_save_state_kv(int slot);
 bool gpttype_load_state_kv(int slot);
 bool gpttype_clear_state_kv(bool shrink);
+size_t gpttype_save_states_file(const std::string & path, int only_slot, int keep_recent);
+int gpttype_load_states_file(const std::string & path, int only_slot);
 int get_oldest_slot(int excludeSlotId);
 void touch_slot(int slot);
 int get_identical_existing_slot();

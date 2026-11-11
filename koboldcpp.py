@@ -94,7 +94,7 @@ extra_images_max = 4 # for kontext/qwen img
 KcppVersion = "1.124.2"
 showdebug = True
 kcpp_instance = None #global running instance
-global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False}
+global_memory = {"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":"initial_model", "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False, "restore_states": None}
 using_gui_launcher = False
 cli_arg_overrides = set()
 
@@ -1110,6 +1110,10 @@ def init_library():
     handle.load_state_kv.argtypes = [ctypes.c_int]
     handle.load_state_kv.restype = ctypes.c_bool
     handle.clear_state_kv.restype = ctypes.c_bool
+    handle.save_states_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+    handle.save_states_file.restype = ctypes.c_size_t
+    handle.load_states_file.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    handle.load_states_file.restype = ctypes.c_int
     handle.sd_load_model.argtypes = [sd_load_model_inputs]
     handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
@@ -1644,6 +1648,20 @@ def scan_directory(dirpath, valid_exts, depth):
                     files.append(rel_path)
     return files
 
+
+def kv_state_file_path(body):
+    # A save state file named in an admin request ({"file": "chat-123"}), kept inside the admin directory.
+    if not body or not args.admindir:
+        return None
+    name = str(body.get("file", "") or "").strip()
+    if not name:
+        return None
+    name = os.path.basename(name)
+    if not name.lower().endswith(".kvstate"):
+        name += ".kvstate"
+    dirpath = os.path.abspath(args.admindir)
+    path = os.path.abspath(os.path.join(dirpath, name))
+    return path if os.path.commonpath([dirpath, path]) == dirpath else None
 
 def get_current_admindir_list():
     opts = []
@@ -8151,6 +8169,21 @@ Change Mode<br>
                         baseconfig = tempbody.get('baseconfig', tempbody.get('overrideconfig', ""))
                 except Exception:
                     targetfile = ""
+                # keepstates: write the SmartCache save states to the admin folder first, and read them back once the
+                # same text model is loaded again (unload_model then initial_model), so saved prompts are not reprocessed.
+                # true keeps every slot; a number keeps only that many of the most recently used ones.
+                keepstates = False
+                keeprecent = 0
+                try:
+                    kv = tempbody.get('keepstates', False) if isinstance(tempbody, dict) else False
+                    keepstates = bool(kv)
+                    keeprecent = int(kv) if (not isinstance(kv, bool) and isinstance(kv, (int, float)) and kv > 0) else 0
+                except Exception:
+                    keepstates = False
+                if targetfile and targetfile!="" and keepstates and savestate_limit>0 and friendlymodelname!="inactive" and args.model_param:
+                    statespath = os.path.join(os.path.abspath(args.admindir), "kcpp_savestates.bin")
+                    written = handle.save_states_file(statespath.encode("UTF-8"), -1, keeprecent)
+                    global_memory["restore_states"] = {"path": statespath, "model": os.path.abspath(args.model_param)} if written > 0 else None
                 if targetfile and targetfile!="":
                     if targetfile=="unload_model" or targetfile=="initial_model": #special request to simply unload model or swap back top intial model
                         print("Admin: Received request to unload model")
@@ -8339,6 +8372,7 @@ Change Mode<br>
             elif clean_path.endswith('/api/admin/load_state'):
                 if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
                     targetslot = 0
+                    tempbody = None
                     try:
                         tempbody = json.loads(body)
                         if isinstance(tempbody, dict):
@@ -8346,7 +8380,12 @@ Change Mode<br>
                     except Exception:
                         pass
                     targetslot = (targetslot if targetslot<savestate_limit else 0)
-                    result = handle.load_state_kv(targetslot)
+                    statefile = kv_state_file_path(tempbody if isinstance(tempbody, dict) else None)
+                    if statefile:
+                        # From a file in the admin directory (#2520): into the slot, then live as before.
+                        result = handle.load_states_file(statefile.encode("UTF-8"), targetslot) == 1 and handle.load_state_kv(targetslot)
+                    else:
+                        result = handle.load_state_kv(targetslot)
                     tokencnt = handle.calc_new_state_tokencount()
                     response_body = (json.dumps({"success": result, "new_tokens":tokencnt}).encode())
                 else:
@@ -8354,6 +8393,7 @@ Change Mode<br>
             elif clean_path.endswith('/api/admin/save_state'):
                 if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
                     targetslot = 0
+                    tempbody = None
                     try:
                         tempbody = json.loads(body)
                         if isinstance(tempbody, dict):
@@ -8362,6 +8402,10 @@ Change Mode<br>
                         pass
                     targetslot = (targetslot if targetslot<savestate_limit else 0)
                     result = handle.save_state_kv(targetslot)
+                    statefile = kv_state_file_path(tempbody if isinstance(tempbody, dict) else None)
+                    if statefile and result > 0:
+                        # Also written to a file in the admin directory, to outlive a reload (#2520).
+                        result = result if handle.save_states_file(statefile.encode("UTF-8"), targetslot, 0) > 0 else 0
                     tokencnt = handle.calc_new_state_tokencount()
                     response_body = (json.dumps({"success": (result>0), "new_state_size":result, "new_tokens":tokencnt}).encode())
                 else:
@@ -13115,7 +13159,7 @@ def main(launch_args, default_args):
     else:  # manager command queue for admin mode
         with multiprocessing.Manager() as mp_manager:
             initial_model = get_initial_admin_model(initial_config_path, args.admindir)
-            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":initial_model, "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False})
+            global_memory = mp_manager.dict({"tunnel_url": "", "restart_target":"", "input_to_exit":False, "load_complete":False, "restart_override_base_config":"", "last_active_timestamp":datetime.now(), "triggered_sleeping":False, "current_model":initial_model, "base_config":"", "swapReqType": None, "loadedReqTypes": [], "autoswapmode": False, "restore_states": None})
 
             if args.remotetunnel and not args.prompt and not args.benchmark and not args.cli:
                 setuptunnel(global_memory, True if args.sdmodel else False, True if (args.musicdiffusion or args.musicllm or args.ttsmodel or args.whispermodel) else False)
@@ -13894,6 +13938,15 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         if not loadok:
             exitcounter = 999
             exit_with_error(3,"Could not load text model: " + modelname)
+        # Save states kept across an admin reload (reload_config with keepstates): read back for the same model only.
+        try:
+            kept = global_memory.get("restore_states") if global_memory is not None else None
+            if kept and kept.get("model") == os.path.abspath(modelname) and os.path.exists(kept.get("path","")):
+                global_memory["restore_states"] = None
+                restored = handle.load_states_file(kept["path"].encode("UTF-8"), -1)
+                print(f"Restored {restored} SmartCache save states kept across the reload")
+        except Exception as e:
+            print(f"Could not restore kept save states: {e}")
 
         if args.mmproj and args.mmproj!="": # multimodal vision and audio support is only known at runtime
             has_audio_support = handle.has_audio_support()

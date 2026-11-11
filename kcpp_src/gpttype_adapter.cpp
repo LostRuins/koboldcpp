@@ -7,6 +7,7 @@
 //No dynamic memory allocation! Setup structs with FIXED (known) shapes and sizes for ALL output fields
 //Python will ALWAYS provide the memory, we just write to it.
 
+#include <cstring>
 #include <cmath>
 #include <time.h>
 #include <mutex>
@@ -9447,6 +9448,159 @@ bool gpttype_load_state_kv(int slot)
     }
     return false;
 }
+// Writes every SmartCache save state to one file, so the states can outlive a model reload (admin unload, then
+// reload of the same model): the next prompt with a saved prefix is restored instead of processed again.
+// Format: "KCPPSS1\0", n_vocab, slot count, then per slot: main size+bytes, draft size+bytes, tokens, logits,
+// media signature, last_used. Only for the same model and context size: a mismatch fails at restore, and the
+// slot is then simply dropped.
+static const char kcpp_states_magic[8] = {'K','C','P','P','S','S','1','\0'};
+size_t gpttype_save_states_file(const std::string & path, int only_slot, int keep_recent)
+{
+    if(kcpp_data==nullptr || file_format != FileFormat::GGUF_GENERIC)
+    {
+        return 0;
+    }
+    FILE * f = fopen(path.c_str(), "wb");
+    if(!f)
+    {
+        fprintf(stderr, "KV Save States File: cannot open %s\n", path.c_str());
+        return 0;
+    }
+    bool ok = true;
+    size_t written = 0;
+    auto put = [&](const void * data, size_t n) {
+        if(ok && n > 0 && fwrite(data, 1, n, f) != n) { ok = false; }
+        written += n;
+    };
+    auto put_u64 = [&](uint64_t v) { put(&v, sizeof(v)); };
+    put(kcpp_states_magic, sizeof(kcpp_states_magic));
+    put_u64((uint64_t)n_vocab);
+    // One slot (only_slot >= 0) or all of them.
+    if(only_slot >= 0 && !smartcache_slot_usable(only_slot))
+    {
+        fclose(f);
+        fprintf(stderr, "KV Save States File: slot %d holds no save state\n", only_slot);
+        return 0;
+    }
+    const size_t first = only_slot >= 0 ? (size_t)only_slot : 0;
+    const size_t last = only_slot >= 0 ? (size_t)only_slot + 1 : savestates.size();
+    put_u64((uint64_t)(last - first));
+    // keep_recent > 0 (all slots only): just the most recently used ones are written, the others as empty, so a reload
+    // reads back the prompts that matter without writing (and re-reading) every slot.
+    int64_t oldest_kept = 0;
+    if(only_slot < 0 && keep_recent > 0)
+    {
+        std::vector<int64_t> used;
+        for(size_t slot = first; slot < last; ++slot)
+        {
+            if(smartcache_slot_usable((int)slot)) { used.push_back(savestates[slot].last_used); }
+        }
+        std::sort(used.begin(), used.end(), std::greater<int64_t>());
+        if((int)used.size() > keep_recent) { oldest_kept = used[keep_recent - 1]; }
+    }
+    int saved = 0;
+    for(size_t slot = first; slot < last; ++slot)
+    {
+        const auto & st = savestates[slot];
+        // Ties on the oldest kept time stop at keep_recent slots.
+        const bool usable = smartcache_slot_usable((int)slot) && st.last_used >= oldest_kept && (keep_recent <= 0 || only_slot >= 0 || saved < keep_recent);
+        const uint64_t main_size = usable ? st.current_savestate_size : 0;
+        const uint64_t draft_size = usable ? st.current_draft_savestate_size : 0;
+        put_u64(main_size);
+        put(st.current_savestate_buffer.data(), main_size);
+        put_u64(draft_size);
+        put(st.current_draft_savestate_buffer.data(), draft_size);
+        const uint64_t ntok = usable ? st.savestate_context_tokens.size() : 0;
+        put_u64(ntok);
+        put(st.savestate_context_tokens.data(), ntok * sizeof(gpt_vocab::id));
+        const uint64_t nlog = usable ? st.latest_logits.size() : 0;
+        put_u64(nlog);
+        put(st.latest_logits.data(), nlog * sizeof(float));
+        const uint64_t nsig = usable ? st.media_signature.size() : 0;
+        put_u64(nsig);
+        put(st.media_signature.data(), nsig);
+        int64_t lu = usable ? st.last_used : 0;
+        put(&lu, sizeof(lu));
+        if(usable) { ++saved; }
+    }
+    fclose(f);
+    if(!ok)
+    {
+        fprintf(stderr, "KV Save States File: write failed for %s\n", path.c_str());
+        return 0;
+    }
+    printf("\nKV Save States File: %d states, %zu MB written to %s\n", saved, written/(1024*1024), path.c_str());
+    return written;
+}
+
+int gpttype_load_states_file(const std::string & path, int only_slot)
+{
+    if(kcpp_data==nullptr || file_format != FileFormat::GGUF_GENERIC)
+    {
+        return -1;
+    }
+    FILE * f = fopen(path.c_str(), "rb");
+    if(!f)
+    {
+        fprintf(stderr, "KV Load States File: cannot open %s\n", path.c_str());
+        return -1;
+    }
+    bool ok = true;
+    auto get = [&](void * data, size_t n) {
+        if(ok && n > 0 && fread(data, 1, n, f) != n) { ok = false; }
+    };
+    auto get_u64 = [&]() { uint64_t v = 0; get(&v, sizeof(v)); return v; };
+    char magic[8] = {0};
+    get(magic, sizeof(magic));
+    const uint64_t vocab = get_u64();
+    const uint64_t count = get_u64();
+    if(!ok || memcmp(magic, kcpp_states_magic, sizeof(magic)) != 0 || vocab != (uint64_t)n_vocab)
+    {
+        fclose(f);
+        fprintf(stderr, "KV Load States File: %s is not a save of this model\n", path.c_str());
+        return -1;
+    }
+    int loaded = 0;
+    try
+    {
+        for(uint64_t slot = 0; ok && slot < count; ++slot)
+        {
+            savestate_data st;
+            st.current_savestate_size = get_u64();
+            st.current_savestate_buffer.resize(st.current_savestate_size + 512);
+            get(st.current_savestate_buffer.data(), st.current_savestate_size);
+            st.current_draft_savestate_size = get_u64();
+            st.current_draft_savestate_buffer.resize(st.current_draft_savestate_size + 512);
+            get(st.current_draft_savestate_buffer.data(), st.current_draft_savestate_size);
+            st.savestate_context_tokens.resize(get_u64());
+            get(st.savestate_context_tokens.data(), st.savestate_context_tokens.size() * sizeof(gpt_vocab::id));
+            st.latest_logits.resize(get_u64());
+            get(st.latest_logits.data(), st.latest_logits.size() * sizeof(float));
+            st.media_signature.resize(get_u64());
+            get(st.media_signature.data(), st.media_signature.size());
+            get(&st.last_used, sizeof(st.last_used));
+            // Slots beyond this run's limit, and empty ones, are skipped; a draft model must match the save.
+            const bool draft_ok = draft_ctx ? st.current_draft_savestate_size > 0 : st.current_draft_savestate_size == 0;
+            // A file of one slot goes to the slot asked for (only_slot >= 0); a file of all slots back to their own.
+            const int target = only_slot >= 0 ? only_slot : (int)slot;
+            if(ok && st.current_savestate_size > 0 && draft_ok && smartcache_slot_in_range(target) && (only_slot < 0 || slot == 0))
+            {
+                savestates[target] = std::move(st);
+                ++loaded;
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        ok = false;
+    }
+    fclose(f);
+    if(!ok)
+    {
+        fprintf(stderr, "KV Load States File: %s ended early; %d states kept\n", path.c_str(), loaded);
+    }
+    printf("\nKV Load States File: %d states read from %s\n", loaded, path.c_str());
+    return loaded;
+}
+
 bool gpttype_clear_state_kv(bool shrink)
 {
     if(kcpp_data==nullptr)

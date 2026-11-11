@@ -473,6 +473,14 @@ extern "C"
     {
         return gpttype_clear_state_kv(true);
     }
+    size_t save_states_file(const char * path, int slot, int keep_recent) //writes one save state (slot >= 0) or all (-1) to a file; keep_recent > 0 keeps only the most recently used ones
+    {
+        return path ? gpttype_save_states_file(path, slot, keep_recent) : 0;
+    }
+    int load_states_file(const char * path, int slot) //reads them back, into that slot or their own, for the same model
+    {
+        return path ? gpttype_load_states_file(path, slot) : -1;
+    }
 
     int set_environment_variable(const char * identifier, const char * value)
     {
