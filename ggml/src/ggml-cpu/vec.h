@@ -997,9 +997,35 @@ inline static void ggml_vec_gelu_erf_bf16(const int n, ggml_bf16_t * y, const gg
 }
 
 #ifdef GGML_GELU_FP16
+#if defined(__AVX2__) && defined(__F16C__)
+// Only values strictly inside (-10, 10) reach the FP16 lookup. The masked
+// 32-bit loads cannot reach the table's last halfword.
+inline static __m256 ggml_v_gelu_table_f32(__m256 x, __m256 eligible) {
+    const __m256 pass = _mm256_cmp_ps(x, _mm256_set1_ps(10.0f), _CMP_GE_OQ);
+    const __m256 mid = _mm256_andnot_ps(pass, eligible);
+    const __m256i indices = _mm256_cvtepu16_epi32(_mm256_cvtps_ph(x, _MM_FROUND_TO_NEAREST_INT));
+    const __m256i gathered = _mm256_mask_i32gather_epi32(_mm256_setzero_si256(),
+        (const int *) ggml_table_gelu_f16, indices, _mm256_castps_si256(mid), 2);
+    const __m256i halves = _mm256_and_si256(gathered, _mm256_set1_epi32(0xffff));
+    const __m128i packed = _mm_packus_epi32(_mm256_castsi256_si128(halves), _mm256_extracti128_si256(halves, 1));
+    return _mm256_blendv_ps(_mm256_cvtph_ps(packed), x, pass);
+}
+#endif
+
 inline static void ggml_vec_gelu_f32(const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX2__) && defined(__F16C__)
+    for (; n - i >= 8; i += 8) {
+        const __m256 v = _mm256_loadu_ps(x + i);
+        if (_mm256_movemask_ps(_mm256_cmp_ps(v, v, _CMP_UNORD_Q))) {
+            break; // preserve scalar NaN conversion and payload handling
+        }
+        const __m256 eligible = _mm256_cmp_ps(v, _mm256_set1_ps(-10.0f), _CMP_GT_OQ);
+        _mm256_storeu_ps(y + i, ggml_v_gelu_table_f32(v, eligible));
+    }
+#endif
     uint16_t t;
-    for (int i = 0; i < n; ++i) {
+    for (; i < n; ++i) {
         if (x[i] <= -10.0f) {
             y[i] = 0.0f;
         } else if (x[i] >= 10.0f) {
@@ -1528,8 +1554,20 @@ inline static void ggml_vec_reglu_bf16(const int n, ggml_bf16_t * y, const ggml_
 
 #ifdef GGML_GELU_FP16
 inline static void ggml_vec_geglu_f32(const int n, float * y, const float * x, const float * g) {
+    int i = 0;
+#if defined(__AVX2__) && defined(__F16C__)
+    for (; n - i >= 8; i += 8) {
+        const __m256 v = _mm256_loadu_ps(x + i);
+        if (_mm256_movemask_ps(_mm256_cmp_ps(v, v, _CMP_UNORD_Q))) {
+            break;
+        }
+        const __m256 eligible = _mm256_cmp_ps(v, _mm256_set1_ps(-10.0f), _CMP_GT_OQ);
+        const __m256 gate = _mm256_and_ps(eligible, _mm256_loadu_ps(g + i));
+        _mm256_storeu_ps(y + i, _mm256_mul_ps(ggml_v_gelu_table_f32(v, eligible), gate));
+    }
+#endif
     uint16_t t;
-    for (int i = 0; i < n; ++i) {
+    for (; i < n; ++i) {
         if (x[i] <= -10.0f) {
             y[i] = 0.0f;
         } else if (x[i] >= 10.0f) {
