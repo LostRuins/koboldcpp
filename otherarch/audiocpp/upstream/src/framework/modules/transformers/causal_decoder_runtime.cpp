@@ -795,6 +795,12 @@ public:
     }
 
     CausalDecoderStepResult decode_tokens_batched(const std::vector<int32_t> & tokens) {
+        CausalDecoderStepResult out;
+        decode_tokens_batched_into(tokens, out);
+        return out;
+    }
+
+    void decode_tokens_batched_into(const std::vector<int32_t> & tokens, CausalDecoderStepResult & out) {
         ensure_batched_decode_started();
         if (batched_decode_input_kind_ != InputKind::Token) {
             throw std::runtime_error("QwenCausalDecodeRuntime batched decode graph expects tokens");
@@ -803,7 +809,7 @@ public:
             throw std::runtime_error("QwenCausalDecodeRuntime batched decode token size mismatch");
         }
         ggml_backend_tensor_set(batched_decode_input_, tokens.data(), 0, tokens.size() * sizeof(int32_t));
-        return run_batched_decode_step();
+        run_batched_decode_step_into(out);
     }
 
     CausalDecoderStepResult decode_embeddings_batched(
@@ -1682,6 +1688,12 @@ private:
     }
 
     CausalDecoderStepResult run_batched_decode_step() {
+        CausalDecoderStepResult out;
+        run_batched_decode_step_into(out);
+        return out;
+    }
+
+    void run_batched_decode_step_into(CausalDecoderStepResult & out) {
         if (batched_decode_cache_.valid_steps() >= batched_decode_cache_steps_) {
             throw std::runtime_error("QwenCausalDecodeRuntime batched decode cache exhausted");
         }
@@ -1743,7 +1755,6 @@ private:
         if (status != GGML_STATUS_SUCCESS) {
             throw std::runtime_error("QwenCausalDecodeRuntime batched decode graph compute failed");
         }
-        CausalDecoderStepResult out;
         if (batched_decode_logits_ != nullptr) {
             out.logits.resize(static_cast<size_t>(ggml_nelements(batched_decode_logits_)));
             ggml_backend_tensor_get(
@@ -1751,6 +1762,8 @@ private:
                 out.logits.data(),
                 0,
                 out.logits.size() * sizeof(float));
+        } else {
+            out.logits.clear();
         }
         if (batched_decode_hidden_ != nullptr) {
             out.hidden.resize(static_cast<size_t>(ggml_nelements(batched_decode_hidden_)));
@@ -1760,9 +1773,10 @@ private:
                 0,
                 out.hidden.size() * sizeof(float));
             round_readback(out.hidden, config_);
+        } else {
+            out.hidden.clear();
         }
         batched_decode_cache_.advance_after_direct_append(1);
-        return out;
     }
 
     void release_prefill_graph() {
@@ -2121,6 +2135,11 @@ void CausalDecoderRuntime::start_decode_embeddings_batched(
 
 CausalDecoderStepResult CausalDecoderRuntime::decode_tokens_batched(const std::vector<int32_t> & tokens) {
     return impl_->decode_tokens_batched(tokens);
+}
+
+void CausalDecoderRuntime::decode_tokens_batched_into(
+    const std::vector<int32_t> & tokens, CausalDecoderStepResult & out) {
+    impl_->decode_tokens_batched_into(tokens, out);
 }
 
 CausalDecoderStepResult CausalDecoderRuntime::decode_embeddings_batched(

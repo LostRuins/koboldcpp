@@ -120,6 +120,7 @@ public:
         const runtime::TransformerBatchedKVState & state,
         int64_t required_cache_steps);
     CausalDecoderStepResult decode_tokens_batched(const std::vector<int32_t> & tokens);
+    void decode_tokens_batched_into(const std::vector<int32_t> & tokens, CausalDecoderStepResult & out);
     CausalDecoderStepResult decode_embeddings_batched(
         const std::vector<float> & embeddings,
         int64_t batch_size);

@@ -827,15 +827,19 @@ struct Yue2ARRuntime::Impl {
         emitted.insert(emitted.end(), forced.begin(), forced.end());
         std::mt19937 rng(static_cast<uint32_t>(seed));
         Yue2SamplerScratch scratch;
+        if (positive.logits.size() != negative.logits.size()) {
+            throw std::runtime_error("Yue2 CFG logits size mismatch");
+        }
         std::vector<float> logits(positive.logits.size(), 0.0F);
+        const float * positive_row = positive.logits.data();
+        const float * negative_row = negative.logits.data();
+        engine::modules::CausalDecoderStepResult batched;
+        std::vector<int32_t> pair(2);
         double sample_ms = 0.0;
         double decode_batched_ms = 0.0;
         for (int64_t step = static_cast<int64_t>(emitted.size()); step < window.max_tokens; ++step) {
-            if (positive.logits.size() != negative.logits.size()) {
-                throw std::runtime_error("Yue2 CFG logits size mismatch");
-            }
             for (size_t i = 0; i < logits.size(); ++i) {
-                logits[i] = negative.logits[i] + (positive.logits[i] - negative.logits[i]) * guidance_scale;
+                logits[i] = negative_row[i] + (positive_row[i] - negative_row[i]) * guidance_scale;
             }
             const auto sample_start = Clock::now();
             const int32_t token = compact_semantic ?
@@ -854,14 +858,14 @@ struct Yue2ARRuntime::Impl {
                 break;
             }
             const auto decode_start = Clock::now();
-            auto batched = positive_runtime->decode_tokens_batched({token, token});
+            pair[0] = pair[1] = token;
+            positive_runtime->decode_tokens_batched_into(pair, batched);
             decode_batched_ms += engine::debug::elapsed_ms(decode_start);
-            if (batched.logits.size() % 2 != 0) {
+            if (batched.logits.size() != 2 * logits.size()) {
                 throw std::runtime_error("Yue2 CFG batched logits shape mismatch");
             }
-            const size_t row = batched.logits.size() / 2;
-            positive.logits.assign(batched.logits.begin(), batched.logits.begin() + static_cast<std::ptrdiff_t>(row));
-            negative.logits.assign(batched.logits.begin() + static_cast<std::ptrdiff_t>(row), batched.logits.end());
+            positive_row = batched.logits.data();
+            negative_row = positive_row + logits.size();
         }
         engine::debug::timing_log_scalar("yue2.ar.cfg.sample_ms", sample_ms);
         engine::debug::timing_log_scalar("yue2.ar.cfg.decode_batched_ms", decode_batched_ms);
