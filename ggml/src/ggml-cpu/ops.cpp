@@ -11239,37 +11239,67 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             // state is stored transposed: s_out[j*S_v + i] = S[i][j]
             // so row j of s_out = column j of S (contiguous access)
 
-            if (kda) {
-                // precompute exp(g) into delta scratch (reused below)
-                for (int64_t i = 0; i < S_v; ++i) {
-                    delta[i] = expf(g_d[i]);
+#if defined(__AVX2__) && defined(__FMA__)
+            // Keep this scheduling change on widths with a measured Haswell benefit.
+            if ((S_v == 64 && !kda) || S_v == 192 || S_v == 256) {
+                float decay = 0.0f;
+                if (kda) {
+                    for (int64_t i = 0; i < S_v; ++i) {
+                        delta[i] = expf(g_d[i]);
+                    }
+                } else {
+                    decay = expf(g_d[0]);
                 }
-                // S[i][:] *= exp(g[i]) => for each row j of M: M[j][i] *= exp(g[i])
                 for (int64_t j = 0; j < S_v; ++j) {
-                    ggml_vec_mul_f32(S_v, &s_out[j * S_v], &s_out[j * S_v], delta);
+                    float * row = s_out + j * S_v;
+                    if (kda) {
+                        ggml_vec_mul_f32(S_v, row, row, delta);
+                    } else {
+                        ggml_vec_scale_f32(S_v, row, decay);
+                    }
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, row, 0, k_d, 0, 1);
+                    const float update = (v_d[j] - sum) * beta_val;
+                    ggml_vec_mad_f32(S_v, row, k_d, update);
+                    ggml_vec_dot_f32(S_v, &sum, 0, row, 0, q_d, 0, 1);
+                    attn_data[j] = sum * scale;
                 }
-            } else {
-                ggml_vec_scale_f32(S_v * S_v, s_out, expf(g_d[0]));
-            }
+            } else
+#endif
+            {
+                if (kda) {
+                    // precompute exp(g) into delta scratch (reused below)
+                    for (int64_t i = 0; i < S_v; ++i) {
+                        delta[i] = expf(g_d[i]);
+                    }
+                    // S[i][:] *= exp(g[i]) => for each row j of M: M[j][i] *= exp(g[i])
+                    for (int64_t j = 0; j < S_v; ++j) {
+                        ggml_vec_mul_f32(S_v, &s_out[j * S_v], &s_out[j * S_v], delta);
+                    }
+                } else {
+                    ggml_vec_scale_f32(S_v * S_v, s_out, expf(g_d[0]));
+                }
 
-            // delta[j] = sum_i S[i][j] * k[i] = dot(row j of M, k)
-            for (int64_t j = 0; j < S_v; ++j) {
-                float sum = 0.0f;
-                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
-                delta[j] = (v_d[j] - sum) * beta_val;
-            }
+                // delta[j] = sum_i S[i][j] * k[i] = dot(row j of M, k)
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
+                    delta[j] = (v_d[j] - sum) * beta_val;
+                }
 
-            // outer product: S[i][j] += k[i] * delta[j] => M[j][i] += delta[j] * k[i]
-            for (int64_t j = 0; j < S_v; ++j) {
-                ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_d, delta[j]);
-            }
+                // outer product: S[i][j] += k[i] * delta[j] => M[j][i] += delta[j] * k[i]
+                for (int64_t j = 0; j < S_v; ++j) {
+                    ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_d, delta[j]);
+                }
 
-            // attn_out[j] = sum_i S[i][j] * q[i] = dot(row j of M, q)
-            for (int64_t j = 0; j < S_v; ++j) {
-                float sum = 0.0f;
-                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
-                attn_data[j] = sum * scale;
-            }
+                // attn_out[j] = sum_i S[i][j] * q[i] = dot(row j of M, q)
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
+                    attn_data[j] = sum * scale;
+                }
+
+            } // original state passes
 
             attn_data += S_v * H; // advance to next token
 
