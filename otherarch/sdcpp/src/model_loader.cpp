@@ -147,6 +147,10 @@ void convert_tensor(void* src,
     } else if (dst_type == GGML_TYPE_F32) {
         if (src_type == GGML_TYPE_F16) {
             ggml_fp16_to_fp32_row((ggml_fp16_t*)src, (float*)dst, n);
+        } else if (src_type == GGML_TYPE_I32) {
+            for (int i = 0; i < n; ++i) {
+                ((float*)dst)[i] = static_cast<float>(((const int32_t*)src)[i]);
+            }
         } else {
             auto qtype = ggml_get_type_traits(src_type);
             if (qtype->to_float == nullptr) {
