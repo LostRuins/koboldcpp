@@ -19,6 +19,9 @@
 #include <sstream>
 #include <map>
 #include <cstdint>
+#if defined(__SSE2__) || defined(_M_X64)
+#include <emmintrin.h>
+#endif
 #include <string>
 #include <cctype>
 #include <cstdlib>
@@ -2475,6 +2478,31 @@ static void grammar_accept_token(FileFormat file_format, int32_t n_vocab, struct
     llama_grammar_accept_token(*grammar, token, piece);
 }
 
+static void initialize_candidates(llama_token_data * candidates, const float * logits, int n_vocab) {
+    int i = 0;
+#if defined(__SSE2__) || defined(_M_X64)
+    static_assert(sizeof(llama_token_data) == 12 && offsetof(llama_token_data, logit) == 4 &&
+                  offsetof(llama_token_data, p) == 8);
+    __m128i ids = _mm_set_epi32(3, 2, 1, 0);
+    const __m128i step = _mm_set1_epi32(4);
+    const __m128i first_mask = _mm_set_epi32(-1, 0, -1, -1);
+    const __m128i last_mask = _mm_set_epi32(0, -1, -1, 0);
+    for (; i + 3 < n_vocab; i += 4) {
+        const __m128i scores = _mm_castps_si128(_mm_loadu_ps(logits + i));
+        const __m128i lo = _mm_unpacklo_epi32(ids, scores);
+        const __m128i hi = _mm_unpackhi_epi32(ids, scores);
+        auto * dst = reinterpret_cast<__m128i *>(candidates + i);
+        _mm_storeu_si128(dst, _mm_and_si128(_mm_shuffle_epi32(lo, _MM_SHUFFLE(2, 0, 1, 0)), first_mask));
+        _mm_storeu_si128(dst + 1, _mm_unpacklo_epi64(_mm_srli_si128(lo, 12), hi));
+        _mm_storeu_si128(dst + 2, _mm_and_si128(_mm_shuffle_epi32(hi, _MM_SHUFFLE(0, 3, 2, 0)), last_mask));
+        ids = _mm_add_epi32(ids, step);
+    }
+#endif
+    for (; i < n_vocab; ++i) {
+        candidates[i] = llama_token_data{i, logits[i], 0.0f};
+    }
+}
+
 int SampleLogits(const float * logits, int n_ctx, int n_vocab, int rep_pen_range, float rep_pen, float rep_pen_slope, float presence_penalty, float top_k, float top_a, float top_p, float min_p, float typical_p, float tfs, float nsigma, float temp, std::mt19937 & rng,
 int mirostat, float mirostat_tau, float mirostat_eta, float dry_multiplier, float dry_base, int dry_allowed_length, int dry_penalty_last_n, float xtc_threshold, float xtc_probability,
 const std::vector<samplers> & sampler_order, llama_grammar * grammar, float dynatemp_range, float dynatemp_exponent, float smoothing_factor, float smoothing_curve, float adaptive_target, float adaptive_decay,
@@ -2485,9 +2513,7 @@ const std::vector<int> & think_start_seq, const std::vector<int> & think_end_seq
 
     static thread_local std::vector<llama_token_data> candidates;
     candidates.resize(n_vocab);
-    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-        candidates[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
-    }
+    initialize_candidates(candidates.data(), logits, n_vocab);
     int id = 0;
 
     for(int i=0;i<logit_biases.size();++i)
