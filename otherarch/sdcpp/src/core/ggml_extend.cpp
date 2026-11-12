@@ -135,6 +135,10 @@ ggml_tensor* ggml_ext_silu_act(ggml_context* ctx, ggml_tensor* x, bool gate_firs
     // x: [ne3, ne2, ne1, ne0]
     // return: [ne3, ne2, ne1, ne0/2]
 
+    if (x->type == GGML_TYPE_F32 && x->ne[0] % 2 == 0 && ggml_is_contiguous_1(x)) {
+        return gate_first ? ggml_swiglu(ctx, x) : ggml_swiglu_swapped(ctx, x);
+    }
+    // Keep the original materialization for other layouts/types.
     auto x_vec = ggml_ext_chunk(ctx, x, 2, 0, false);
     ggml_tensor* gate;
     if (gate_first) {

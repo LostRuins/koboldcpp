@@ -520,10 +520,16 @@ namespace LLM {
             auto h = gate_proj->forward(ctx, x);
             if (activation == MLPActivation::GELU_TANH) {
                 h = ggml_ext_gelu(ctx->ggml_ctx, h, true);
+                h = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
             } else {
-                h = ggml_silu_inplace(ctx->ggml_ctx, h);
+                auto up = up_proj->forward(ctx, x);
+                if (h->type == GGML_TYPE_F32 && up->type == GGML_TYPE_F32 &&
+                    ggml_is_contiguous_1(h) && ggml_is_contiguous_1(up)) {
+                    h = ggml_swiglu_split(ctx->ggml_ctx, h, up);
+                } else {
+                    h = ggml_mul_inplace(ctx->ggml_ctx, ggml_silu_inplace(ctx->ggml_ctx, h), up);
+                }
             }
-            h = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
             h = down_proj->forward(ctx, h);
             return h;
         }
