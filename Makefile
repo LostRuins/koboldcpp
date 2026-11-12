@@ -928,15 +928,17 @@ llamaserver: $(LLAMASERVER_SRCS) $(LLAMASERVER_COMMON_SRCS) build-info.h ggml.o 
 llamaservervk: $(LLAMASERVER_SRCS) $(LLAMASERVER_COMMON_SRCS) build-info.h ggml_v4_vulkan.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o llama.o chat.o llama-model.o console.o clip_default.o mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_vulkan.o ggml-vulkan.o ggml-vulkan-shaders.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(CXX) $(CXXFLAGS) $(LLAMASERVER_CXXFLAGS) -DGGML_USE_VULKAN $(filter-out %.h,$^) $(VULKAN_LIB) -o $@ $(LDFLAGS)
 
-ggml/src/ggml-vulkan-shaders.cpp: ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+ggml/src/ggml-vulkan-shaders.cpp: ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp $(wildcard ggml/src/ggml-vulkan/vulkan-shaders/*.comp) $(wildcard ggml/src/ggml-vulkan/vulkan-shaders/*.glsl)
 ifdef VULKAN_BUILD
 	@$(MAKE) vulkan-shaders-gen
 endif
-ggml/src/ggml-vulkan-shaders-noext.cpp: ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+ggml/src/ggml-vulkan-shaders-noext.cpp: ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp $(wildcard ggml/src/ggml-vulkan/vulkan-shaders/*.comp) $(wildcard ggml/src/ggml-vulkan/vulkan-shaders/*.glsl)
 ifdef VULKAN_BUILD
 	@$(MAKE) vulkan-shaders-gen-noext
 endif
 
+# KCPP_SHADER_SOURCE_DEPENDENCIES: recursive generator must execute after an include changes.
+.PHONY: vulkan-shaders-gen vulkan-shaders-gen-noext
 vulkan-shaders-gen: ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
 	@echo 'Vulkan shaders need to be regenerated. This can only be done on Windows or Linux. Please stand by...'
 	$(CXX) $(CXXFLAGS) $(VKGEN_NOEXT_ADD) $(filter-out %.h,$^) -o $@ $(LDFLAGS)
