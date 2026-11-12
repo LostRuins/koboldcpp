@@ -7777,6 +7777,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     {
         kcpp_data->repeat_last_n = 1;
     }
+    // Bound direct C ABI callers as well as the HTTP layer (GHSA-h59g-8cq4-cqjj).
+    kcpp_data->repeat_last_n = std::min(kcpp_data->repeat_last_n, std::max(1, kcpp_data->n_ctx));
     if (kcpp_data->rep_pen_slope > 1 || kcpp_data->rep_pen_slope<=0)
     {
         kcpp_data->rep_pen_slope = 1;
