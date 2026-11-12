@@ -16,6 +16,9 @@ pyinstaller --noconfirm --onefile --clean --console --collect-all customtkinter 
 --add-data './src/LLAMACPP_LICENSE:./vendor_licenses'  \
 --add-data "./embd_res:./embd_res" \
 --add-data "./koboldcpp_common.so:." \
+--add-data "./koboldcpp_legacy_ggml.so:." \
+--add-data "./koboldcpp_legacy_ggml_noavx2.so:." \
+--add-data "./koboldcpp_legacy_ggml_failsafe.so:." \
 --add-data "./koboldcpp_vulkan_shaders.so:." \
 --add-data "./koboldcpp_vulkan_noext_shaders.so:." \
 --add-data "./koboldcpp_default.so:." \
