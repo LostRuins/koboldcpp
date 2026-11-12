@@ -4081,8 +4081,8 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 
 #if defined __AVX2__
 
-    const __m128i values128 = _mm_loadu_si128((const __m128i*)kvalues_iq4nl);
-    const __m128i m4b  = _mm_set1_epi8(0x0f);
+    const __m256i values = _mm256_broadcastsi128_si256(_mm_loadu_si128((const __m128i *)kvalues_iq4nl));
+    const __m256i m4b = _mm256_set1_epi8(0x0f);
 
     __m256 accum = _mm256_setzero_ps();
     for (int ibl = 0; ibl < nb; ++ibl) {
@@ -4092,14 +4092,14 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
         __m256i sumi1 = _mm256_setzero_si256();
         __m256i sumi2 = _mm256_setzero_si256();
         for (int ib = 0; ib < QK_K/32; ib += 2) {
-            const __m128i q4bits_1 = _mm_loadu_si128((const __m128i*)qs);  qs += 16;
-            const __m128i q4bits_2 = _mm_loadu_si128((const __m128i*)qs);  qs += 16;
+            const __m256i q4bits = _mm256_loadu_si256((const __m256i *)qs); qs += 32;
+            const __m256i lo = _mm256_shuffle_epi8(values, _mm256_and_si256(q4bits, m4b));
+            const __m256i hi = _mm256_shuffle_epi8(values, _mm256_and_si256(_mm256_srli_epi16(q4bits, 4), m4b));
             const __m256i q8b_1 = _mm256_loadu_si256((const __m256i *)q8); q8 += 32;
             const __m256i q8b_2 = _mm256_loadu_si256((const __m256i *)q8); q8 += 32;
-            const __m256i q4b_1 = MM256_SET_M128I(_mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_1, 4), m4b)),
-                                                  _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b)));
-            const __m256i q4b_2 = MM256_SET_M128I(_mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_2, 4), m4b)),
-                                                  _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_2, m4b)));
+            // Restore the original low/high nibble order for each Q8 subblock.
+            const __m256i q4b_1 = _mm256_permute2x128_si256(lo, hi, 0x20);
+            const __m256i q4b_2 = _mm256_permute2x128_si256(lo, hi, 0x31);
             const __m256i p16_1 = mul_add_epi8(q4b_1, q8b_1);
             const __m256i p16_2 = mul_add_epi8(q4b_2, q8b_2);
             const int16_t ls1 = ((x[ibl].scales_l[ib/2] & 0xf) | ((sh << 4) & 0x30)) - 32;
