@@ -4893,6 +4893,15 @@ static void ggml_compute_forward_scale_f32(
         const float * x = (const float *) ((char *) src0->data + i1*nb01 + i2*nb02 + i3*nb03);
 
         if (b == 0.0f) {
+#if defined(__AVX2__)
+            if (dst->data != src0->data && nc >= 1024 && nc % GGML_F32_STEP == 0) {
+                const __m256 factor = _mm256_set1_ps(s);
+                for (int j = 0; j < nc; j += 8) {
+                    _mm256_storeu_ps(y + j, _mm256_mul_ps(_mm256_loadu_ps(x + j), factor));
+                }
+                continue;
+            }
+#endif
             if (dst->data != src0->data) {
                 // src0 is same shape as dst => same indices
                 // TODO: add x parameter to ggml_vec_scale_f32 and remove this memcpy
