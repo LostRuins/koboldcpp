@@ -1625,42 +1625,80 @@ class tinyBLAS_Q0_AVX {
             int64_t ii = m0 + job / xtiles * 4;
             int64_t jj = n0 + job % xtiles * RN;
             __m256 Cv[RN][4] = {};
-            for (int64_t l = 0; l < k; ++l) {
-                uint64_t a_delta = ((uint64_t)A[lda * (ii + 3) + l].d << 48) | ((uint64_t)A[lda * (ii + 2) + l].d << 32) | ((uint64_t)A[lda * (ii + 1) + l].d << 16) | (A[lda * (ii + 0) + l].d);
-                // Convert delta values for four blocks to float values
-                __m128 da = _mm_cvtph_ps(_mm_set_epi64x(0, a_delta));
-                __m256i avec0 = load(A + lda * (ii + 0) + l);
-                __m256i avec1 = load(A + lda * (ii + 1) + l);
-                __m256i avec2 = load(A + lda * (ii + 2) + l);
-                __m256i avec3 = load(A + lda * (ii + 3) + l);
-                for (int64_t j = 0; j < RN; ++j) {
-                        __m128 db = _mm_set1_ps(unhalf(B[ldb * (jj + j) + l].d));
-                        // Computation of product of delta values for four blocks and replicate it across 256 bit lane
-                        __m256 dvec =  _mm256_castps128_ps256(_mm_mul_ps(da, db));
-                        dvec = _mm256_permute2f128_ps(dvec ,dvec, 0);
-                        // Computation of dot product and multiplication with appropriate delta value products
-                        Cv[j][0] = madd(_mm256_shuffle_ps(dvec, dvec, 0),
-                                    updot(_mm256_sign_epi8(avec0, avec0),
-                                          _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec0)),
-                                    Cv[j][0]);
-                        Cv[j][1] = madd(_mm256_shuffle_ps(dvec, dvec, 85),
-                                    updot(_mm256_sign_epi8(avec1, avec1),
-                                            _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec1)),
-                                    Cv[j][1]);
-                        Cv[j][2] = madd(_mm256_shuffle_ps(dvec, dvec, 170),
-                                    updot(_mm256_sign_epi8(avec2, avec2),
-                                            _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec2)),
-                                    Cv[j][2]);
-                        Cv[j][3] = madd(_mm256_shuffle_ps(dvec, dvec, 255),
-                                    updot(_mm256_sign_epi8(avec3, avec3),
-                                            _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec3)),
-                                    Cv[j][3]);
-                }
-            }
+            if constexpr (std::is_same_v<TA, block_q8_0>) {
+                for (int64_t l = 0; l < k; ++l) {
+                    uint64_t a_delta = ((uint64_t)A[lda * (ii + 3) + l].d << 48) | ((uint64_t)A[lda * (ii + 2) + l].d << 32) | ((uint64_t)A[lda * (ii + 1) + l].d << 16) | (A[lda * (ii + 0) + l].d);
+                    // Convert the four scales and duplicate them across both lanes.
+                    const __m256 da = _mm256_cvtph_ps(_mm_set1_epi64x(a_delta));
+                    __m256 dab[RN];
+                    for (int64_t j = 0; j < RN; ++j) {
+                        dab[j] = _mm256_mul_ps(da, _mm256_set1_ps(unhalf(B[ldb * (jj + j) + l].d)));
+                    }
 
-            for (int64_t j = 0; j < RN; ++j)
-                for (int64_t i = 0; i < 4; ++i)
-                    C[ldc * (jj + j) + (ii + i)] = hsum(Cv[j][i]);
+                    for (int64_t i = 0; i < 4; ++i) {
+                        const __m256i a = load(A + lda * (ii + i) + l);
+                        const __m256i magnitude = _mm256_sign_epi8(a, a);
+                        __m256 dot[RN];
+                        for (int64_t j = 0; j < RN; ++j) {
+                            dot[j] = updot(magnitude, _mm256_sign_epi8(load(B + ldb * (jj + j) + l), a));
+                        }
+                        for (int64_t j = 0; j < RN; ++j) {
+                            const __m256 d = i == 0 ? _mm256_shuffle_ps(dab[j], dab[j], 0x00) :
+                                             i == 1 ? _mm256_shuffle_ps(dab[j], dab[j], 0x55) :
+                                             i == 2 ? _mm256_shuffle_ps(dab[j], dab[j], 0xaa) :
+                                                      _mm256_shuffle_ps(dab[j], dab[j], 0xff);
+                            Cv[j][i] = madd(d, dot[j], Cv[j][i]);
+                        }
+                    }
+                }
+
+                for (int64_t j = 0; j < RN; ++j) {
+                    __m128 rows[4];
+                    for (int i = 0; i < 4; ++i) {
+                        rows[i] = _mm_add_ps(_mm256_extractf128_ps(Cv[j][i], 1), _mm256_castps256_ps128(Cv[j][i]));
+                    }
+                    _MM_TRANSPOSE4_PS(rows[0], rows[1], rows[2], rows[3]);
+                    const __m128 sum = _mm_add_ps(_mm_add_ps(rows[0], rows[2]), _mm_add_ps(rows[1], rows[3]));
+                    _mm_storeu_ps(C + ldc * (jj + j) + ii, sum);
+                }
+            } else {
+                for (int64_t l = 0; l < k; ++l) {
+                    uint64_t a_delta = ((uint64_t)A[lda * (ii + 3) + l].d << 48) | ((uint64_t)A[lda * (ii + 2) + l].d << 32) | ((uint64_t)A[lda * (ii + 1) + l].d << 16) | (A[lda * (ii + 0) + l].d);
+                    // Convert delta values for four blocks to float values
+                    __m128 da = _mm_cvtph_ps(_mm_set_epi64x(0, a_delta));
+                    __m256i avec0 = load(A + lda * (ii + 0) + l);
+                    __m256i avec1 = load(A + lda * (ii + 1) + l);
+                    __m256i avec2 = load(A + lda * (ii + 2) + l);
+                    __m256i avec3 = load(A + lda * (ii + 3) + l);
+                    for (int64_t j = 0; j < RN; ++j) {
+                            __m128 db = _mm_set1_ps(unhalf(B[ldb * (jj + j) + l].d));
+                            // Computation of product of delta values for four blocks and replicate it across 256 bit lane
+                            __m256 dvec =  _mm256_castps128_ps256(_mm_mul_ps(da, db));
+                            dvec = _mm256_permute2f128_ps(dvec ,dvec, 0);
+                            // Computation of dot product and multiplication with appropriate delta value products
+                            Cv[j][0] = madd(_mm256_shuffle_ps(dvec, dvec, 0),
+                                        updot(_mm256_sign_epi8(avec0, avec0),
+                                              _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec0)),
+                                        Cv[j][0]);
+                            Cv[j][1] = madd(_mm256_shuffle_ps(dvec, dvec, 85),
+                                        updot(_mm256_sign_epi8(avec1, avec1),
+                                                _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec1)),
+                                        Cv[j][1]);
+                            Cv[j][2] = madd(_mm256_shuffle_ps(dvec, dvec, 170),
+                                        updot(_mm256_sign_epi8(avec2, avec2),
+                                                _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec2)),
+                                        Cv[j][2]);
+                            Cv[j][3] = madd(_mm256_shuffle_ps(dvec, dvec, 255),
+                                        updot(_mm256_sign_epi8(avec3, avec3),
+                                                _mm256_sign_epi8(load(B + ldb * (jj + j) + l), avec3)),
+                                        Cv[j][3]);
+                    }
+                }
+
+                for (int64_t j = 0; j < RN; ++j)
+                    for (int64_t i = 0; i < 4; ++i)
+                        C[ldc * (jj + j) + (ii + i)] = hsum(Cv[j][i]);
+            }
         }
     }
 
