@@ -684,15 +684,28 @@ ggml_tensor* ggml_ext_attention_ext(ggml_context* ctx,
         }
         k_in = ggml_cast(ctx, k_in, GGML_TYPE_F16);
 
-        v_in = ggml_ext_cont(ctx, ggml_permute(ctx, v_in, 0, 2, 1, 3));
-        v_in = ggml_reshape_3d(ctx, v_in, d_head, L_k, n_kv_head * N);
-        if (pad_head) {
-            v_in = ggml_pad(ctx, v_in, static_cast<int>(64 - d_head), 0, 0, 0);
+        v_in = ggml_permute(ctx, v_in, 0, 2, 1, 3);
+        ggml_tensor* packed_v = nullptr;
+        if (!pad_head && kv_scale == 1.0f && v_in->type == GGML_TYPE_F32 &&
+            !ggml_is_contiguous(v_in) && sd_backend_is(backend, "Vulkan")) {
+            // A strided copy converts to F16 and materializes the layout in one pass.
+            auto* candidate = ggml_cast(ctx, v_in, GGML_TYPE_F16);
+            if (ggml_backend_supports_op(backend, candidate)) {
+                packed_v = candidate;
+            }
         }
-        if (kv_scale != 1.0f) {
-            v_in = ggml_ext_scale(ctx, v_in, kv_scale);
+        if (packed_v) {
+            v_in = ggml_reshape_3d(ctx, packed_v, d_head, L_k, n_kv_head * N);
+        } else {
+            v_in = ggml_reshape_3d(ctx, ggml_ext_cont(ctx, v_in), d_head, L_k, n_kv_head * N);
+            if (pad_head) {
+                v_in = ggml_pad(ctx, v_in, static_cast<int>(64 - d_head), 0, 0, 0);
+            }
+            if (kv_scale != 1.0f) {
+                v_in = ggml_ext_scale(ctx, v_in, kv_scale);
+            }
+            v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
         }
-        v_in = ggml_cast(ctx, v_in, GGML_TYPE_F16);
 
         if (mask_in != nullptr) {
             // ggml_flash_attn_ext expects the mask as a contiguous F16 tensor shaped
