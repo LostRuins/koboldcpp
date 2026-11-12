@@ -625,9 +625,10 @@ struct Yue2NARRuntime::Impl {
             return frames == f && ar_length == ar;
         }
 
-        std::vector<float> run(
+        void run(
             const std::vector<float> & padded_state,
-            const std::vector<float> & time_features) {
+            const std::vector<float> & time_features,
+            std::vector<float> & out) {
             const auto & config = owner->assets->config.model;
             if (static_cast<int64_t>(padded_state.size()) != nar_length * config.latent_dim ||
                 static_cast<int64_t>(time_features.size()) != 256) {
@@ -635,14 +636,12 @@ struct Yue2NARRuntime::Impl {
             }
             core::write_tensor_f32(state, padded_state);
             core::write_tensor_f32(time, time_features);
+            // The non-planned backend graph call already synchronizes before returning.
             const auto status = core::compute_backend_graph(owner->execution.backend(), graph, nullptr, "yue2.nar.velocity");
-            ggml_backend_synchronize(owner->execution.backend());
             if (status != GGML_STATUS_SUCCESS) {
                 throw std::runtime_error("Yue2 NAR graph compute failed");
             }
-            std::vector<float> out;
             core::read_tensor_f32_into(output.tensor, out);
-            return out;
         }
 
         Impl * owner = nullptr;
@@ -664,11 +663,13 @@ struct Yue2NARRuntime::Impl {
         core::TensorValue output;
     };
 
-    std::vector<float> velocity(
+    void velocity(
         Graph & graph,
         const Yue2ARDevicePrefixState & ar_state,
         const std::vector<float> & state,
-        float raw_t) {
+        float raw_t,
+        std::vector<float> & padded,
+        std::vector<float> & out) {
         const auto & config = assets->config.model;
         const int64_t frames = static_cast<int64_t>(state.size()) / config.latent_dim;
         if (frames <= 0 || frames * config.latent_dim != static_cast<int64_t>(state.size())) {
@@ -677,11 +678,10 @@ struct Yue2NARRuntime::Impl {
         if (!graph.matches(frames, ar_state.current_end)) {
             throw std::runtime_error("Yue2 NAR graph shape changed during chunk solve");
         }
-        std::vector<float> padded(static_cast<size_t>((frames + 2) * config.latent_dim), 0.0F);
         std::copy(state.begin(), state.end(), padded.begin() + static_cast<std::ptrdiff_t>(config.latent_dim));
         const auto shifted = shifted_t_value(raw_t, config.timestep_shift);
-        auto features = timestep_features(shifted, 1);
-        return graph.run(padded, features);
+        const auto features = timestep_features(shifted, 1);
+        graph.run(padded, features, out);
     }
 
     std::vector<float> solve_chunk(
@@ -701,16 +701,18 @@ struct Yue2NARRuntime::Impl {
         graph = std::make_unique<Graph>(*this, frames, ar_state);
         auto & chunk_graph = *graph;
         const float dt = 1.0F / static_cast<float>(ode_steps);
+        std::vector<float> padded(static_cast<size_t>((frames + 2) * config.latent_dim), 0.0F);
+        std::vector<float> mid(state.size());
+        std::vector<float> direction;
         for (int64_t step = 0; step < ode_steps; ++step) {
             const float t = 1.0F - static_cast<float>(step) * dt;
-            const auto first = velocity(chunk_graph, ar_state, state, logit_clamped(t));
-            std::vector<float> mid(state.size(), 0.0F);
+            velocity(chunk_graph, ar_state, state, logit_clamped(t), padded, direction);
             for (size_t i = 0; i < state.size(); ++i) {
-                mid[i] = state[i] - first[i] * (dt / 2.0F);
+                mid[i] = state[i] - direction[i] * (dt / 2.0F);
             }
-            const auto second = velocity(chunk_graph, ar_state, mid, logit_clamped(t - dt / 2.0F));
+            velocity(chunk_graph, ar_state, mid, logit_clamped(t - dt / 2.0F), padded, direction);
             for (size_t i = 0; i < state.size(); ++i) {
-                state[i] -= second[i] * dt;
+                state[i] -= direction[i] * dt;
             }
         }
         return state;
