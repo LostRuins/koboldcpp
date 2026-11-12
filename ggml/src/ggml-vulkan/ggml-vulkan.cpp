@@ -1275,6 +1275,21 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         result.block_rows /= 2;
     }
 
+    // Reuse each K/V block across the four row groups on wave64 Polaris.
+    // Keep tile geometry, precision and the per-row reductions unchanged.
+    const bool polaris = device->vendor_id == VK_VENDOR_ID_AMD && device->architecture == AMD_GCN &&
+                         device->driver_id == vk::DriverId::eAmdProprietary && !device->fp16 &&
+                         (device->properties.deviceID == 0x67df || device->properties.deviceID == 0x6fdf);
+    if (polaris && result.subgroup_size == 64 && result.row_split == 4 &&
+        hsk == 128 && hsv == 128 && n_rows >= 512 && n_kv >= 768 &&
+        k_type == v_type && (k_type == GGML_TYPE_F16 || k_type == GGML_TYPE_F32)) {
+        auto staged = result;
+        staged.shmem_staging = 1;
+        if (ggml_vk_flash_attn_scalar_shmem_support(device, staged, hsk, hsv, f32acc, k_type, v_type)) {
+            result = staged;
+        }
+    }
+
     // On AMD RDNA, for small head sizes and big batch size the shader uses few registers, so too many subgroups get scheduled
     // at once and end up thrashing the cache. Fix this by setting a large (unused) shmem buffer that reduces occupancy.
     // This targets an occupancy of 4 subgroups per SIMD.
