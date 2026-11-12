@@ -2615,6 +2615,19 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                                    const std::string& name, size_t len, const void* data, uint32_t pc_size, uint32_t pc,
                                    uint32_t rsgs = 0) {
             auto tc = filter_tc(tc_base, key.type_a, key.mul_mat_id);
+            const char* wide_prefill = getenv("GGML_VK_GCN_K_PREFILL");
+            if (device->architecture == AMD_GCN && device->subgroup_size == 64 &&
+                (device->properties.deviceID == 0x67df || device->properties.deviceID == 0x6fdf) &&
+                !device->fp16 && !device->integer_dot_product && !device->coopmat_support &&
+                !key.mul_mat_id && key.type_b == GGML_TYPE_F32 &&
+                key.type_a == GGML_TYPE_Q4_K &&
+                tc.size() == 2 && device->shader_core_count > 0 &&
+                (!wide_prefill || strcmp(wide_prefill, "0") != 0)) {
+                vk_tile_config wide{{256, 128, 64, 32, 32, 64, 1, 4, 8, 1, 64}, {128, 64, 1}, 128};
+                if (ggml_vk_matmul_shmem_support(device, wide.warptile, false, key.type_a)) {
+                    tc.push_back(std::move(wide));
+                }
+            }
             if (!tc.empty()) {
                 spec_fn_t qs = [&, type_a=key.type_a](const std::vector<uint32_t>& wt, bool a) { return ggml_vk_mul_mm_spec_quant(wt, a, (uint32_t)type_a); };
                 create_mm_pipelines(key, tc, name, len, data, pc_size, pc, qs, false, rsgs > 0, rsgs);
@@ -2882,12 +2895,19 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             return 0;
         };
     } else {
-        device->matmul_tile_selector = [](uint32_t m, uint32_t n, uint32_t /*k*/, uint32_t /*shader_core_count*/,
+        const bool gcn = device->architecture == AMD_GCN;
+        device->matmul_tile_selector = [gcn](uint32_t m, uint32_t n, uint32_t /*k*/, uint32_t shader_core_count,
                                           const std::vector<vk_matmul_pipeline_pair>& configs) -> uint32_t {
             if (configs.size() <= 1) return 0;
             if (m <= 32 || n <= 32) return 0;
             if (configs.size() == 2) return 1;
             if (m <= 64 || n <= 64) return 1;
+            const auto& tile = configs.back().unaligned->wg_denoms;
+            if (gcn && tile[0] == 128 && tile[1] == 64) {
+                // No padded edges or occupancy loss on the new prefill tile.
+                return m % 128 == 0 && n % 64 == 0 &&
+                    uint64_t(m / 128) * (n / 64) >= shader_core_count ? 2 : 1;
+            }
             return (uint32_t)configs.size() - 1;
         };
         device->matmul_id_tile_selector = device->matmul_tile_selector;
