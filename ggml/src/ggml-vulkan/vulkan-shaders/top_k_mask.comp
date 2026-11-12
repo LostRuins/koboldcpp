@@ -1,0 +1,36 @@
+#version 450
+layout(constant_id=0)const uint BLOCK_SIZE=256;
+layout(local_size_x_id=0,local_size_y=1,local_size_z=1)in;
+layout(push_constant)uniform parameter{
+    uint n_kv,n_top,n_pick,n_blk,n_extra,has_score,ninf;
+    uint ne1,ne2,m1,m2,m3,nbm1,nbm2,nbm3,nbd1,nbd2,nbd3;
+    uint m_offset,k_offset,s_offset,b_offset,e_offset,d_offset;
+};
+layout(binding=0,std430)readonly buffer M{uint data_m[];};
+layout(binding=1,std430)readonly buffer K{int data_k[];};
+layout(binding=2,std430)readonly buffer S{uint data_s[];};
+layout(binding=3,std430)readonly buffer B{int data_b[];};
+layout(binding=4,std430)readonly buffer E{int data_e[];};
+layout(binding=5,std430)writeonly buffer D{uint data_d[];};
+shared uint kept[2048];
+void mark(int c){if(c>=0&&uint(c)<n_kv)atomicOr(kept[uint(c)>>5],1u<<(uint(c)&31));}
+bool live(uint c){return(kept[c>>5]&(1u<<(c&31)))!=0;}
+void main(){
+    uint tid=gl_LocalInvocationIndex,i1=gl_WorkGroupID.x,i2=gl_WorkGroupID.y,i3=gl_WorkGroupID.z;
+    uint row=i1+ne1*(i2+ne2*i3),mr=m_offset+(i1%m1)*nbm1+(i2%m2)*nbm2+(i3%m3)*nbm3,dr=d_offset+i1*nbd1+i2*nbd2+i3*nbd3;
+    for(uint i=tid;i<(n_kv+31)/32;i+=BLOCK_SIZE)kept[i]=0;
+    barrier();
+    for(uint i=tid;i<n_top+n_extra;i+=BLOCK_SIZE){
+        if(i>=n_top){mark(data_e[e_offset+row*n_extra+i-n_top]);continue;}
+        int p=data_k[k_offset+row*n_top+i];if(p<0||uint(p)>=n_pick)continue;
+        if(has_score!=0){uint s=data_s[s_offset+row*n_pick+uint(p)];if(s==0xff800000u||(s&0x7fffffffu)>0x7f800000u)continue;}
+        if(n_blk==0)mark(p);else for(uint k=0;k<n_blk;++k)mark(data_b[b_offset+uint(p)*n_blk+k]);
+    }
+    barrier();
+#if MASK_F16
+    // One invocation owns the whole32-bit store;duplicates and adjacent halfwords cannot race.
+    for(uint word=tid;word<n_kv/2;word+=BLOCK_SIZE){uint c=word*2,v=data_m[(mr+c)/2];uint lo=live(c)?v&65535u:ninf,hi=live(c+1)?v>>16:ninf;data_d[dr/2+word]=lo|(hi<<16);}
+#else
+    for(uint c=tid;c<n_kv;c+=BLOCK_SIZE)data_d[dr+c]=live(c)?data_m[mr+c]:ninf;
+#endif
+}
