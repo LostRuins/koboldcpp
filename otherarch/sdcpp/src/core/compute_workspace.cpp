@@ -138,7 +138,8 @@ namespace sd {
         ggml_cgraph* graph,
         size_t direct_bytes,
         const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,
-        const AssignNodes& assign_nodes) {
+        const AssignNodes& assign_nodes,
+        bool cache_measurement) {
         if (!needs_scheduler(graph)) {
             return {{{backend_, direct_bytes}}, false};
         }
@@ -161,6 +162,53 @@ namespace sd {
                 visit(source);
             }
         }
+        std::vector<uint8_t> key;
+        if (cache_measurement) {
+            key.reserve(tensors.size() * sizeof(ggml_tensor));
+            auto append = [&](const auto& value) {
+                const auto* bytes = reinterpret_cast<const uint8_t*>(&value);
+                key.insert(key.end(), bytes, bytes + sizeof(value));
+            };
+            append(graph->n_nodes);
+            append(graph->n_leafs);
+            append(graph->order);
+            for (auto tensor : tensors) {
+                append(tensor);
+                append(tensor->type);
+                append(tensor->ne);
+                append(tensor->nb);
+                append(tensor->op);
+                append(tensor->op_params);
+                append(tensor->flags);
+                append(tensor->src);
+                append(tensor->view_src);
+                append(tensor->view_offs);
+                append(tensor->name);
+                const auto external = external_backend(tensor);
+                append(external);
+                if (external == nullptr || tensor->view_src != nullptr) {
+                    append(tensor->buffer);
+                    append(tensor->data);
+                    append(tensor->extra);
+                    if (tensor->buffer != nullptr) {
+                        const auto usage = ggml_backend_buffer_get_usage(tensor->buffer);
+                        const auto type  = ggml_backend_buffer_get_type(tensor->buffer);
+                        append(usage);
+                        append(type);
+                    }
+                }
+                const size_t index = ggml_hash_find(&graph->visited_hash_set, tensor);
+                const int32_t uses = index != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, index)
+                                         ? graph->use_counts[index]
+                                         : 0;
+                append(uses);
+            }
+            // Match the full allocation metadata, including topology and external placement.
+            if (key == measurement_key_) {
+                return {measured_buffers_, true};
+            }
+        }
+
         const size_t graph_size = tensors.size() + 8;
         auto context            = ggml_init({tensors.size() * ggml_tensor_overhead() + ggml_graph_overhead_custom(graph_size, false), nullptr, true});
         if (context == nullptr) {
@@ -219,6 +267,10 @@ namespace sd {
             ggml_backend_buffer_free(entry.second);
         }
         ggml_free(context);
+        if (cache_measurement && !result.buffers.empty()) {
+            measurement_key_ = std::move(key);
+            measured_buffers_ = result.buffers;
+        }
         return result;
     }
 
@@ -253,6 +305,8 @@ namespace sd {
         if (active_) {
             return false;
         }
+        measurement_key_.clear();
+        measured_buffers_.clear();
         ggml_gallocr_free(allocator_);
         allocator_ = nullptr;
         ggml_backend_sched_free(scheduler_);
