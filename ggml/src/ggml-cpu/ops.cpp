@@ -4109,7 +4109,11 @@ static void ggml_compute_forward_rms_norm_f32(
     // TODO: optimize
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
-            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+            // Spread short leading rows over heads/batches, preserving every
+            // row's double-precision sum and the ordinary full-worker path.
+            const int64_t row_base = (i03*ne02 + i02)*ne01;
+            const int64_t first_row = ne01 < nth ? (ith + nth - row_base % nth) % nth : ith;
+            for (int64_t i01 = first_row; i01 < ne01; i01 += nth) {
                 const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
 
                 ggml_float sum = 0.0;
