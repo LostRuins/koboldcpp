@@ -60,7 +60,12 @@ private:
         if (count > remaining_bytes_ / element_size)
             return false;
         uint64_t size = count * element_size;
-        fin.seekg(static_cast<std::streamoff>(size), std::ios::cur);
+        // Keep small metadata skips inside the stream's read buffer.
+        if (size <= 65536) {
+            fin.ignore(static_cast<std::streamsize>(size));
+        } else {
+            fin.seekg(static_cast<std::streamoff>(size), std::ios::cur);
+        }
         if (!fin.good())
             return false;
         remaining_bytes_ -= size;
