@@ -75,11 +75,18 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
 
 enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
     size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
-    size = GGML_PAD(size, talloc->alignment);
+    const size_t alignment = talloc->alignment;
+    GGML_ASSERT(alignment && !(alignment & (alignment - 1)));
+    if (size > SIZE_MAX - (alignment - 1)) {
+        GGML_ABORT("tensor allocation size overflow");
+    }
+    size = GGML_PAD(size, alignment);
 
-    if (talloc->offset + size > ggml_backend_buffer_get_size(talloc->buffer)) {
+    const size_t capacity = ggml_backend_buffer_get_size(talloc->buffer);
+    if (talloc->offset > capacity || size > capacity - talloc->offset) {
+        const size_t available = talloc->offset <= capacity ? capacity - talloc->offset : 0;
         GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (needed %zu, available %zu)\n",
-                __func__, tensor->name, size, ggml_backend_buffer_get_size(talloc->buffer) - talloc->offset);
+                __func__, tensor->name, size, available);
         GGML_ABORT("not enough space in the buffer");
     }
 
