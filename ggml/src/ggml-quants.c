@@ -13,6 +13,10 @@
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#endif
+
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -2747,10 +2751,24 @@ void dequantize_row_iq4_nl(const block_iq4_nl * GGML_RESTRICT x, float * GGML_RE
         const uint8_t * qs = x[i].qs;
 
         const float d = GGML_FP16_TO_FP32(x[i].d);
+#if defined(__AVX2__)
+        // Adapt Strata's exact split-half lookup to eight Haswell FP32 lanes.
+        const __m128i table = _mm_loadu_si128((const __m128i *) kvalues_iq4nl);
+        const __m128i codes = _mm_loadu_si128((const __m128i *) qs);
+        const __m128i mask = _mm_set1_epi8(15);
+        const __m128i lo = _mm_shuffle_epi8(table, _mm_and_si128(codes, mask));
+        const __m128i hi = _mm_shuffle_epi8(table, _mm_and_si128(_mm_srli_epi16(codes, 4), mask));
+        const __m256 scale = _mm256_set1_ps(d);
+        _mm256_storeu_ps(y,      _mm256_mul_ps(scale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(lo))));
+        _mm256_storeu_ps(y + 8,  _mm256_mul_ps(scale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(lo, 8)))));
+        _mm256_storeu_ps(y + 16, _mm256_mul_ps(scale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(hi))));
+        _mm256_storeu_ps(y + 24, _mm256_mul_ps(scale, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_srli_si128(hi, 8)))));
+#else
         for (int j = 0; j < QK4_NL/2; ++j) {
             y[j+       0] = d * kvalues_iq4nl[qs[j] & 0xf];
             y[j+QK4_NL/2] = d * kvalues_iq4nl[qs[j] >>  4];
         }
+#endif
         y  += QK4_NL;
         qs += QK4_NL/2;
     }
