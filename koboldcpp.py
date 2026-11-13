@@ -158,6 +158,8 @@ lastgeneratedcachedpayload = b''
 lastgeneratedcachedpayloadkey = ''
 currgenimgkey = ''
 image_recovery_lock = threading.Lock()
+sdcpp_current_job = None
+sdcpp_last_job = None
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
 password = "" #if empty, no auth key required
@@ -3187,6 +3189,93 @@ def lora_map_name_to_path(request_list):
             result.append(out)
     return result
 
+def sdcpp_native_to_genparams(request):
+    """Flatten the native sd.cpp image schema into KoboldCpp's image schema."""
+    if not isinstance(request, dict):
+        raise ValueError("request body must be a JSON object")
+    sample = request.get('sample_params') or {}
+    sample = sample if isinstance(sample, dict) else {}
+    guidance = sample.get('guidance') or {}
+    guidance = guidance if isinstance(guidance, dict) else {}
+    ref_image_args = request.get('ref_image_args') or ''
+    if request.get('increase_ref_index'):
+        ref_image_args = ','.join(x for x in (ref_image_args, 'ref_index_mode=increase') if x)
+    return {
+        'prompt': str(request.get('prompt') or ''),
+        'negative_prompt': str(request.get('negative_prompt') or ''),
+        'clip_skip': request.get('clip_skip', -1),
+        'width': request.get('width', 512),
+        'height': request.get('height', 512),
+        'denoising_strength': request.get('strength', 0.75),
+        'seed': request.get('seed', -1),
+        'init_images': [request['init_image']] if request.get('init_image') else [],
+        'mask': request.get('mask_image') or '',
+        'extra_images': request.get('ref_images') or [],
+        'lora': request.get('lora') or [],
+        'ref_image_args': ref_image_args,
+        'sampler_name': sample.get('sample_method', 'default'),
+        'scheduler': sample.get('scheduler', 'default'),
+        'steps': sample.get('sample_steps', 20),
+        'eta': sample.get('eta'),
+        'shifted_timestep': sample.get('shifted_timestep'),
+        'flow_shift': sample.get('flow_shift'),
+        'custom_sigmas': sample.get('custom_sigmas') or [],
+        'extra_sample_args': sample.get('extra_sample_args', ''),
+        'cfg_scale': guidance.get('txt_cfg', 5),
+        'distilled_guidance': guidance.get('distilled_guidance'),
+        'cache_mode': request.get('cache_mode', ''),
+        'cache_options': request.get('cache_option', ''),
+    }
+
+def sdcpp_capabilities():
+    loaded = not (friendlysdmodelname == "inactive" or fullsdmodelpath == "")
+    if autoswapmode and imageName is not None:
+        loaded = True
+    max_side = tryparseint(getattr(args, 'sdclamped', 0), 0) if args is not None else 0
+    max_side = max_side if max_side > 0 else 8192
+    defaults = {'width': 512, 'height': 512, 'strength': 0.75, 'seed': -1,
+                'sample_params': {'sample_method': 'default', 'scheduler': 'default',
+                                  'sample_steps': 20, 'guidance': {'txt_cfg': 5}}}
+    features = {'init_image': True, 'mask_image': True, 'ref_images': True,
+                'lora': bool(imglora_bypath), 'cache': True,
+                'cancel_generating': True, 'preview': True}
+    model_name = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+    model_name = os.path.basename(model_name) if model_name else ''
+    return {
+        'model': {'name': model_name, 'stem': model_name, 'path': ''} if loaded else {},
+        'runtime': sdcpp_model_status(),
+        'current_mode': 'img_gen',
+        'supported_modes': ['img_gen'] if loaded else [],
+        'defaults': defaults,
+        'output_formats': ['png'],
+        'features': features,
+        'defaults_by_mode': {'img_gen': defaults},
+        'output_formats_by_mode': {'img_gen': ['png']},
+        'features_by_mode': {'img_gen': features},
+        'samplers': list(cached_sd_info.get('available_samplers', [])),
+        'schedulers': list(cached_sd_info.get('available_schedulers', [])) + list(cached_sd_custom_sigmas.keys()),
+        'loras': [dict(item, display_path=item['path']) for item in mk_sdapi_lora_list(imglora_bypath)],
+        'upscalers': [],
+        'upscale': False,
+        'preview_modes': ['none', 'proj'],
+        'limits': {
+            'min_width': 64, 'max_width': max_side,
+            'min_height': 64, 'max_height': max_side,
+            'max_batch_count': 1, 'max_queue_size': 0,
+            'max_upscale_width': 0, 'max_upscale_height': 0,
+        },
+    }
+
+def sdcpp_model_status():
+    loaded = not (friendlysdmodelname == 'inactive' or fullsdmodelpath == '')
+    loaded = loaded or bool(autoswapmode and imageName is not None)
+    return {
+        'state': 'ready' if loaded else 'empty', 'recipe': None,
+        'models': {'model': 'koboldcpp-current'} if loaded else {},
+        'error': None, 'origin': 'command_line', 'revision': 1,
+        'load_elapsed_seconds': 0 if loaded else None,
+    }
+
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
 
@@ -3229,7 +3318,7 @@ def sd_generate(genparams):
         seed = random.randint(100000, 999999)
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
-    custom_sigmas = cached_sd_custom_sigmas.get(scheduler)
+    custom_sigmas = genparams.get("custom_sigmas") or cached_sd_custom_sigmas.get(scheduler)
     extra_sample_args = str(genparams.get("extra_sample_args") or "")
     ref_image_args = str(genparams.get("ref_image_args") or "").strip()
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
@@ -3349,6 +3438,35 @@ def sd_get_ongoing_generation_info():
     else:
         print("An error occurred while getting sd ongoing generation info")
     return {}
+
+def sdcpp_get_job(job_id):
+    with image_recovery_lock:
+        current = copy.deepcopy(sdcpp_current_job) if sdcpp_current_job else None
+        last = copy.deepcopy(sdcpp_last_job) if sdcpp_last_job else None
+    if current and current['id'] == job_id:
+        handle.sd_request_ongoing_generation_preview()
+        info = sd_get_ongoing_generation_info()
+        step, steps = info.get('step', 0), info.get('steps', 0)
+        elapsed = int(info.get('elapsed_time', 0) * 1000)
+        current['progress'] = {
+            'stage': {'conditioning': 'conditioning', 'diffusing': 'sampling',
+                      'decoding': 'vae_decode'}.get(info.get('status'), 'preparing'),
+            'detail': '', 'pass': 0, 'completed': step, 'total': steps,
+            'unit': 'steps', 'stage_elapsed_ms': elapsed, 'elapsed_ms': elapsed,
+        }
+        current['preview'] = ({'pass': 1, 'step': step, 'total_steps': steps,
+                               'b64_json': info['preview']} if info.get('preview') else None)
+        return current
+    return last if last and last['id'] == job_id else None
+
+def sdcpp_cancel_job(job_id):
+    with image_recovery_lock:
+        if not sdcpp_current_job or sdcpp_current_job['id'] != job_id:
+            return None
+        sdcpp_current_job['cancel_requested'] = True
+        job = copy.deepcopy(sdcpp_current_job)
+    handle.sd_abort_generation()
+    return job
 
 def parse_query_bool(parsed_dict, key, default=False):
     value = parsed_dict.get(key, [default])
@@ -5967,7 +6085,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
         is_chat_completions_path = (clean_path.endswith('/v1/chat/completions') or clean_path=='/chat/completions')
 
         #any requests to the following endpoints is capable of waking the server
-        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/api/extra/music/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale","/api/generate", "/api/chat", "/v1/messages", "/messages"]
+        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/api/extra/music/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale","/sdcpp/v1/img_gen","/api/generate", "/api/chat", "/v1/messages", "/messages"]
         is_wake_request = clean_path in wake_requests
 
         autoswapEnabled = global_memory["autoswapmode"] is not None and global_memory["autoswapmode"]
@@ -6021,7 +6139,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                 ttsReqs = ["/api/extra/tts", "/v1/audio/speech"]
                 embedReqs = ["/api/extra/embeddings", "/v1/embeddings", "/api/embed"]
                 musicReqs = ["/api/extra/music/prepare","/api/extra/music/generate"]
-                imageReqs = ["/images/generations", "/v1/images/generations", "/images/edits", "/v1/images/edits", "/sdapi/v1/txt2img", "/sdapi/v1/img2img", "/sdapi/v1/upscale"] # "/sdapi/v1/sd-models", "/sdapi/v1/options", "/sdapi/v1/samplers"
+                imageReqs = ["/images/generations", "/v1/images/generations", "/images/edits", "/v1/images/edits", "/sdapi/v1/txt2img", "/sdapi/v1/img2img", "/sdapi/v1/upscale", "/sdcpp/v1/img_gen"] # "/sdapi/v1/sd-models", "/sdapi/v1/options", "/sdapi/v1/samplers"
 
                 requestedType = None
                 if any(clean_path.endswith(e) for e in textReqs):
@@ -7584,6 +7702,7 @@ Change Mode<br>
             return
 
         response_body = None
+        response_code = 200
         content_type = 'application/json'
         content_encoding = None
 
@@ -7594,7 +7713,45 @@ Change Mode<br>
         if clean_path!="/lcpp" and clean_path.startswith("/lcpp/"):
             clean_path = clean_path[5:] #adapt lcpp paths to the root
 
-        if clean_path in [""]: # the root url is lite
+        if clean_path.startswith('/sdcpp/v1/') and not self.secure_endpoint():
+            return
+
+        if clean_path == '/sdcpp/v1/capabilities':
+            response_body = json.dumps(sdcpp_capabilities()).encode()
+
+        elif clean_path == '/sdcpp/v1/model-files':
+            status = sdcpp_model_status()
+            model_name = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+            files = ([{'id': 'koboldcpp-current', 'name': os.path.basename(model_name),
+                       'category': 'checkpoints', 'root': '', 'relative_path': 'koboldcpp-current'}]
+                     if status['state'] == 'ready' else [])
+            response_body = json.dumps({'files': files, 'errors': []}).encode()
+
+        elif clean_path == '/sdcpp/v1/recipes':
+            response_body = json.dumps({'recipes': [], 'errors': []}).encode()
+
+        elif clean_path == '/sdcpp/v1/models/status':
+            response_body = json.dumps(sdcpp_model_status()).encode()
+
+        elif clean_path == '/sdcpp/v1/models':
+            status = sdcpp_model_status()
+            model_name = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+            data = ([{'id': 'koboldcpp-current', 'name': os.path.basename(model_name),
+                      'object': 'model', 'created': int(time.time()), 'owned_by': 'koboldcpp',
+                      'status': {'value': 'loaded'}, 'permission': [], 'root': 'koboldcpp'}]
+                    if status['state'] == 'ready' else [])
+            response_body = json.dumps({'object': 'list', 'data': data}).encode()
+
+        elif re.fullmatch(r'/sdcpp/v1/jobs/[^/]+', clean_path):
+            job_id = clean_path.rsplit('/', 1)[-1]
+            job = sdcpp_get_job(job_id)
+            if job is None:
+                response_code = 404
+                response_body = json.dumps({'error': 'Job not found', 'code': 'job_not_found'}).encode()
+            else:
+                response_body = json.dumps(job).encode()
+
+        elif clean_path in [""]: # the root url is lite
             content_type = 'text/html'
             if supports_gzip and embedded_kailite_gz is not None:
                 response_body = embedded_kailite_gz
@@ -7979,7 +8136,7 @@ Change Mode<br>
             rp = f"Error: KoboldCpp HTTP Server is running, but this endpoint does not exist. Please check the URL and METHOD.<br><a href=\"/api\">[Read API documentation here]</a><br><br>Current path: {self.path}"
             self.wfile.write(rp.encode())
         else:
-            self.send_response(200)
+            self.send_response(response_code)
             self.send_header('content-length', str(len(response_body)))
             if content_encoding:
                 self.send_header('Content-Encoding', content_encoding)
@@ -7989,7 +8146,7 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, sdcpp_current_job, sdcpp_last_job, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
@@ -8066,8 +8223,28 @@ Change Mode<br>
         clean_path = self.path.split("?")[0] #for cases where we do not want query params
         response_body = None
         response_code = 200
+        if clean_path.startswith('/sdcpp/v1/') and not self.secure_endpoint():
+            return
 
-        if clean_path.endswith('/api/extra/tokencount') or clean_path.endswith('/api/extra/tokenize'):
+        cancel_match = re.fullmatch(r'/sdcpp/v1/jobs/([^/]+)/cancel', clean_path)
+        if cancel_match:
+            cancelled = sdcpp_cancel_job(cancel_match.group(1))
+            if cancelled is None:
+                response_code = 404
+                response_body = json.dumps({'error': 'Job not found', 'code': 'job_not_found'}).encode()
+            else:
+                response_body = json.dumps(cancelled).encode()
+
+        elif clean_path == '/sdcpp/v1/models/refresh':
+            response_body = json.dumps({'errors': []}).encode()
+
+        elif clean_path in ('/sdcpp/v1/models/load', '/sdcpp/v1/models/unload'):
+            status = sdcpp_model_status()
+            if clean_path.endswith('/load') and status['state'] == 'ready':
+                status['already_loaded'] = True
+            response_body = json.dumps(status).encode()
+
+        elif clean_path.endswith('/api/extra/tokencount') or clean_path.endswith('/api/extra/tokenize'):
             if not self.secure_endpoint():
                 return
             try:
@@ -8535,6 +8712,7 @@ Change Mode<br>
             is_comfyui_imggen = False
             is_oai_imggen = False
             is_oai_imgedit = False
+            is_sdcpp_imggen = False
             is_img_upscale = False
             is_transcribe = False
             is_tts = False
@@ -8634,10 +8812,12 @@ Change Mode<br>
                 api_format = 9
             elif clean_path.endswith('/sdapi/v1/extra-single-image') or clean_path.endswith('/sdapi/v1/upscale'):
                 is_img_upscale = True
-            elif clean_path=="/prompt" or clean_path=="/images/generations" or clean_path.endswith('/v1/images/generations') or clean_path=="/images/edits" or clean_path.endswith('/v1/images/edits') or clean_path.endswith('/sdapi/v1/txt2img') or clean_path.endswith('/sdapi/v1/img2img'):
+            elif clean_path=="/prompt" or clean_path=="/images/generations" or clean_path.endswith('/v1/images/generations') or clean_path=="/images/edits" or clean_path.endswith('/v1/images/edits') or clean_path.endswith('/sdapi/v1/txt2img') or clean_path.endswith('/sdapi/v1/img2img') or clean_path=='/sdcpp/v1/img_gen':
                 is_imggen = True
                 if clean_path=="/prompt":
                     is_comfyui_imggen = True
+                elif clean_path=='/sdcpp/v1/img_gen':
+                    is_sdcpp_imggen = True
                 elif clean_path.endswith('/v1/images/generations') or clean_path=="/images/generations":
                     is_oai_imggen = True
                 elif clean_path.endswith('/v1/images/edits') or clean_path=="/images/edits":
@@ -8693,6 +8873,8 @@ Change Mode<br>
                         return
 
                 # Embedded Horde chat jobs mandate jinja
+                if is_sdcpp_imggen:
+                    genparams = sdcpp_native_to_genparams(genparams)
                 if genparams.get("is_chat_job") is True:
                     use_jinja = True
 
@@ -9050,6 +9232,7 @@ Change Mode<br>
                     keepalive_started = False
                     final_write_started = False
                     recovery_genkey = ''
+                    sdcpp_created = 0
                     try:
                         send_keepalive = bool(tryparseint(genparams.get('keepalive', False), 0))
                         recovery_params = copy.deepcopy(genparams)
@@ -9076,8 +9259,17 @@ Change Mode<br>
                             abort_gen = None
                             send_keepalive = True
                         # Cloudflare proxy heuristic, trigger keepalive if cloudflare is detected
-                        if self.headers.get('CF-Connecting-IP'):
+                        if self.headers.get('CF-Connecting-IP') and not is_sdcpp_imggen:
                             send_keepalive = True
+                        if is_sdcpp_imggen:
+                            sdcpp_created = int(time.time() * 1000)
+                            with image_recovery_lock:
+                                sdcpp_last_job = None
+                                sdcpp_current_job = {
+                                    'id': 'job_koboldcpp', 'kind': 'img_gen', 'status': 'generating',
+                                    'created': sdcpp_created, 'started': sdcpp_created, 'completed': None,
+                                    'queue_position': 0, 'result': None, 'error': None,
+                                }
                         if send_keepalive:
                             # Close-delimited JSON works with HTTP/1.0 and HTTP/1.1.
                             # No Content-Length: the body includes periodic whitespace.
@@ -9122,7 +9314,28 @@ Change Mode<br>
                             with image_recovery_lock:
                                 if currgenimgkey == recovery_genkey:
                                     currgenimgkey = ''
-                        if is_comfyui_imggen:
+                        if is_sdcpp_imggen:
+                            completed = int(time.time() * 1000)
+                            with image_recovery_lock:
+                                cancelled = bool(sdcpp_current_job and sdcpp_current_job.get('cancel_requested'))
+                                sdcpp_last_job = {
+                                    'id': 'job_koboldcpp', 'kind': 'img_gen',
+                                    'status': 'completed' if gendat else ('cancelled' if cancelled else 'failed'),
+                                    'created': sdcpp_created, 'started': sdcpp_created,
+                                    'completed': completed, 'queue_position': 0,
+                                    'result': ({'output_format': 'png', 'images': [{'index': 0, 'b64_json': gendat}]}
+                                               if gendat else None),
+                                    'error': (None if gendat else {
+                                        'code': 'cancelled' if cancelled else 'generation_failed',
+                                        'message': 'job cancelled by client' if cancelled else 'image generation returned no result'}),
+                                }
+                                sdcpp_current_job = None
+                            genresp = json.dumps({
+                                'id': 'job_koboldcpp', 'kind': 'img_gen',
+                                'status': sdcpp_last_job['status'], 'created': sdcpp_created,
+                                'poll_url': '/sdcpp/v1/jobs/job_koboldcpp',
+                            }).encode()
+                        elif is_comfyui_imggen:
                             if gendat:
                                 lastgeneratedcomfyimg = base64.b64decode(gendat)
                             else:
@@ -9134,7 +9347,7 @@ Change Mode<br>
                         else:
                             genresp = (json.dumps({"images":[gendat],"parameters":{},"info":geninfo,"animated":genanim,"extra_data":gendatextra, "final_frame":genfinalframe}).encode())
                         if not keepalive_started:
-                            self.send_response(200)
+                            self.send_response(202 if is_sdcpp_imggen else 200)
                             self.send_header('content-length', str(len(genresp)))
                             self.end_headers(content_type='application/json')
                         final_write_started = True
@@ -9143,6 +9356,15 @@ Change Mode<br>
                         with image_recovery_lock:
                             if currgenimgkey == recovery_genkey:
                                 currgenimgkey = ''
+                            if is_sdcpp_imggen:
+                                sdcpp_current_job = None
+                                sdcpp_last_job = {
+                                    'id': 'job_koboldcpp', 'kind': 'img_gen', 'status': 'failed',
+                                    'created': sdcpp_created, 'started': sdcpp_created,
+                                    'completed': int(time.time() * 1000), 'queue_position': 0,
+                                    'result': None,
+                                    'error': {'code': 'generation_failed', 'message': 'image generation failed'},
+                                }
                         if keepalive_started and not final_write_started:
                             # Headers are already committed; finish with a JSON error.
                             try:
