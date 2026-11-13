@@ -79,6 +79,8 @@ public:
     std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<IPAdapter::IPAdapterRunner> ip_adapter;
     sd::Tensor<float> ip_adapter_tokens;
+    sd_prompt_image_cb_t prompt_image_callback = nullptr;
+    void* prompt_image_callback_data           = nullptr;
     sd::Tensor<float> ip_adapter_uncond_tokens;
     float ip_adapter_strength = 1.0f;
     std::vector<std::shared_ptr<GenerationExtension>> generation_extensions;

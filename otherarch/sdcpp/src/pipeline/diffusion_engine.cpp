@@ -1893,7 +1893,41 @@ bool StableDiffusionGGML::apply_loras(const sd_lora_t* loras, uint32_t lora_coun
 }
 
 SDCondition StableDiffusionGGML::get_learned_condition(const ConditionerParams& params) {
-    return conditioning_cache_->get(*cond_stage_model, n_threads, params);
+    if (params.prompt_input != nullptr) {
+        return conditioning_cache_->get(*cond_stage_model, n_threads, params);
+    }
+    auto input    = sd::parse_prompt_input(params.text);
+    auto resolved = params;
+    if (sd::prompt_has_images(input)) {
+        if (!cond_stage_model->supports_prompt_images()) {
+            LOG_ERROR("Inline prompt images require a compatible LLM and vision weights");
+            return {};
+        }
+        if (prompt_image_callback == nullptr) {
+            LOG_ERROR("Inline prompt images require sd_set_prompt_image_callback()");
+            return {};
+        }
+        if (!sd::resolve_prompt_images(input, [&](const std::string& source) -> sd::Tensor<float> {
+                sd_image_t image{};
+                if (!prompt_image_callback(source.c_str(), prompt_image_callback_data, &image) ||
+                    image.data == nullptr || image.width == 0 || image.height == 0 || image.channel < 1 || image.channel > 4) {
+                    LOG_ERROR("Failed to resolve prompt image: %s", source.c_str());
+                    return {};
+                }
+                auto pixels = sd_image_to_tensor(image);
+                if (image.channel <= 2) {
+                    auto gray = sd::ops::slice(pixels, 2, 0, 1);
+                    return sd::ops::concat(sd::ops::concat(gray, gray, 2), gray, 2);
+                }
+                return image.channel == 3 ? pixels : sd::ops::slice(pixels, 2, 0, 3);
+            })) {
+            return {};
+        }
+        resolved.prompt_input = &input;
+    } else {
+        resolved.text = sd::prompt_input_text(input);
+    }
+    return conditioning_cache_->get(*cond_stage_model, n_threads, resolved);
 }
 
 void StableDiffusionGGML::reset_generation_extensions() {

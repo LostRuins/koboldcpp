@@ -299,6 +299,7 @@ struct SDGenerationParams {
     SDImageOwner init_image;
     SDImageOwner end_image;
     std::vector<SDImageOwner> ref_images;
+    std::map<std::string, SDImageOwner> prompt_images;
     std::vector<std::vector<SDImageOwner>> ref_videos;
     std::vector<SDAudioOwner> ref_video_audios;
     std::vector<SDAudioOwner> ref_audios;
@@ -325,6 +326,7 @@ struct SDGenerationParams {
     bool from_json_str(const std::string& json_str,
                        const std::function<std::string(const std::string&)>& lora_path_resolver = {});
     bool parse_image_preprocess_json(const std::string& json_str);
+    bool parse_prompt_images_json(const std::string& json_str);
     bool initialize_cache_params();
     bool extract_and_remove_lora(const std::string& lora_model_dir);
     bool width_and_height_are_set() const;
