@@ -510,8 +510,13 @@ add_library(common2
             tools/mtmd/mtmd-helper.h
             tools/mtmd/mtmd-helper-gen.cpp
             tools/mtmd/mtmd-helper-common.h
-            tools/mtmd/clip.cpp
-            tools/mtmd/clip.h
+            tools/mtmd/mtmd-model.cpp
+            tools/mtmd/mtmd-subcontext.cpp
+            tools/mtmd/mtmd-graph.cpp
+            tools/mtmd/mtmd-model.h
+            tools/mtmd/mtmd-subcontext.h
+            tools/mtmd/mtmd-graph.h
+            tools/mtmd/mtmd-impl.h
             src/unicode.h
             src/unicode.cpp
             common/unicode.h
