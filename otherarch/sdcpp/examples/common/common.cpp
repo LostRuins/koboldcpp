@@ -2199,6 +2199,26 @@ bool SDGenerationParams::parse_image_preprocess_json(const std::string& json_str
     return true;
 }
 
+bool SDGenerationParams::parse_prompt_images_json(const std::string& json_str) {
+    auto images = json::parse(json_str, nullptr, false);
+    if (!images.is_object()) {
+        return false;
+    }
+    std::map<std::string, SDImageOwner> decoded;
+    for (auto it = images.begin(); it != images.end(); ++it) {
+        if (it.key().empty() || it.key().find('>') != std::string::npos || !it.value().is_string()) {
+            return false;
+        }
+        SDImageOwner image;
+        if (!decode_base64_image(it.value().get<std::string>(), 3, 0, 0, image)) {
+            return false;
+        }
+        decoded.emplace(it.key(), std::move(image));
+    }
+    prompt_images = std::move(decoded);
+    return true;
+}
+
 /** Populates generation params from a JSON payload (server APIs); returns false on any malformed field. */
 bool SDGenerationParams::from_json_str(
     const std::string& json_str,
@@ -2212,6 +2232,8 @@ bool SDGenerationParams::from_json_str(
     }
 
     if (j.contains("image_preprocess") && !parse_image_preprocess_json(j["image_preprocess"].dump()))
+        return false;
+    if (j.contains("prompt_images") && !parse_prompt_images_json(j["prompt_images"].dump()))
         return false;
 
     auto load_if_exists = [&](const char* key, auto& out) {

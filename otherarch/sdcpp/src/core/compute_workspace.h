@@ -1,6 +1,7 @@
 #ifndef __SD_CORE_COMPUTE_WORKSPACE_H__
 #define __SD_CORE_COMPUTE_WORKSPACE_H__
 
+#include <array>
 #include <functional>
 #include <vector>
 
@@ -19,10 +20,15 @@ namespace sd {
         ggml_backend_sched_t scheduler_ = nullptr;
         size_t scheduler_capacity_      = 0;
         bool active_                    = false;
-        std::vector<uint8_t> measurement_key_;
-        std::vector<BackendBufferSize> measured_buffers_;
+        std::vector<size_t> peak_scheduler_bytes_;
+        struct CachedMeasurement {
+            std::vector<uint8_t> key;
+            std::vector<BackendBufferSize> buffers;
+        };
+        std::array<CachedMeasurement, 2> measurement_cache_;
 
         ggml_backend_sched_t make_scheduler(size_t graph_size);
+        bool release_scheduler();
 
     public:
         struct Measurement {
@@ -39,7 +45,7 @@ namespace sd {
         void set_extra_backends(const std::vector<ggml_backend_t>& backends);
         bool prepare(const Measurement& measurement);
         bool release_excess(const Measurement& measurement);
-        bool allocate(ggml_cgraph* graph, const AssignNodes& assign_nodes);
+        bool allocate(ggml_cgraph* graph, const Measurement& measurement, const AssignNodes& assign_nodes);
         Measurement measure(
             ggml_cgraph* graph,
             const std::function<ggml_backend_t(const ggml_tensor*)>& external_backend,

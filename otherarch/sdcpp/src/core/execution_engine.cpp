@@ -84,9 +84,12 @@ namespace sd {
         if (sd_backend_is(backend, "Vulkan")) {
             return true;
         }
-        auto buft        = ggml_backend_get_default_buffer_type(backend);
+        auto buft       = ggml_backend_get_default_buffer_type(backend);
+        size_t max_size = ggml_backend_buft_get_max_size(buft);
+        if (max_size == SIZE_MAX) {
+            return true;
+        }
         size_t alignment = ggml_backend_buft_get_alignment(buft);
-        size_t max_size  = ggml_backend_buft_get_max_size(buft);
         max_size -= max_size % alignment;
         if (ggml_backend_buft_get_alloc_size(buft, node) > max_size) {
             return false;
@@ -159,19 +162,21 @@ namespace sd {
         if (sched == nullptr || gf == nullptr) {
             return;
         }
-        ggml_backend_t current = session_.backend_;
-        const int n_nodes      = ggml_graph_n_nodes(gf);
+        ggml_backend_t current  = session_.backend_;
+        const int n_nodes       = ggml_graph_n_nodes(gf);
+        const bool multi_device = is_multi_device();
         for (int i = 0; i < n_nodes; i++) {
-            ggml_tensor* node    = ggml_graph_node(gf, i);
-            auto node_assignment = session_.node_assignments_.find(original_graph == nullptr ? node : ggml_graph_node(original_graph, i));
-            if (node_assignment != session_.node_assignments_.end()) {
-                current = node_assignment->second;
-            }
-            for (int s = 0; s < GGML_MAX_SRC; s++) {
-                ggml_backend_t weight_backend = backend_for_weight(node->src[s]);
-                if (weight_backend != nullptr) {
-                    if (node_assignment == session_.node_assignments_.end()) {
-                        current = weight_backend;
+            ggml_tensor* node = ggml_graph_node(gf, i);
+            if (multi_device) {
+                auto node_assignment = session_.node_assignments_.find(original_graph == nullptr ? node : ggml_graph_node(original_graph, i));
+                if (node_assignment != session_.node_assignments_.end()) {
+                    current = node_assignment->second;
+                } else {
+                    for (auto* source : node->src) {
+                        auto weight_backend = backend_for_weight(source);
+                        if (weight_backend != nullptr) {
+                            current = weight_backend;
+                        }
                     }
                 }
             }
@@ -665,7 +670,7 @@ namespace sd {
                 return fail_segment("output cache allocation");
             }
             new_cache_bytes = add_bytes(last ? 0 : session_.cut_cache_.estimate_output_bytes(graph, segment), session_.cache_.pending_bytes(segment_graph));
-            if (!session_.workspace_.allocate(segment_graph, [&](ggml_backend_sched_t scheduler, ggml_cgraph* current) {
+            if (!session_.workspace_.allocate(segment_graph, measurement, [&](ggml_backend_sched_t scheduler, ggml_cgraph* current) {
                     pin_multi_device_nodes(scheduler, current);
                 })) {
                 last_compute_status_ = GGML_STATUS_ALLOC_FAILED;

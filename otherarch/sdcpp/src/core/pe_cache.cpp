@@ -20,11 +20,17 @@ namespace sd {
     }
 
     const Tensor<float>& PECache::get_or_create(const PECacheKey& key, const std::function<Tensor<float>()>& build) {
-        auto entry = entries_.find(key.name());
-        if (entry != entries_.end() && entry->second.key == key) {
-            return entry->second.value;
+        auto& entries = entries_[key.name()];
+        for (auto entry = entries.begin(); entry != entries.end(); ++entry) {
+            if (entry->key == key) {
+                entries.splice(entries.begin(), entries, entry);
+                return entries.front().value;
+            }
         }
-        auto value = build();
-        return entries_.insert_or_assign(key.name(), Entry{key, std::move(value)}).first->second.value;
+        entries.push_front({key, build()});
+        if (entries.size() > entries_per_name_) {
+            entries.pop_back();
+        }
+        return entries.front().value;
     }
 }
