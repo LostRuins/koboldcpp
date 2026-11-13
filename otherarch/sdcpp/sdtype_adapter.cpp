@@ -20,6 +20,7 @@
 #include "otherarch/utils.h"
 #include "otherarch/webp_image.h"
 #include "model_adapter.h"
+#include "model_file_probe.h"
 
 #include "stable-diffusion.h"
 #include "src/kcpp_sd_extensions.h"
@@ -644,6 +645,159 @@ public:
     }
 };
 
+static std::string toLowerCase(const std::string& str) {
+    std::string result;
+    std::locale loc;
+    for (char ch : str) {
+        result += std::tolower(ch, loc); // Use locale-aware tolower
+    }
+    return result;
+}
+
+// kcpp: content-based classification for the "extra model file" fields
+// (clip_1 / clip_2 / t5 / llm / vision / ...). These fields are generic: they
+// may hold a text encoder, an mmproj, a tokenizer JSON, etc. depending on the
+// model family, so misplaced files are detected by content (kcpp_file_probe)
+// rather than by filename or extension alone.
+
+struct kcpp_st_class
+{
+    // safetensors-only classification: tensor counts by family prefix
+    int text_t5   = 0;   // T5 / UMT5 encoder
+    int text_clip = 0;   // CLIP-L / CLIP-G / SigLIP text tower
+    int vision    = 0;   // CLIP / SigLIP / Qwen vision tower
+    int llm       = 0;   // causal LLM (or text side of a combined VLM file)
+    int diffusion = 0;   // UNet / DiT
+    int vae       = 0;
+    const char* label = ""; // dominant st bucket, for logging; null if unclear
+};
+
+struct kcpp_path_class
+{
+    bool valid              = false;  // the probe managed to open the file
+    bool is_gguf            = false;
+    bool is_safetensors     = false;
+    bool is_json            = false;
+    bool is_mmproj          = false;
+    bool is_mmproj_filename = false;  // name heuristic: "mmproj" in the path (fallback only)
+    kcpp_st_class st;                 // safetensors only
+};
+
+// count tensors whose name starts with any of the prefixes
+static int st_count_prefix(const std::vector<kcpp_probe_tensor>& ts,
+                           std::initializer_list<const char*> prefixes)
+{
+    int n = 0;
+    for (const auto& t : ts)
+    {
+        for (const char* p : prefixes)
+        {
+            if (t.name.rfind(p, 0) == 0) { n++; break; }
+        }
+    }
+    return n;
+}
+
+static void kcpp_classify_safetensors(const kcpp_file_probe& probe, kcpp_path_class& c)
+{
+    const std::vector<kcpp_probe_tensor>& ts = probe.tensors();
+    if (ts.empty()) return;
+
+    c.st.text_t5   = st_count_prefix(ts, {"encoder.block.", "encoder.embed_tokens.",
+                                          "encoder.final_layer_norm.", "shared.weight"});
+    c.st.text_clip = st_count_prefix(ts, {"text_model.", "text_projection"});
+    c.st.vision    = st_count_prefix(ts, {"vision_model.", "vision_tower.", "model.visual.",
+                                          "visual.", "multi_modal_projector."});
+    c.st.llm       = st_count_prefix(ts, {"model.layers.", "model.embed_tokens.",
+                                          "layers.", "embed_tokens.", "lm_head."});
+    c.st.diffusion = st_count_prefix(ts, {"model.diffusion_model.", "input_blocks.",
+                                          "output_blocks.", "transformer_blocks.",
+                                          "down_blocks.", "up_blocks.", "mid_block."});
+    c.st.vae       = st_count_prefix(ts, {"encoder.conv_in.", "decoder.conv_in.",
+                                          "quant_conv.", "post_quant_conv.",
+                                          "first_stage_model."});
+
+    int best = c.st.text_t5;
+    const char* label = "T5 text encoder";
+    if (c.st.text_clip  > best) { best = c.st.text_clip;  label = "CLIP text encoder"; }
+    if (c.st.vision     > best) { best = c.st.vision;     label = "vision encoder"; }
+    if (c.st.llm        > best) { best = c.st.llm;        label = "LLM"; }
+    if (c.st.diffusion  > best) { best = c.st.diffusion;  label = "diffusion model"; }
+    if (c.st.vae        > best) { best = c.st.vae;        label = "VAE"; }
+    if (best < 3) return;  // too few hits to claim anything
+    // a combined VLM dump (e.g. convert_qwen3_vl.py output) has both towers
+    if (label == std::string("LLM") && c.st.vision >= 3) label = "LLM + vision (combined VLM file)";
+    c.st.label = label;
+}
+
+static std::map<std::string, kcpp_path_class> kcpp_path_class_cache;
+
+static kcpp_path_class kcpp_classify_path(const std::string& path)
+{
+    if (path.empty()) return {};
+
+    std::string key = path;
+    {
+        auto it = kcpp_path_class_cache.find(key);
+        if (it != kcpp_path_class_cache.end()) return it->second;
+    }
+
+    kcpp_path_class c;
+    kcpp_file_probe probe;
+    c.valid = probe.open(path);
+    bool identified = false;
+    if (c.valid) {
+        auto format = probe.format();
+        if (kcpp_file_format::JSON == format) {
+            c.is_json = true;
+            identified = true;
+        } else if (kcpp_file_format::GGUF == format) {
+            c.is_gguf = true;
+            const std::map<std::string, std::string>& meta = probe.metadata();
+            auto get = [&](const char* k) -> std::string {
+                auto it = meta.find(k);
+                return it == meta.end() ? std::string() : it->second;
+            };
+            const std::string arch  = get("general.architecture");
+            const std::string type  = get("general.type");
+            // any clip.vision.* key implies a vision encoder; true for every
+            // mmproj llama.cpp has ever produced
+            bool has_vision_kv = false;
+            for (const auto& kv : meta) {
+                if (kv.first.rfind("clip.vision.", 0) == 0) { has_vision_kv = true; break; }
+            }
+            c.is_mmproj = type == "mmproj"
+                || type == "clip-vision" // Mistral/pixtral-era files "just in case"
+                || has_vision_kv
+                || get("clip.has_vision_encoder") == "1"
+                || !get("clip.projector_type").empty();
+            identified = c.is_mmproj;
+        } else if (kcpp_file_format::SAFETENSORS == format) {
+            c.is_safetensors = true;
+            kcpp_classify_safetensors(probe, c);
+            identified = c.st.label != nullptr;
+        }
+        if (!identified && !probe.error().empty())
+        {
+            printf("\nKCPP: could not identify %s (%s)\n", path.c_str(), probe.error().c_str());
+        }
+    }
+    // the name heuristic is tracked separately: should only apply if
+    // metadata couldn't identify it
+    if (!identified) {
+        c.is_mmproj_filename = toLowerCase(path).find("mmproj") != std::string::npos;
+    }
+
+    kcpp_path_class_cache[key] = c;
+    return c;
+}
+
+// an mmproj by content or by name
+static bool kcpp_is_mmproj(const kcpp_path_class& c)
+{
+    return c.is_mmproj || c.is_mmproj_filename;
+}
+
 // read the model version from the file metadata using a temporary loader and
 // resolve model / diffusion_model and text encoder / llm / proj / vision paths
 static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, const sd_load_model_inputs& inputs)
@@ -742,24 +896,6 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
 
     }
 
-    std::string kcpp_main_tokenizer;
-
-    auto toLowerCase = [](const std::string& str) -> std::string {
-        std::string result;
-        std::locale loc;
-        for (char ch : str) {
-            result += std::tolower(ch, loc); // Use locale-aware tolower
-        }
-        return result;
-    };
-
-    auto is_json_path = [&](const char* path) -> bool {
-        if (path_empty(path)) {
-            return false;
-        }
-        return toLowerCase(std::filesystem::u8path(path).extension().string()) == ".json";
-    };
-
     auto sibling_tokenizer_json = [&](const char* model_path) -> std::string {
         if (path_empty(model_path)) {
             return {};
@@ -801,6 +937,69 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu || is_fibo2);
     bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi || is_llada);
 
+    std::string kcpp_main_tokenizer;
+
+    // content-based pre-pass over the three "extra model file" slots
+    // (t5/llm, sdclip1, sdclip2). A file that is a tokenizer JSON or an
+    // mmproj by content is moved out of its slot here, so the heuristics
+    // below only have to deal with text encoders. Two files of the same
+    // kind is an error: the first one (in slot order) wins and the second
+    // is left where it is.
+    {
+        const char** slots[3] = {&params.t5xxl_path, &params.clip_l_path, &params.clip_g_path};
+
+        for (auto slot: slots)
+        {
+            if (path_empty(*slot)) continue;
+            const kcpp_path_class c = kcpp_classify_path(*slot);
+            if (!c.valid) continue;
+
+            if (c.is_json)
+            {
+                // a second tokenizer is an error: the first one wins
+                if (!kcpp_main_tokenizer.empty() || !kcpp_tokenizer_resources.explicit_umt5_json.empty()) continue;
+                if (iswan)
+                {
+                    try
+                    {
+                        kcpp_tokenizer_resources.explicit_umt5_json = read_str_from_disk(*slot);
+                    }
+                    catch (const std::exception& exception)
+                    {
+                        printf("\nKCPP: could not read UMT5 tokenizer JSON from %s: %s\n",
+                               *slot, exception.what());
+                    }
+                }
+                else
+                {
+                    kcpp_main_tokenizer = *slot;
+                }
+                printf("\nKCPP: using tokenizer JSON found in %s\n", *slot);
+                *slot = "";
+            }
+            else if (c.is_mmproj)
+            {
+                const char** target = nullptr;
+                if (has_llm_vision) target = &params.llm_vision_path;
+                else if (is_ltx || iswan) target = &params.clip_vision_path;
+                // a second mmproj is an error: the first one wins, so the
+                // destination must still be empty
+                if (target != nullptr && path_empty(*target))
+                {
+                    printf("\nKCPP: routing mmproj found in %s to %s\n", *slot, *target);
+                    *target = *slot;
+                    *slot = "";
+                }
+            }
+            else if (c.is_safetensors && c.st.label)
+            {
+                // safetensors are not rerouted: a combined VLM safetensors must
+                // stay in one piece for sd.cpp to split internally
+                printf("\nKCPP: %s looks like a %s (safetensors)\n", *slot, c.st.label);
+            }
+        }
+    }
+
     //kcpp qol fallback: if a llm was loaded as t5 by mistake
     if(conditioner_is_llm && !path_empty(params.t5xxl_path))
     {
@@ -811,7 +1010,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         else if(path_empty(params.clip_g_path))
         {
             //very tricky case. see if we can tell if clipl is an mmproj, if so move to right place
-            if(toLowerCase(params.clip_l_path).find("mmproj") != std::string::npos || is_ltx)
+            if(kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)) || is_ltx)
             {
                 // g = l, l = t, t = ""
                 std::swap(params.clip_g_path, params.clip_l_path);
@@ -825,15 +1024,33 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     {
         if(conditioner_is_llm && path_empty(params.llm_path))
         {
-            std::swap(params.llm_path, params.clip_l_path);
+            if (kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)))
+            {
+                // an mmproj in a text-encoder field: route it to the vision
+                // field when the model has one and it is free
+                if (has_llm_vision && path_empty(params.llm_vision_path))
+                {
+                    std::swap(params.clip_l_path, params.llm_vision_path);
+                }
+                else
+                {
+                    printf("\nKCPP: clip_1 holds an mmproj, which is not a text model; leaving clip_1 as is\n");
+                }
+            }
+            else
+            {
+                std::swap(params.llm_path, params.clip_l_path);
+            }
         }
         else if(iswan)
         {
             if(path_empty(params.t5xxl_path))
             {
-                std::swap(params.t5xxl_path, params.clip_l_path);
+                if (!kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)))
+                    std::swap(params.t5xxl_path, params.clip_l_path);
             } else if (path_empty(params.clip_vision_path)) {
-                std::swap(params.clip_vision_path, params.clip_l_path);
+                if (!kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)))
+                    std::swap(params.clip_vision_path, params.clip_l_path);
             }
         }
     }
@@ -841,52 +1058,43 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     //settle clip-g replacements
     if (!path_empty(params.clip_g_path))
     {
-        if (is_json_path(params.clip_g_path) && iswan)
+        if (kcpp_is_mmproj(kcpp_classify_path(params.clip_g_path)))
         {
-            try {
-                kcpp_tokenizer_resources.explicit_umt5_json = read_str_from_disk(params.clip_g_path);
-                printf("\nKCPP: using UMT5 tokenizer JSON from %s\n", params.clip_g_path);
-                params.clip_g_path = "";
-            } catch (const std::exception& exception) {
-                printf("\nKCPP: could not read UMT5 tokenizer JSON from %s: %s\n",
-                       params.clip_g_path,
-                       exception.what());
+            if(iswan && path_empty(params.clip_vision_path))
+            {
+                std::swap(params.clip_vision_path, params.clip_g_path);
             }
-        }
-        else if (is_json_path(params.clip_g_path) && is_ltx)
-        {
-            kcpp_main_tokenizer = params.clip_g_path;
-            params.clip_g_path = "";
-        }
-        else if(iswan && path_empty(params.clip_vision_path))
-        {
-            std::swap(params.clip_vision_path, params.clip_g_path);
-        }
-        else if(has_llm_vision && path_empty(params.llm_vision_path))
-        {
-            std::swap(params.llm_vision_path, params.clip_g_path);
-        }
-        else if(is_ltx)
-        {
-            std::swap(params.embeddings_connectors_path, params.clip_g_path);
-        }
-        else if(is_ideogram)
-        {
-            std::swap(params.uncond_diffusion_model_path, params.clip_g_path);
-        }
-        else if (has_tokenizer && kcpp_main_tokenizer.empty())
-        {
-            // accept a tokenizer.json on clip_2
-            kcpp_main_tokenizer = params.clip_g_path;
-            params.clip_g_path = "";
+            else if(has_llm_vision && path_empty(params.llm_vision_path))
+            {
+                std::swap(params.llm_vision_path, params.clip_g_path);
+            }
+        } else {
+            if(conditioner_is_llm && path_empty(params.llm_path))
+            {
+                // a text model misplaced in clip_2
+                std::swap(params.llm_path, params.clip_g_path);
+            }
+            else if(is_ltx)
+            {
+                std::swap(params.embeddings_connectors_path, params.clip_g_path);
+            }
+            else if(is_ideogram)
+            {
+                std::swap(params.uncond_diffusion_model_path, params.clip_g_path);
+            }
+            else if(sd_version_is_minimax_h3_image(tempver) && path_empty(params.embeddings_connectors_path))
+            {
+                // the P-H3 text connector goes to the embeddings connectors field
+                std::swap(params.embeddings_connectors_path, params.clip_g_path);
+            }
         }
     }
 
     //settle possible inversions for mmproj
     if(!path_empty(params.llm_vision_path) && !path_empty(params.llm_path))
     {
-        if(toLowerCase(params.llm_vision_path).find("mmproj") == std::string::npos &&
-        toLowerCase(params.llm_path).find("mmproj") != std::string::npos)
+        if(!kcpp_is_mmproj(kcpp_classify_path(params.llm_vision_path)) &&
+        kcpp_is_mmproj(kcpp_classify_path(params.llm_path)))
         {
             std::swap(params.llm_path, params.llm_vision_path);
         }
@@ -2175,7 +2383,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    if(info.is_minimaxh3 && ref_audio_data.size()>0)
+    // reference audio is a video-model feature; the H3 image variant ignores it
+    if(info.is_minimaxh3 && info.is_video_model && ref_audio_data.size()>0)
     {
         for(int i=0;i<ref_audio_data.size();++i)
         {
@@ -2310,7 +2519,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             vid_gen_params.ref_images = reference_imgs.data();
             vid_gen_params.ref_images_count = (int)reference_imgs.size();
         }
-        if (info.is_minimaxh3 && reference_audios.size() > 0) {
+        if (info.is_minimaxh3 && info.is_video_model && reference_audios.size() > 0) {
             vid_gen_params.ref_audios = reference_audios.data();
             vid_gen_params.ref_audios_count = (int)reference_audios.size();
         }
