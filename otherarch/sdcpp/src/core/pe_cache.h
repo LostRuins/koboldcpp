@@ -2,6 +2,7 @@
 #define __SD_CORE_PE_CACHE_H__
 
 #include <functional>
+#include <list>
 #include <map>
 #include <set>
 #include <type_traits>
@@ -71,9 +72,14 @@ namespace sd {
             Tensor<float> value;
         };
 
-        std::map<std::string, Entry> entries_;
+        std::map<std::string, std::list<Entry>> entries_;
+        size_t entries_per_name_;
 
     public:
+        explicit PECache(size_t entries_per_name = 1)
+            : entries_per_name_(entries_per_name) {
+            GGML_ASSERT(entries_per_name_ > 0);
+        }
         const Tensor<float>& get_or_create(const PECacheKey& key, const std::function<Tensor<float>()>& build);
     };
 

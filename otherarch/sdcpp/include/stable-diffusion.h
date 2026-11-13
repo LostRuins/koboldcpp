@@ -518,6 +518,11 @@ typedef struct {
 } sd_preview_info_t;
 typedef bool (*sd_graph_eval_callback_t)(struct ggml_tensor* t, bool ask, void* user_data);
 
+// Resolves <image:source> markers. Pixels are borrowed and copied before the
+// next callback; the caller retains ownership. Register/clear while ctx is idle.
+typedef bool (*sd_prompt_image_cb_t)(const char* source, void* data, sd_image_t* image_out);
+SD_API void sd_set_prompt_image_callback(sd_ctx_t* ctx, sd_prompt_image_cb_t cb, void* data);
+
 SD_API void sd_set_log_callback(sd_log_cb_t sd_log_cb, void* data);
 SD_API void sd_set_progress_callback(sd_progress_cb_t cb, void* data);
 // Context-local generation events, independent of preview and the legacy progress callback.

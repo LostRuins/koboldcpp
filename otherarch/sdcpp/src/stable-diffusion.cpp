@@ -699,6 +699,17 @@ struct sd_ctx_t {
     StableDiffusionGGML* sd = nullptr;
 };
 
+void sd_set_prompt_image_callback(sd_ctx_t* ctx, sd_prompt_image_cb_t cb, void* data) {
+    if (ctx == nullptr || ctx->sd == nullptr) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(ctx->sd->execution_mutex);
+    if (!ctx->sd->executing_) {
+        ctx->sd->prompt_image_callback      = cb;
+        ctx->sd->prompt_image_callback_data = data;
+    }
+}
+
 void sd_set_generation_progress_callback(sd_ctx_t* ctx, sd_generation_progress_cb_t cb, void* data) {
     if (ctx == nullptr || ctx->sd == nullptr) {
         return;

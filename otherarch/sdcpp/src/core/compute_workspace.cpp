@@ -53,10 +53,12 @@ namespace sd {
         if (measurement.buffers.empty()) {
             return false;
         }
-        const bool grows = std::any_of(measurement.buffers.begin(), measurement.buffers.end(),
-                                       [&](const BackendBufferSize& size) { return size.bytes > bytes(size.backend); });
-        if (grows) {
-            release();
+        GGML_ASSERT(peak_scheduler_bytes_.empty() || peak_scheduler_bytes_.size() == measurement.buffers.size());
+        // The reported size includes per-graph scratch, which can shrink while the scheduler is retained.
+        for (size_t i = 0; i < peak_scheduler_bytes_.size(); ++i) {
+            if (measurement.buffers[i].bytes > peak_scheduler_bytes_[i]) {
+                return release_scheduler();
+            }
         }
         return true;
     }
@@ -64,14 +66,14 @@ namespace sd {
     bool ComputeWorkspace::release_excess(const Measurement& measurement) {
         return std::any_of(measurement.buffers.begin(), measurement.buffers.end(),
                            [&](const BackendBufferSize& size) { return bytes(size.backend) > size.bytes; }) &&
-               release();
+               release_scheduler();
     }
 
-    bool ComputeWorkspace::allocate(ggml_cgraph* graph, const AssignNodes& assign_nodes) {
+    bool ComputeWorkspace::allocate(ggml_cgraph* graph, const Measurement& measurement, const AssignNodes& assign_nodes) {
         GGML_ASSERT(!active_);
         const size_t capacity = static_cast<size_t>(ggml_graph_n_nodes(graph) + ggml_graph_n_leafs(graph)) + 8;
         if (scheduler_ == nullptr || capacity > scheduler_capacity_) {
-            release();
+            release_scheduler();
             scheduler_          = make_scheduler(capacity);
             scheduler_capacity_ = capacity;
         }
@@ -84,6 +86,10 @@ namespace sd {
         if (!ggml_backend_sched_alloc_graph(scheduler_, graph)) {
             release();
             return false;
+        }
+        peak_scheduler_bytes_.resize(measurement.buffers.size());
+        for (size_t i = 0; i < measurement.buffers.size(); ++i) {
+            peak_scheduler_bytes_[i] = std::max(peak_scheduler_bytes_[i], bytes(measurement.buffers[i].backend));
         }
         active_ = true;
         return true;
@@ -154,8 +160,13 @@ namespace sd {
                 append(uses);
             }
             // Match the full allocation metadata, including topology and external placement.
-            if (key == measurement_key_) {
-                return {measured_buffers_};
+            for (auto& cached : measurement_cache_) {
+                if (key == cached.key) {
+                    if (&cached != &measurement_cache_.front()) {
+                        std::swap(cached, measurement_cache_.front());
+                    }
+                    return {measurement_cache_.front().buffers};
+                }
             }
         }
         const size_t graph_size = tensors.size() + 8;
@@ -229,8 +240,8 @@ namespace sd {
         }
         ggml_free(context);
         if (cache_measurement && !result.buffers.empty()) {
-            measurement_key_  = std::move(key);
-            measured_buffers_ = result.buffers;
+            measurement_cache_.back()  = std::move(measurement_cache_.front());
+            measurement_cache_.front() = {std::move(key), result.buffers};
         }
         return result;
     }
@@ -263,14 +274,21 @@ namespace sd {
     }
 
     bool ComputeWorkspace::release() {
+        if (!release_scheduler()) {
+            return false;
+        }
+        measurement_cache_ = {};
+        return true;
+    }
+
+    bool ComputeWorkspace::release_scheduler() {
         if (active_) {
             return false;
         }
-        measurement_key_.clear();
-        measured_buffers_.clear();
         ggml_backend_sched_free(scheduler_);
         scheduler_          = nullptr;
         scheduler_capacity_ = 0;
+        peak_scheduler_bytes_.clear();
         return true;
     }
 

@@ -4,10 +4,12 @@
 #include <cinttypes>
 #include <cmath>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include "conditioning/prompt_input.h"
 #include "core/ggml_tensor_utils.h"
 
 #include "core/tensor_ggml.hpp"
@@ -132,6 +134,7 @@ static inline sd::Tensor<float> apply_token_weights(sd::Tensor<float> hidden_sta
 
 struct ConditionerParams {
     std::string text;
+    const sd::PromptInput* prompt_input                                 = nullptr;
     int clip_skip                                                       = -1;
     int width                                                           = -1;
     int height                                                          = -1;
@@ -143,6 +146,7 @@ struct ConditionerParams {
 
 struct Conditioner {
     virtual int resolve_clip_skip(int) const { return 0; }
+    virtual bool supports_prompt_images() const { return false; }
     virtual ~Conditioner() = default;
 
 public:
@@ -1979,6 +1983,10 @@ struct LLMEmbedder : public Conditioner {
     std::shared_ptr<T5Runner> byt5;
     std::shared_ptr<PH3ImageTextConnectorRunner> ph3_connector;
 
+    bool supports_prompt_images() const override {
+        return llm->supports_prompt_images();
+    }
+
     LLMEmbedder(ggml_backend_t backend,
                 const String2TensorStorage& tensor_storage_map      = {},
                 SDVersion version                                   = VERSION_QWEN_IMAGE,
@@ -2023,6 +2031,14 @@ struct LLMEmbedder : public Conditioner {
             arch = LLM::LLMArch::QWEN3;
         } else if (version == VERSION_MOSS_IMAGE) {
             arch = LLM::LLMArch::QWEN3_5;
+        }
+        if (arch == LLM::LLMArch::QWEN2_5_VL || arch == LLM::LLMArch::QWEN3_VL || arch == LLM::LLMArch::QWEN3_5) {
+            for (const auto& entry : tensor_storage_map) {
+                if (starts_with(entry.first, "text_encoders.llm.visual.")) {
+                    enable_vision = true;
+                    break;
+                }
+            }
         }
         llm = std::make_shared<LLM::LLMRunner>(arch,
                                                backend,
@@ -2184,13 +2200,9 @@ struct LLMEmbedder : public Conditioner {
         }
     }
 
-    std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
-                                                                                  const std::pair<int, int>& attn_range,
-                                                                                  size_t min_length                                                  = 0,
-                                                                                  size_t max_length                                                  = 100000000,
-                                                                                  bool spell_quotes                                                  = false,
-                                                                                  const std::string& suffix                                          = "",
-                                                                                  const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds = {}) {
+    static std::vector<std::pair<std::string, float>> parse_text_attention(const std::string& text,
+                                                                           const std::pair<int, int>& attn_range,
+                                                                           bool spell_quotes) {
         std::vector<std::pair<std::string, float>> parsed_attention;
         if (attn_range.first >= 0 && attn_range.second > 0) {
             if (attn_range.first > 0) {
@@ -2211,6 +2223,18 @@ struct LLMEmbedder : public Conditioner {
         } else {
             parsed_attention.emplace_back(text, 1.f);
         }
+
+        return parsed_attention;
+    }
+
+    std::tuple<std::vector<int>, std::vector<float>, std::vector<float>> tokenize(std::string text,
+                                                                                  const std::pair<int, int>& attn_range,
+                                                                                  size_t min_length                                                  = 0,
+                                                                                  size_t max_length                                                  = 100000000,
+                                                                                  bool spell_quotes                                                  = false,
+                                                                                  const std::string& suffix                                          = "",
+                                                                                  const std::vector<std::pair<int, sd::Tensor<float>>>& image_embeds = {}) {
+        auto parsed_attention = parse_text_attention(text, attn_range, spell_quotes);
 
         {
             std::stringstream ss;
@@ -2287,6 +2311,57 @@ struct LLMEmbedder : public Conditioner {
         return {tokens, weights, mask};
     }
 
+    bool prepare_prompt_tokens(int n_threads,
+                               const sd::PromptInputTemplate& input_template,
+                               const std::string& prompt,
+                               const std::pair<int, int>& attn_range,
+                               int min_length,
+                               int max_length,
+                               bool spell_quotes,
+                               const std::string& suffix,
+                               const LLM::ImageEmbeds& images,
+                               const LLM::DeepStackImageEmbeds& deepstack,
+                               const std::vector<LLM::ImageGrid>& grids,
+                               LLM::PromptTokens& result) {
+        sd::PromptInput input;
+        auto text = parse_text_attention(prompt, attn_range, spell_quotes);
+        text.emplace_back(suffix, 1.f);
+        for (const auto& span : text) {
+            auto parts = input_template.expand(span.first, span.second);
+            input.insert(input.end(), std::make_move_iterator(parts.begin()), std::make_move_iterator(parts.end()));
+        }
+        max_length = std::min(max_length, static_cast<int>(llm->config.max_position_embeddings));
+        if (!llm->prepare_prompt(n_threads, *tokenizer, input, max_length, result, images, deepstack, grids)) {
+            return false;
+        }
+        auto expanded = result.tokens;
+        for (const auto& image : result.image_embeds) {
+            expanded.insert(expanded.begin() + image.first, image.second.shape()[1] - 1, expanded[image.first]);
+        }
+        if (sd_version_is_flux3(version)) {
+            min_length = std::min(max_length, ((result.expanded_length + 79) / 80) * 80);
+        }
+        tokenizer->pad_tokens(expanded, &result.weights, &result.mask, min_length, max_length);
+        const int leading_padding = static_cast<int>(std::find(result.mask.begin(), result.mask.end(), 1.f) - result.mask.begin());
+        for (auto& image : result.image_embeds) {
+            image.first += leading_padding;
+        }
+        for (auto& layer : result.deepstack_image_embeds) {
+            for (auto& image : layer) {
+                image.first += leading_padding;
+            }
+        }
+        for (auto& grid : result.image_grids) {
+            grid.index += leading_padding;
+        }
+        for (auto it = result.image_embeds.rbegin(); it != result.image_embeds.rend(); ++it) {
+            expanded.erase(expanded.begin() + it->first + 1, expanded.begin() + it->first + it->second.shape()[1]);
+        }
+        result.tokens          = std::move(expanded);
+        result.expanded_length = static_cast<int>(result.weights.size());
+        return true;
+    }
+
     sd::Tensor<float> encode_prompt(int n_threads,
                                     const std::string prompt,
                                     const std::pair<int, int>& prompt_attn_range,
@@ -2300,8 +2375,18 @@ struct LLMEmbedder : public Conditioner {
                                     const LLM::DeepStackImageEmbeds& deepstack_image_embeds = {},
                                     const std::vector<LLM::ImageGrid>& image_grids          = {},
                                     const std::string& prompt_suffix                        = "",
-                                    sd::Tensor<float>* output_mask                          = nullptr) {
-        auto tokens_weights_mask = tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes, prompt_suffix, image_embeds);
+                                    sd::Tensor<float>* output_mask                          = nullptr,
+                                    const sd::PromptInputTemplate* input_template           = nullptr,
+                                    LLM::PromptTokens* output_prompt_tokens                 = nullptr) {
+        LLM::PromptTokens prepared;
+        if (input_template != nullptr &&
+            !prepare_prompt_tokens(n_threads, *input_template, prompt, prompt_attn_range, min_length, max_length,
+                                   spell_quotes, prompt_suffix, image_embeds, deepstack_image_embeds, image_grids, prepared)) {
+            return {};
+        }
+        auto tokens_weights_mask = input_template == nullptr
+                                       ? tokenize(prompt, prompt_attn_range, min_length, max_length, spell_quotes, prompt_suffix, image_embeds)
+                                       : std::make_tuple(prepared.tokens, prepared.weights, prepared.mask);
         auto& tokens             = std::get<0>(tokens_weights_mask);
         auto& weights            = std::get<1>(tokens_weights_mask);
         auto& mask               = std::get<2>(tokens_weights_mask);
@@ -2332,21 +2417,24 @@ struct LLMEmbedder : public Conditioner {
         sd::Tensor<int32_t> position_ids;
         if (sd_version_is_flux3(version)) {
             position_ids = sd::Tensor<int32_t>::zeros({static_cast<int64_t>(weights.size() * 4)});
+            if (input_template != nullptr) {
+                position_ids.values() = LLM::LLMRunner::build_position_ids(llm->config, weights.size(), prepared.image_grids);
+            }
             for (size_t axis = 0; axis < 4; ++axis) {
                 for (size_t i = 0; i < weights.size(); ++i) {
-                    position_ids[axis * weights.size() + i] = mask[i] == 0.f ? 1 : static_cast<int32_t>(i);
+                    position_ids[axis * weights.size() + i] = mask[i] == 0.f ? 1 : (input_template == nullptr ? static_cast<int32_t>(i) : position_ids[axis * weights.size() + i]);
                 }
             }
         }
         auto hidden_states = llm->compute(n_threads,
                                           input_ids,
                                           attention_mask,
-                                          image_embeds,
+                                          input_template == nullptr ? image_embeds : prepared.image_embeds,
                                           out_layers,
                                           false,
                                           false,
-                                          deepstack_image_embeds,
-                                          image_grids,
+                                          input_template == nullptr ? deepstack_image_embeds : prepared.deepstack_image_embeds,
+                                          input_template == nullptr ? image_grids : prepared.image_grids,
                                           position_ids);
         if (hidden_states.empty()) {
             LOG_ERROR("LLM prompt encoding failed");
@@ -2385,6 +2473,9 @@ struct LLMEmbedder : public Conditioner {
             for (size_t i = prompt_template_encode_start_idx; i < mask.size(); ++i) {
                 output_mask->data()[i - prompt_template_encode_start_idx] = mask[i];
             }
+        }
+        if (output_prompt_tokens != nullptr && input_template != nullptr) {
+            *output_prompt_tokens = std::move(prepared);
         }
         return new_hidden_states;
     }
@@ -2482,7 +2573,16 @@ struct LLMEmbedder : public Conditioner {
     }
 
     SDCondition get_learned_condition(int n_threads,
-                                      const ConditionerParams& conditioner_params) override {
+                                      const ConditionerParams& params) override {
+        ConditionerParams conditioner_params = params;
+        sd::PromptInputTemplate input_template(params.prompt_input);
+        if (params.prompt_input != nullptr) {
+            if (!supports_prompt_images()) {
+                LOG_ERROR("This conditioner does not support inline prompt images");
+                return {};
+            }
+            conditioner_params.text = input_template.text;
+        }
         std::string prompt;
         std::pair<int, int> prompt_attn_range;
         std::vector<std::string> extra_prompts;
@@ -3270,6 +3370,7 @@ struct LLMEmbedder : public Conditioner {
             GGML_ABORT("unknown version %d", version);
         }
 
+        LLM::PromptTokens prompt_tokens;
         auto hidden_states = encode_prompt(n_threads,
                                            prompt,
                                            prompt_attn_range,
@@ -3283,7 +3384,9 @@ struct LLMEmbedder : public Conditioner {
                                            deepstack_image_embeds,
                                            image_grids,
                                            prompt_suffix,
-                                           version == VERSION_IRIS ? &text_mask : nullptr);
+                                           version == VERSION_IRIS ? &text_mask : nullptr,
+                                           params.prompt_input == nullptr ? nullptr : &input_template,
+                                           &prompt_tokens);
         if (hidden_states.empty()) {
             return {};
         }
@@ -3350,10 +3453,11 @@ struct LLMEmbedder : public Conditioner {
         result.extra_c_crossattns = std::move(extra_hidden_states_vec);
         result.c_vector           = std::move(text_mask);
         if (version == VERSION_QWEN_IMAGE_2_1) {
-            auto slots = sd::Tensor<int32_t>::zeros({result.c_crossattn.shape()[1]});
+            auto slots             = sd::Tensor<int32_t>::zeros({result.c_crossattn.shape()[1]});
+            const auto& references = params.prompt_input == nullptr ? image_embeds : prompt_tokens.image_embeds;
             for (size_t i = 0; i < image_embeds.size(); ++i) {
-                int64_t begin = image_embeds[i].first - prompt_template_encode_start_idx;
-                int64_t end   = begin + image_embeds[i].second.shape()[1];
+                int64_t begin = references[i].first - prompt_template_encode_start_idx;
+                int64_t end   = begin + references[i].second.shape()[1];
                 if (begin < 0 || end > slots.numel()) {
                     LOG_ERROR("Qwen Image 2.1 image slots exceed the encoded prompt");
                     return {};
@@ -3366,7 +3470,8 @@ struct LLMEmbedder : public Conditioner {
         }
         if (sd_version_is_minimax_h3(version)) {
             std::vector<int32_t> tags(static_cast<size_t>(result.c_crossattn.shape()[1]), 1);
-            for (const auto& [index, image_embed] : image_embeds) {
+            const auto& images = params.prompt_input == nullptr ? image_embeds : prompt_tokens.image_embeds;
+            for (const auto& [index, image_embed] : images) {
                 int64_t begin = std::max<int64_t>(0, index - 1);
                 int64_t end   = std::min<int64_t>(static_cast<int64_t>(tags.size()),
                                                   index + image_embed.shape()[1] + 1);

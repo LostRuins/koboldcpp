@@ -976,6 +976,20 @@ int main(int argc, const char* argv[]) {
             return 1;
         }
 
+        SDImageOwner prompt_image;
+        sd_set_prompt_image_callback(
+            sd_ctx.get(), [](const char* source, void* data, sd_image_t* image_out) -> bool {
+                auto& image = *static_cast<SDImageOwner*>(data);
+                sd_image_t loaded{};
+                if (!load_sd_image_from_file(&loaded, source, 0, 0, 3)) {
+                    return false;
+                }
+                image.reset(loaded);
+                *image_out = loaded;
+                return true;
+            },
+            &prompt_image);
+
         sd_img_gen_params_t img_gen_params{};
         const bool use_img_gen_params = cli_params.mode == IMG_GEN || cli_params.mode == ADETAILER;
         if (use_img_gen_params) {

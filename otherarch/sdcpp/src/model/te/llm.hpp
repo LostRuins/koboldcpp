@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "conditioning/prompt_input.h"
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_runner.h"
@@ -110,6 +111,16 @@ namespace LLM {
     using ImageEmbeds          = std::vector<std::pair<int, sd::Tensor<float>>>;
     using DeepStackImageEmbeds = std::vector<ImageEmbeds>;
 
+    struct PromptTokens {
+        std::vector<int> tokens;
+        int expanded_length = 0;
+        std::vector<float> weights;
+        std::vector<float> mask;
+        ImageEmbeds image_embeds;
+        DeepStackImageEmbeds deepstack_image_embeds;
+        std::vector<ImageGrid> image_grids;
+    };
+
     struct LLMConfig {
         LLMArch arch                    = LLMArch::QWEN2_5_VL;
         int64_t num_layers              = 28;
@@ -176,18 +187,25 @@ namespace LLM {
                 config.qkv_bias     = false;
                 config.rms_norm_eps = 1e-5f;
             } else if (arch == LLMArch::QWEN3_5) {
-                config.hidden_size             = 4096;
-                config.intermediate_size       = 12288;
-                config.head_dim                = 256;
-                config.num_heads               = 16;
-                config.num_kv_heads            = 4;
-                config.qkv_bias                = false;
-                config.qk_norm                 = true;
-                config.rms_norm_add            = true;
-                config.partial_rotary          = 0.25f;
-                config.rope_thetas             = {10000000.f};
-                config.max_position_embeddings = 262144;
-                config.vocab_size              = 248320;
+                config.hidden_size                    = 4096;
+                config.intermediate_size              = 12288;
+                config.head_dim                       = 256;
+                config.num_heads                      = 16;
+                config.num_kv_heads                   = 4;
+                config.qkv_bias                       = false;
+                config.qk_norm                        = true;
+                config.rms_norm_add                   = true;
+                config.partial_rotary                 = 0.25f;
+                config.rope_thetas                    = {10000000.f};
+                config.max_position_embeddings        = 262144;
+                config.vocab_size                     = 248320;
+                config.vision.arch                    = LLMVisionArch::QWEN3_VL;
+                config.vision.num_layers              = 27;
+                config.vision.hidden_size             = 1152;
+                config.vision.intermediate_size       = 4304;
+                config.vision.out_hidden_size         = 4096;
+                config.vision.patch_size              = 16;
+                config.vision.num_position_embeddings = 2304;
             } else if (arch == LLMArch::QWEN3 || arch == LLMArch::QWEN3_VL) {
                 config.head_dim     = 128;
                 config.num_heads    = 32;
@@ -1800,6 +1818,11 @@ namespace LLM {
                                   1.f,
                                   32.f,
                                   1.f);
+            } else if (arch == LLMArch::QWEN3_5 && input_pos->ne[0] == n_token * 4) {
+                int sections[4] = {11, 11, 10, 0};
+                int rotary_dim  = rope_pairs * 2;
+                q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, rotary_dim, sections, GGML_ROPE_TYPE_IMROPE, static_cast<int>(max_position_embeddings), rope_thetas[0], 1.f, 0.f, 1.f, 32.f, 1.f);
+                k               = ggml_rope_multi(ctx->ggml_ctx, k, input_pos, nullptr, rotary_dim, sections, GGML_ROPE_TYPE_IMROPE, static_cast<int>(max_position_embeddings), rope_thetas[0], 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::LLADA2_MOE || arch == LLMArch::QWEN3_5) {
                 // LLaDA2 slices the head (query[..., :rotary_dim]) instead of zero-padding
                 // inv_freq like gemma does, so rotate_half pairs i with i + rotary_dim/2 and the
@@ -2207,6 +2230,16 @@ namespace LLM {
         std::array<std::vector<int32_t>, 4> pos_embed_idx_data_;
         std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
+        static bool check_window_mask_size(int64_t grid_h, int64_t grid_w) {
+            // The dense float mask must fit within 256 MiB, including rectangular grids.
+            constexpr int64_t max_patches = 8192;
+            if (grid_h <= 0 || grid_w <= 0 || grid_h > max_patches || grid_w > max_patches / grid_h) {
+                LOG_ERROR("Qwen2.5-VL images support at most %" PRId64 " patches (256 MiB window mask)", max_patches);
+                return false;
+            }
+            return true;
+        }
+
         static ggml_tensor* process_image_common(GGMLRunnerContext* runner_ctx,
                                                  ggml_tensor* image,
                                                  const LLMVisionConfig& vision_params) {
@@ -2317,8 +2350,12 @@ namespace LLM {
             GGML_ASSERT(image->ne[1] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
 
-            int grid_h = static_cast<int>(image->ne[1]) / vision_params.patch_size;
-            int grid_w = static_cast<int>(image->ne[0]) / vision_params.patch_size;
+            if (vision_params.arch == LLMVisionArch::QWEN2_5_VL &&
+                !check_window_mask_size(image->ne[1] / vision_params.patch_size, image->ne[0] / vision_params.patch_size)) {
+                throw std::invalid_argument("Qwen2.5-VL window mask exceeds its memory limit");
+            }
+            int grid_h = static_cast<int>(image->ne[1] / vision_params.patch_size);
+            int grid_w = static_cast<int>(image->ne[0] / vision_params.patch_size);
 
             auto pixel_values = process_image_common(runner_ctx, image, vision_params);
             int head_dim      = static_cast<int>(vision_params.hidden_size / vision_params.num_heads);
@@ -2380,7 +2417,8 @@ namespace LLM {
             runner->set_backend_tensor_data(window_index, window_index_vec.data());
             runner->set_backend_tensor_data(window_inverse_index, window_inverse_index_vec.data());
 
-            window_mask_vec.resize((grid_h * grid_w) * (grid_h * grid_w));
+            const size_t n_patches = static_cast<size_t>(grid_h) * grid_w;
+            window_mask_vec.resize(n_patches * n_patches);
             int window_start_index = 0;
             for (int seq_index = 0; seq_index < seqlens.size(); seq_index++) {
                 int window_end_index = window_start_index + seqlens[seq_index];
@@ -2391,8 +2429,9 @@ namespace LLM {
                         if (j >= window_start_index && j < window_end_index) {
                             mask_value = 0;
                         }
-                        GGML_ASSERT((i * (grid_h * grid_w) + j) < window_mask_vec.size());
-                        window_mask_vec[i * (grid_h * grid_w) + j] = mask_value;
+                        const size_t index = static_cast<size_t>(i) * n_patches + j;
+                        GGML_ASSERT(index < window_mask_vec.size());
+                        window_mask_vec[index] = mask_value;
                     }
                 }
                 window_start_index = window_end_index;
@@ -2486,6 +2525,60 @@ namespace LLM {
             return hidden_states;
         }
 
+        static std::vector<int> build_position_ids(const LLMConfig& config,
+                                                   int64_t n_tokens,
+                                                   const std::vector<ImageGrid>& image_grids) {
+            std::vector<int> input_pos_vec;
+            if (config.arch == LLMArch::MISTRAL_SMALL_3_2 ||
+                config.arch == LLMArch::MINISTRAL_3_3B ||
+                config.arch == LLMArch::QWEN3 ||
+                (config.arch == LLMArch::QWEN3_5 && image_grids.empty()) ||
+                config.arch == LLMArch::GEMMA3_12B ||
+                config.arch == LLMArch::GEMMA4_12B ||
+                config.arch == LLMArch::GEMMA2_2B ||
+                config.arch == LLMArch::GPT_OSS_20B ||
+                config.arch == LLMArch::LLADA2_MOE) {
+                input_pos_vec.resize(n_tokens);
+                for (int i = 0; i < n_tokens; ++i) {
+                    input_pos_vec[i] = i;
+                }
+            } else {
+                input_pos_vec.resize(n_tokens * 4);
+                for (int i = 0; i < n_tokens; ++i) {
+                    input_pos_vec[i]                = i;
+                    input_pos_vec[n_tokens + i]     = i;
+                    input_pos_vec[2 * n_tokens + i] = i;
+                    input_pos_vec[3 * n_tokens + i] = 0;
+                }
+                if ((config.arch == LLMArch::QWEN2_5_VL || config.arch == LLMArch::QWEN3_VL || config.arch == LLMArch::QWEN3_5) && !image_grids.empty()) {
+                    int offset = 0;
+                    for (const auto& grid : image_grids) {
+                        int end      = grid.index + grid.size;
+                        int grid_h   = grid.grid_h / config.vision.spatial_merge_size;
+                        int grid_w   = grid.grid_w / config.vision.spatial_merge_size;
+                        int len_max  = std::max(grid_h, grid_w);
+                        int next_pos = grid.index + len_max + offset;
+                        GGML_ASSERT(grid.index >= 0 && end <= n_tokens);
+                        GGML_ASSERT(grid_h > 0 && grid_w > 0 && grid.size == grid_h * grid_w);
+                        for (int token = end; token < n_tokens; ++token) {
+                            int pos                             = next_pos + token - end;
+                            input_pos_vec[token]                = pos;
+                            input_pos_vec[n_tokens + token]     = pos;
+                            input_pos_vec[2 * n_tokens + token] = pos;
+                        }
+                        for (int token = 0; token < grid.size; ++token) {
+                            input_pos_vec[grid.index + token]                = grid.index + offset;
+                            input_pos_vec[n_tokens + grid.index + token]     = grid.index + offset + token / grid_w;
+                            input_pos_vec[2 * n_tokens + grid.index + token] = grid.index + offset + token % grid_w;
+                        }
+                        offset += len_max - grid.size;
+                    }
+                }
+            }
+
+            return input_pos_vec;
+        }
+
         ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
                                  const sd::Tensor<float>& attention_mask_tensor,
                                  const ImageEmbeds& image_embeds_tensor,
@@ -2514,52 +2607,7 @@ namespace LLM {
             for (const auto& image_embed : image_embeds) {
                 n_tokens += image_embed.second->ne[1] - 1;
             }
-            if (config.arch == LLMArch::MISTRAL_SMALL_3_2 ||
-                config.arch == LLMArch::MINISTRAL_3_3B ||
-                config.arch == LLMArch::QWEN3 ||
-                config.arch == LLMArch::QWEN3_5 ||
-                config.arch == LLMArch::GEMMA3_12B ||
-                config.arch == LLMArch::GEMMA4_12B ||
-                config.arch == LLMArch::GEMMA2_2B ||
-                config.arch == LLMArch::GPT_OSS_20B ||
-                config.arch == LLMArch::LLADA2_MOE) {
-                input_pos_vec.resize(n_tokens);
-                for (int i = 0; i < n_tokens; ++i) {
-                    input_pos_vec[i] = i;
-                }
-            } else {
-                input_pos_vec.resize(n_tokens * 4);
-                for (int i = 0; i < n_tokens; ++i) {
-                    input_pos_vec[i]                = i;
-                    input_pos_vec[n_tokens + i]     = i;
-                    input_pos_vec[2 * n_tokens + i] = i;
-                    input_pos_vec[3 * n_tokens + i] = 0;
-                }
-                if (config.arch == LLMArch::QWEN3_VL && !image_grids.empty()) {
-                    int offset = 0;
-                    for (const auto& grid : image_grids) {
-                        int end      = grid.index + grid.size;
-                        int grid_h   = grid.grid_h / config.vision.spatial_merge_size;
-                        int grid_w   = grid.grid_w / config.vision.spatial_merge_size;
-                        int len_max  = std::max(grid_h, grid_w);
-                        int next_pos = grid.index + len_max + offset;
-                        GGML_ASSERT(grid.index >= 0 && end <= n_tokens);
-                        GGML_ASSERT(grid_h > 0 && grid_w > 0 && grid.size == grid_h * grid_w);
-                        for (int token = end; token < n_tokens; ++token) {
-                            int pos                             = next_pos + token - end;
-                            input_pos_vec[token]                = pos;
-                            input_pos_vec[n_tokens + token]     = pos;
-                            input_pos_vec[2 * n_tokens + token] = pos;
-                        }
-                        for (int token = 0; token < grid.size; ++token) {
-                            input_pos_vec[grid.index + token]                = grid.index + offset;
-                            input_pos_vec[n_tokens + grid.index + token]     = grid.index + offset + token / grid_w;
-                            input_pos_vec[2 * n_tokens + grid.index + token] = grid.index + offset + token % grid_w;
-                        }
-                        offset += len_max - grid.size;
-                    }
-                }
-            }
+            input_pos_vec = build_position_ids(config, n_tokens, image_grids);
 
             if (!position_ids.empty()) {
                 GGML_ASSERT(position_ids.numel() == static_cast<int64_t>(input_pos_vec.size()));
@@ -2875,6 +2923,149 @@ namespace LLM {
                                                  static_cast<int64_t>(i + 1) * config.hidden_size));
             }
             return outputs;
+        }
+
+        bool supports_prompt_images() const {
+            return enable_vision && (config.arch == LLMArch::QWEN2_5_VL || config.arch == LLMArch::QWEN3_5 || config.arch == LLMArch::QWEN3_VL);
+        }
+
+        bool prepare_prompt(int n_threads,
+                            Tokenizer& tokenizer,
+                            const sd::PromptInput& input,
+                            int max_length,
+                            PromptTokens& result,
+                            const ImageEmbeds& reference_embeds             = {},
+                            const DeepStackImageEmbeds& reference_deepstack = {},
+                            const std::vector<ImageGrid>& reference_grids   = {}) {
+            result = {};
+            if (!supports_prompt_images()) {
+                LOG_ERROR("%s requires compatible vision weights for inline prompt images", get_desc().c_str());
+                return false;
+            }
+            std::vector<int> image_token, vision_start, vision_end;
+            if (!tokenizer.encode("<|image_pad|>", image_token) || image_token.size() != 1 ||
+                !tokenizer.encode("<|vision_start|>", vision_start) || vision_start.size() != 1 ||
+                !tokenizer.encode("<|vision_end|>", vision_end) || vision_end.size() != 1) {
+                LOG_ERROR("The LLM tokenizer must encode vision markers as single special tokens");
+                return false;
+            }
+            size_t reference_index = 0;
+            result.deepstack_image_embeds.resize(reference_deepstack.size());
+            auto append_tokens = [&](const std::vector<int>& tokens, float weight) {
+                for (int token : tokens) {
+                    const bool reference = reference_index < reference_embeds.size() &&
+                                           reference_embeds[reference_index].first == result.expanded_length;
+                    const int count      = reference ? static_cast<int>(reference_embeds[reference_index].second.shape()[1]) : 1;
+                    if (count > max_length - result.expanded_length) {
+                        LOG_ERROR("Multimodal prompt exceeds the %d-token context", max_length);
+                        return false;
+                    }
+                    if (reference) {
+                        const auto& embed = reference_embeds[reference_index++];
+                        result.image_embeds.push_back(embed);
+                        for (size_t layer = 0; layer < reference_deepstack.size(); ++layer) {
+                            for (const auto& extra : reference_deepstack[layer]) {
+                                if (extra.first == embed.first) {
+                                    result.deepstack_image_embeds[layer].push_back(extra);
+                                }
+                            }
+                        }
+                        for (const auto& grid : reference_grids) {
+                            if (grid.index == embed.first) {
+                                result.image_grids.push_back(grid);
+                            }
+                        }
+                    }
+                    result.tokens.push_back(token);
+                    result.weights.insert(result.weights.end(), count, reference ? 1.f : weight);
+                    result.expanded_length += count;
+                }
+                return true;
+            };
+            for (const auto& part : input) {
+                if (part.type == sd::PromptPart::Type::TEXT) {
+                    std::vector<int> tokens;
+                    if (!tokenizer.encode(part.content, tokens) || !append_tokens(tokens, part.weight)) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!append_tokens(vision_start, 1.f)) {
+                    return false;
+                }
+                if (!part.image || part.image->empty() || part.image->dim() != 4 || part.image->shape()[2] != 3 || part.image->shape()[3] != 1) {
+                    LOG_ERROR("Prompt images must be RGB tensors with one frame");
+                    return false;
+                }
+                const auto& source  = *part.image;
+                const int factor    = config.vision.patch_size * config.vision.spatial_merge_size;
+                const double height = static_cast<double>(source.shape()[1]);
+                const double width  = static_cast<double>(source.shape()[0]);
+                if (std::max(height, width) / std::min(height, width) > 200.0) {
+                    LOG_ERROR("Prompt image aspect ratio exceeds 200");
+                    return false;
+                }
+                int h                   = std::max(factor, static_cast<int>(std::round(height / factor)) * factor);
+                int w                   = std::max(factor, static_cast<int>(std::round(width / factor)) * factor);
+                const bool qwen25       = config.arch == LLMArch::QWEN2_5_VL;
+                const double min_pixels = qwen25 ? 3136.0 : 65536.0;
+                const double max_pixels = qwen25 ? 12845056.0 : 16777216.0;
+                if (static_cast<double>(h) * w > max_pixels) {
+                    const double scale = std::sqrt(height * width / max_pixels);
+                    h                  = std::max(factor, static_cast<int>(std::floor(height / scale / factor)) * factor);
+                    w                  = std::max(factor, static_cast<int>(std::floor(width / scale / factor)) * factor);
+                } else if (static_cast<double>(h) * w < min_pixels) {
+                    const double scale = std::sqrt(min_pixels / (height * width));
+                    h                  = static_cast<int>(std::ceil(height * scale / factor)) * factor;
+                    w                  = static_cast<int>(std::ceil(width * scale / factor)) * factor;
+                }
+                const int count = (h / factor) * (w / factor);
+                if (count > max_length - result.expanded_length) {
+                    LOG_ERROR("Prompt images exceed the %d-token context", max_length);
+                    return false;
+                }
+                if (qwen25 && !check_window_mask_size(h / config.vision.patch_size, w / config.vision.patch_size)) {
+                    return false;
+                }
+                auto image          = sd::ops::interpolate(source, {w, h, 3, 1}, sd::ops::InterpolateMode::Bicubic, false, true);
+                const float means[] = {0.48145466f, 0.4578275f, 0.40821073f};
+                const float stds[]  = {0.26862954f, 0.26130258f, 0.27577711f};
+                for (int channel = 0; channel < 3; ++channel) {
+                    for (int64_t pixel = 0; pixel < int64_t(w) * h; ++pixel) {
+                        float& value = image[pixel + int64_t(channel) * w * h];
+                        value        = (std::clamp(value, 0.f, 1.f) - (qwen25 ? means[channel] : 0.5f)) /
+                                       (qwen25 ? stds[channel] : 0.5f);
+                    }
+                }
+                auto outputs = encode_image_outputs(n_threads, image, false);
+                if (outputs.empty() || outputs[0].shape()[0] != config.hidden_size || outputs[0].shape()[1] != count) {
+                    LOG_ERROR("Prompt image encoder returned an invalid embedding shape");
+                    return false;
+                }
+                const int index = result.expanded_length;
+                result.tokens.push_back(image_token[0]);
+                result.weights.insert(result.weights.end(), count, 1.f);
+                result.expanded_length += count;
+                result.image_embeds.emplace_back(index, std::move(outputs[0]));
+                if (result.deepstack_image_embeds.empty()) {
+                    result.deepstack_image_embeds.resize(outputs.size() - 1);
+                }
+                if (result.deepstack_image_embeds.size() != outputs.size() - 1) {
+                    return false;
+                }
+                for (size_t layer = 1; layer < outputs.size(); ++layer) {
+                    result.deepstack_image_embeds[layer - 1].emplace_back(index, std::move(outputs[layer]));
+                }
+                result.image_grids.push_back({index, count, h / config.vision.patch_size, w / config.vision.patch_size});
+                if (!append_tokens(vision_end, 1.f)) {
+                    return false;
+                }
+            }
+            if (reference_index != reference_embeds.size()) {
+                LOG_ERROR("Reference images do not match the tokenized prompt");
+                return false;
+            }
+            return true;
         }
 
         std::vector<sd::Tensor<float>> encode_video_block_outputs(const int n_threads,
