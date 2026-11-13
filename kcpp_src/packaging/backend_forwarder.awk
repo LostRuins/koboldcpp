@@ -29,15 +29,16 @@ function emit_symbol(name, is_data) {
 }
 
 # Function imports have a normal text thunk in the import library.
-$2 == "T" {
+$2 == "T" && $3 !~ /^__imp_/ {
     emit_symbol($3, 0)
 }
 
 # Data imports have __imp_<name> and __nm_<name> records but no text thunk.
 # Use the latter so each data export is emitted exactly once.
-$2 == "I" && $3 ~ /^__nm_/ {
+# (llvm-nm on LLVM import libraries shows data imports as D __imp_<name>.)
+($2 == "I" && $3 ~ /^__nm_/) || ($2 == "D" && $3 ~ /^__imp_/) {
     name = $3
-    sub(/^__nm_/, "", name)
+    sub(/^__(nm|imp)_/, "", name)
     emit_symbol(name, 1)
 }
 
