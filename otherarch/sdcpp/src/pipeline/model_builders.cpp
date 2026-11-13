@@ -159,6 +159,14 @@ namespace sd::model_builders {
                                                      version,
                                                      weight_manager);
             } else if (find_model_traits(vae_version)->vae_kind == ModelVAEKind::MINIMAX_H3) {
+                if (version == VERSION_MINIMAX_H3_IMAGE) {
+                    auto proj     = tensor_storage_map.find("first_stage_model.decoder.proj_out.weight");
+                    auto embedder = tensor_storage_map.find("first_stage_model.decoder.x_embedder.weight");
+                    if (proj == tensor_storage_map.end() || proj->second.ne[1] != 768 ||
+                        embedder == tensor_storage_map.end() || embedder->second.ne[1] != 1024) {
+                        throw std::runtime_error("MiniMax-H3-Image requires its 2D image VAE; pass --vae minimax_h3_image_vae_fp16.safetensors");
+                    }
+                }
                 if (version == VERSION_P_H3_IMAGE) {
                     // The video VAE also loads successfully, but uses different temporal decoding and posterior sampling.
                     auto proj = tensor_storage_map.find("first_stage_model.decoder.proj_out.weight");

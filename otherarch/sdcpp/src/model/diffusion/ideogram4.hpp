@@ -213,19 +213,20 @@ namespace Ideogram4 {
                              ggml_tensor* x,
                              ggml_tensor* pe,
                              ggml_tensor* mask = nullptr) {
-            int64_t n_token = x->ne[1];
-            int64_t N       = x->ne[2];
-
             auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto norm_q   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"]);
             auto norm_k   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
             auto out_proj = std::dynamic_pointer_cast<Linear>(blocks["o"]);
 
-            auto qkv     = qkv_proj->forward(ctx, x);
-            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 0);
-            auto q       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, n_token, N);
-            auto k       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, n_token, N);
-            auto v       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, n_token, N);
+            auto qkv       = qkv_proj->forward(ctx, x);
+            auto qkv_dim   = qkv->ne[0] / 3;
+            auto split_qkv = [&](int i) {
+                return ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+            auto q = split_qkv(0);
+            auto k = split_qkv(1);
+            auto v = split_qkv(2);
 
             q = norm_q->forward(ctx, q);
             k = norm_k->forward(ctx, k);

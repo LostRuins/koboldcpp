@@ -43,6 +43,15 @@ const std::vector<ModelDefinition>& minimax_h3_definitions() {
         }
         {
             ModelDefinition definition                  = result.front();
+            definition.version                          = VERSION_MINIMAX_H3_IMAGE;
+            definition.name                             = "MiniMax-H3-Image";
+            definition.traits.supports_video_generation = false;
+            definition.sampling.default_flow_shift      = 1.f;
+            definition.ref_image_preset                 = "qwen";
+            result.push_back(std::move(definition));
+        }
+        {
+            ModelDefinition definition                  = result.front();
             definition.version                          = VERSION_P_H3_IMAGE;
             definition.name                             = "P-H3-Image";
             definition.traits.supports_video_generation = false;

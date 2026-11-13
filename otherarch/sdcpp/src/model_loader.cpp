@@ -599,24 +599,16 @@ SDVersion ModelLoader::get_sd_version() const {
             return VERSION_LTXAV;
         }
         if (tensor_storage.name.find("model.diffusion_model.video_patch_proj.weight") != std::string::npos &&
-            tensor_storage_map.find("model.diffusion_model.audio_patch_proj.weight") != tensor_storage_map.end()) {
-            // P-H3 uses the same DiT architecture as H3; its VAE or connector identifies the image pipeline.
+            tensor_storage_map.find("model.diffusion_model.condition_proj.weight") != tensor_storage_map.end()) {
+            if (tensor_storage_map.count("model.diffusion_model.audio_patch_proj.weight") == 0) {
+                return VERSION_MINIMAX_H3_IMAGE;
+            }
+            // The connector is shared with H3 video; the single-frame VAE identifies P-H3.
             auto decoder = tensor_storage_map.find("first_stage_model.decoder.proj_out.weight");
             if (decoder == tensor_storage_map.end()) {
                 decoder = tensor_storage_map.find("vae.decoder.proj_out.weight");
             }
             if (decoder != tensor_storage_map.end() && decoder->second.ne[1] == 768) {
-                return VERSION_P_H3_IMAGE;
-            }
-            for (const std::string prefix : {"", "embeddings_connectors."}) {
-                if (tensor_storage_map.count(prefix + "text_encoders.ph3_image_connector.proj.weight") ||
-                    tensor_storage_map.count(prefix + "text_encoders.llm.text_connector.proj.weight")) {
-                    return VERSION_P_H3_IMAGE;
-                }
-            }
-            auto connector = tensor_storage_map.find("embeddings_connectors.proj.weight");
-            if (connector != tensor_storage_map.end() && connector->second.logical_ne0() == 12800 &&
-                connector->second.ne[1] == 5120 && tensor_storage_map.count("embeddings_connectors.sink_embedding")) {
                 return VERSION_P_H3_IMAGE;
             }
             return VERSION_MINIMAX_H3;

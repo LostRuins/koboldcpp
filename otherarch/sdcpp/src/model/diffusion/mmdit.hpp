@@ -331,14 +331,19 @@ public:
     }
 
     std::vector<ggml_tensor*> pre_attention(GGMLRunnerContext* ctx, ggml_tensor* x) {
+        auto c        = ctx->ggml_ctx;
         auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
-        auto qkv         = qkv_proj->forward(ctx, x);
-        auto qkv_vec     = ggml_ext_chunk(ctx, qkv, 3, 0);
-        int64_t head_dim = qkv_vec[0]->ne[0] / num_heads;
-        auto q           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
-        auto k           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
-        auto v           = qkv_vec[2];                                                                                             // [N, n_token, n_head*d_head]
+        auto qkv       = qkv_proj->forward(ctx, x);
+        auto qkv_dim   = qkv->ne[0] / 3;
+        auto head_dim  = qkv_dim / num_heads;
+        auto split_qkv = [&](int i) {
+            return ggml_view_4d(c, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+        };
+        auto q = split_qkv(0);
+        auto k = split_qkv(1);
+        auto v = split_qkv(2);
 
         if (qk_norm == "rms" || qk_norm == "ln") {
             auto ln_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["ln_q"]);
@@ -347,8 +352,9 @@ public:
             k         = ln_k->forward(ctx, k);
         }
 
-        q = ggml_reshape_3d(ctx->ggml_ctx, q, q->ne[0] * q->ne[1], q->ne[2], q->ne[3]);  // [N, n_token, n_head*d_head]
-        k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0] * k->ne[1], k->ne[2], k->ne[3]);  // [N, n_token, n_head*d_head]
+        // skip_reshape=true contract: q/k become [d_head, L, n_head*N]; v stays a 4-D view.
+        q = ggml_reshape_3d(c, ggml_cont(c, ggml_permute(c, q, 0, 2, 1, 3)), q->ne[0], q->ne[2], num_heads * q->ne[3]);
+        k = ggml_reshape_3d(c, ggml_cont(c, ggml_permute(c, k, 0, 2, 1, 3)), k->ne[0], k->ne[2], num_heads * k->ne[3]);
 
         return {q, k, v};
     }
@@ -366,8 +372,8 @@ public:
     ggml_tensor* forward(GGMLRunnerContext* ctx,
                          ggml_tensor* x) {
         auto qkv = pre_attention(ctx, x);
-        x        = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
-        x        = post_attention(ctx, x);                                                                                   // [N, n_token, dim]
+        x        = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, nullptr, true, ctx->flash_attn_enabled);  // [N, n_token, dim]
+        x        = post_attention(ctx, x);                                                                                  // [N, n_token, dim]
         return x;
     }
 };
@@ -586,8 +592,8 @@ public:
             auto qkv2          = std::get<1>(qkv_intermediates);
             auto intermediates = std::get<2>(qkv_intermediates);
 
-            auto attn_out  = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, ctx->flash_attn_enabled);     // [N, n_token, dim]
-            auto attn2_out = ggml_ext_attention_ext(ctx, qkv2[0], qkv2[1], qkv2[2], num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            auto attn_out  = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, nullptr, true, ctx->flash_attn_enabled);     // [N, n_token, dim]
+            auto attn2_out = ggml_ext_attention_ext(ctx, qkv2[0], qkv2[1], qkv2[2], num_heads, nullptr, true, ctx->flash_attn_enabled);  // [N, n_token, dim]
             x              = post_attention_x(ctx,
                                               attn_out,
                                               attn2_out,
@@ -603,7 +609,7 @@ public:
             auto qkv               = qkv_intermediates.first;
             auto intermediates     = qkv_intermediates.second;
 
-            auto attn_out = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, dim]
+            auto attn_out = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, nullptr, true, ctx->flash_attn_enabled);  // [N, n_token, dim]
             x             = post_attention(ctx,
                                            attn_out,
                                            intermediates[0],
@@ -644,10 +650,11 @@ block_mixing(GGMLRunnerContext* ctx,
     }
     std::vector<ggml_tensor*> qkv;
     for (int i = 0; i < 3; i++) {
-        qkv.push_back(ggml_concat(ctx->ggml_ctx, context_qkv[i], x_qkv[i], 1));
+        // q/k are 3-D [dim, L, N] (token axis = 1); v is a 4-D view [d_head, heads, L, N] (token axis = 2)
+        qkv.push_back(ggml_concat(ctx->ggml_ctx, context_qkv[i], x_qkv[i], i == 2 ? 2 : 1));
     }
 
-    auto attn = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_context + n_token, hidden_size]
+    auto attn = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], x_block->num_heads, nullptr, true, ctx->flash_attn_enabled);  // [N, n_context + n_token, hidden_size]
 
     auto context_attn = ggml_view_3d(ctx->ggml_ctx,
                                      attn,
@@ -679,7 +686,7 @@ block_mixing(GGMLRunnerContext* ctx,
     }
 
     if (x_block->self_attn) {
-        auto attn2 = ggml_ext_attention_ext(ctx, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads, nullptr, false, ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
+        auto attn2 = ggml_ext_attention_ext(ctx, x_qkv2[0], x_qkv2[1], x_qkv2[2], x_block->num_heads, nullptr, true, ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
 
         x = x_block->post_attention_x(ctx,
                                       x_attn,

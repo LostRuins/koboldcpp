@@ -293,16 +293,18 @@ namespace Pid {
             auto proj     = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
             auto qkv         = qkv_proj->forward(ctx, x);
-            auto qkv_vec     = ggml_ext_chunk(ctx, qkv, 3, 0);
-            int64_t L        = x->ne[1];
-            int64_t N        = x->ne[2];
             int64_t head_dim = dim / num_heads;
-            auto q           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, L, N);
-            auto k           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, L, N);
-            auto v           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, L, N);
-            q                = q_norm->forward(ctx, q);
-            k                = k_norm->forward(ctx, k);
-            x                = Rope::attention(ctx, q, k, v, pos, nullptr, 1.0f / 128.f, true);
+            auto qkv_dim     = qkv->ne[0] / 3;
+            auto split_qkv   = [&](int i) {
+                return ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+            auto q = split_qkv(0);
+            auto k = split_qkv(1);
+            auto v = split_qkv(2);
+            q      = q_norm->forward(ctx, q);
+            k      = k_norm->forward(ctx, k);
+            x      = Rope::attention(ctx, q, k, v, pos, nullptr, 1.0f / 128.f, true);
             return proj->forward(ctx, x);
         }
     };
@@ -340,20 +342,25 @@ namespace Pid {
 
             int64_t Nx       = x->ne[1];
             int64_t Ny       = y->ne[1];
-            int64_t N        = x->ne[2];
             int64_t head_dim = dim / num_heads;
 
-            auto qkv_x = ggml_ext_chunk(ctx, qkv_x_proj->forward(ctx, x), 3, 0);
-            auto qx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[0], head_dim, num_heads, Nx, N);
-            auto kx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[1], head_dim, num_heads, Nx, N);
-            auto vx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[2], head_dim, num_heads, Nx, N);
+            auto split_qkv = [&](ggml_tensor* qkv, int i) {
+                int64_t qkv_dim = qkv->ne[0] / 3;
+                return ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+
+            auto qkv_x = qkv_x_proj->forward(ctx, x);
+            auto qx    = split_qkv(qkv_x, 0);
+            auto kx    = split_qkv(qkv_x, 1);
+            auto vx    = split_qkv(qkv_x, 2);
             qx         = q_norm_x->forward(ctx, qx);
             kx         = k_norm_x->forward(ctx, kx);
 
-            auto qkv_y = ggml_ext_chunk(ctx, qkv_y_proj->forward(ctx, y), 3, 0);
-            auto qy    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[0], head_dim, num_heads, Ny, N);
-            auto ky    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[1], head_dim, num_heads, Ny, N);
-            auto vy    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[2], head_dim, num_heads, Ny, N);
+            auto qkv_y = qkv_y_proj->forward(ctx, y);
+            auto qy    = split_qkv(qkv_y, 0);
+            auto ky    = split_qkv(qkv_y, 1);
+            auto vy    = split_qkv(qkv_y, 2);
             qy         = q_norm_y->forward(ctx, qy);
             ky         = k_norm_y->forward(ctx, ky);
 
