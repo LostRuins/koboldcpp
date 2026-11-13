@@ -8563,8 +8563,14 @@ Change Mode<br>
                 keeprecent = 0
                 try:
                     kv = tempbody.get('keepstates', False) if isinstance(tempbody, dict) else False
-                    keepstates = bool(kv)
-                    keeprecent = int(kv) if (not isinstance(kv, bool) and isinstance(kv, (int, float)) and kv > 0) else 0
+                    if isinstance(kv, str):  # "true", "false", "2" sent as text
+                        kv = kv.strip().lower()
+                        kv = True if kv in ("true", "yes", "on") else (float(kv) if kv.replace(".", "", 1).isdigit() else False)
+                    if isinstance(kv, bool):
+                        keepstates = kv
+                    elif isinstance(kv, (int, float)):
+                        keepstates = kv >= 1  # 0 or a negative number is off, as false is
+                        keeprecent = int(kv) if keepstates else 0
                 except Exception:
                     keepstates = False
                 if targetfile and targetfile!="" and keepstates and savestate_limit>0 and friendlymodelname!="inactive" and args.model_param:
@@ -14458,7 +14464,14 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         # Save states kept across an admin reload (reload_config with keepstates): read back for the same model only.
         try:
             kept = global_memory.get("restore_states") if global_memory is not None else None
-            if kept and kept.get("model") == os.path.abspath(modelname) and os.path.exists(kept.get("path","")):
+            if kept and kept.get("model") != os.path.abspath(modelname):
+                # Another text model was loaded: the kept states can never be used, so the file goes now.
+                global_memory["restore_states"] = None
+                try:
+                    os.remove(kept.get("path",""))
+                except Exception:
+                    pass
+            elif kept and os.path.exists(kept.get("path","")):
                 global_memory["restore_states"] = None
                 restored = handle.load_states_file(kept["path"].encode("UTF-8"), -1)
                 print(f"Restored {restored} SmartCache save states kept across the reload")

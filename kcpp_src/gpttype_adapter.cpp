@@ -8,6 +8,8 @@
 //Python will ALWAYS provide the memory, we just write to it.
 
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 #if defined(_WIN32)
 #include <fcntl.h>
 #include <io.h>
@@ -9462,20 +9464,28 @@ bool gpttype_load_state_kv(int slot)
 }
 // Writes every SmartCache save state to one file, so the states can outlive a model reload (admin unload, then
 // reload of the same model): the next prompt with a saved prefix is restored instead of processed again.
-// Format: "KCPPSS1\0", n_vocab, slot count, then per slot: main size+bytes, draft size+bytes, tokens, logits,
-// media signature, last_used. Only for the same model and context size: a mismatch fails at restore, and the
-// slot is then simply dropped.
-static const char kcpp_states_magic[8] = {'K','C','P','P','S','S','1','\0'};
+// Format: "KCPPSS2\0", n_vocab, model parameter count, context size, slot count, then per slot: main size+bytes,
+// draft size+bytes, tokens, logits, media signature, last_used. A file of another model (same vocab, other weights)
+// or another context size is refused at load, so a KV cache is never restored into a model it does not belong to.
+static const char kcpp_states_magic[8] = {'K','C','P','P','S','S','2','\0'};
+static uint64_t kcpp_states_model_params() { return llama_ctx_v4 ? llama_model_n_params(llama_get_model(llama_ctx_v4)) : 0; }
+static uint64_t kcpp_states_n_ctx() { return llama_ctx_v4 ? (uint64_t)llama_n_ctx(llama_ctx_v4) : 0; }
 size_t gpttype_save_states_file(const std::string & path, int only_slot, int keep_recent)
 {
     if(kcpp_data==nullptr || file_format != FileFormat::GGUF_GENERIC)
     {
         return 0;
     }
+    // Checked before the file is opened, so a missing slot leaves no empty file behind.
+    if(only_slot >= 0 && !smartcache_slot_usable(only_slot))
+    {
+        fprintf(stderr, "KV Save States File: slot %d holds no save state\n", only_slot);
+        return 0;
+    }
     // All slots (only_slot < 0) is the keep-across-reload handoff, read back seconds later and then deleted: on Windows
     // it is created short-lived, so the cache manager keeps it in RAM and avoids writing it to disk while memory allows.
     FILE * f = nullptr;
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(_O_SHORT_LIVED)
     if(only_slot < 0)
     {
         const int fd = _open(path.c_str(), _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY | _O_SHORT_LIVED, 0644);
@@ -9504,13 +9514,9 @@ size_t gpttype_save_states_file(const std::string & path, int only_slot, int kee
     auto put_u64 = [&](uint64_t v) { put(&v, sizeof(v)); };
     put(kcpp_states_magic, sizeof(kcpp_states_magic));
     put_u64((uint64_t)n_vocab);
+    put_u64(kcpp_states_model_params());
+    put_u64(kcpp_states_n_ctx());
     // One slot (only_slot >= 0) or all of them.
-    if(only_slot >= 0 && !smartcache_slot_usable(only_slot))
-    {
-        fclose(f);
-        fprintf(stderr, "KV Save States File: slot %d holds no save state\n", only_slot);
-        return 0;
-    }
     const size_t first = only_slot >= 0 ? (size_t)only_slot : 0;
     const size_t last = only_slot >= 0 ? (size_t)only_slot + 1 : savestates.size();
     put_u64((uint64_t)(last - first));
@@ -9552,9 +9558,11 @@ size_t gpttype_save_states_file(const std::string & path, int only_slot, int kee
         put(&lu, sizeof(lu));
         if(usable) { ++saved; }
     }
-    fclose(f);
+    if(fclose(f) != 0) { ok = false; }
     if(!ok)
     {
+        // A half-written file (disk full) is removed rather than left to be refused later.
+        remove(path.c_str());
         fprintf(stderr, "KV Save States File: write failed for %s\n", path.c_str());
         return 0;
     }
@@ -9575,15 +9583,28 @@ int gpttype_load_states_file(const std::string & path, int only_slot)
         return -1;
     }
     bool ok = true;
+    // Every size read from the file is checked against what is left of it before anything is allocated, so a
+    // damaged file cannot ask for a huge buffer.
+    std::error_code fs_err;
+    uint64_t left = (uint64_t)std::filesystem::file_size(path, fs_err);
+    if(fs_err) { left = 0; }
     auto get = [&](void * data, size_t n) {
-        if(ok && n > 0 && fread(data, 1, n, f) != n) { ok = false; }
+        if(ok && n > 0 && (n > left || fread(data, 1, n, f) != n)) { ok = false; }
+        if(ok) { left -= n; }
+    };
+    auto sized = [&](uint64_t n, size_t each) -> uint64_t {
+        if(!ok || each == 0 || n > left / each) { ok = false; return 0; }
+        return n;
     };
     auto get_u64 = [&]() { uint64_t v = 0; get(&v, sizeof(v)); return v; };
     char magic[8] = {0};
     get(magic, sizeof(magic));
     const uint64_t vocab = get_u64();
+    const uint64_t params = get_u64();
+    const uint64_t nctx = get_u64();
     const uint64_t count = get_u64();
-    if(!ok || memcmp(magic, kcpp_states_magic, sizeof(magic)) != 0 || vocab != (uint64_t)n_vocab)
+    if(!ok || memcmp(magic, kcpp_states_magic, sizeof(magic)) != 0 || vocab != (uint64_t)n_vocab
+        || params != kcpp_states_model_params() || nctx != kcpp_states_n_ctx())
     {
         fclose(f);
         fprintf(stderr, "KV Load States File: %s is not a save of this model\n", path.c_str());
@@ -9595,17 +9616,19 @@ int gpttype_load_states_file(const std::string & path, int only_slot)
         for(uint64_t slot = 0; ok && slot < count; ++slot)
         {
             savestate_data st;
-            st.current_savestate_size = get_u64();
+            st.current_savestate_size = sized(get_u64(), 1);
+            if(!ok) { break; }
             st.current_savestate_buffer.resize(st.current_savestate_size + 512);
             get(st.current_savestate_buffer.data(), st.current_savestate_size);
-            st.current_draft_savestate_size = get_u64();
+            st.current_draft_savestate_size = sized(get_u64(), 1);
+            if(!ok) { break; }
             st.current_draft_savestate_buffer.resize(st.current_draft_savestate_size + 512);
             get(st.current_draft_savestate_buffer.data(), st.current_draft_savestate_size);
-            st.savestate_context_tokens.resize(get_u64());
+            st.savestate_context_tokens.resize(sized(get_u64(), sizeof(gpt_vocab::id)));
             get(st.savestate_context_tokens.data(), st.savestate_context_tokens.size() * sizeof(gpt_vocab::id));
-            st.latest_logits.resize(get_u64());
+            st.latest_logits.resize(sized(get_u64(), sizeof(float)));
             get(st.latest_logits.data(), st.latest_logits.size() * sizeof(float));
-            st.media_signature.resize(get_u64());
+            st.media_signature.resize(sized(get_u64(), 1));
             get(st.media_signature.data(), st.media_signature.size());
             get(&st.last_used, sizeof(st.last_used));
             // Slots beyond this run's limit, and empty ones, are skipped; a draft model must match the save.
