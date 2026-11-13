@@ -1234,30 +1234,29 @@ namespace LLM {
                              ggml_tensor* pe,
                              ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
-            int64_t n_token = x->ne[1];
-            int64_t N       = x->ne[2];
-            auto proj       = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
+            auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
-            std::vector<ggml_tensor*> qkv_vec;
+            ggml_tensor *q, *k, *v;
             if (llama_cpp_style) {
                 auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
                 auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
                 auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
 
-                auto q = q_proj->forward(ctx, x);
-                auto k = k_proj->forward(ctx, x);
-                auto v = v_proj->forward(ctx, x);
-
-                qkv_vec = {q, k, v};
+                q = ggml_reshape_4d(ctx->ggml_ctx, q_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
+                k = ggml_reshape_4d(ctx->ggml_ctx, k_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
+                v = ggml_reshape_4d(ctx->ggml_ctx, v_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
             } else {
-                auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
-                auto qkv      = qkv_proj->forward(ctx, x);
-                qkv_vec       = ggml_ext_chunk(ctx, qkv, 3, 0);
+                auto qkv_proj  = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
+                auto qkv       = qkv_proj->forward(ctx, x);
+                auto qkv_dim   = qkv->ne[0] / 3;
+                auto split_qkv = [&](int i) {
+                    return ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                        head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+                };
+                q = split_qkv(0);
+                k = split_qkv(1);
+                v = split_qkv(2);
             }
-
-            auto q = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto k = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto v = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
 
             x = Rope::attention(ctx, q, k, v, pe, mask, 1.f, false);  // [N, n_token, hidden_size]
 

@@ -106,29 +106,33 @@ namespace Fibo2 {
             auto project = [&](const char* name, ggml_tensor* h) {
                 return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h);
             };
-            ggml_tensor *q, *k, *v;
-            if (fused_qkv) {
-                auto parts = ggml_ext_chunk(ctx, project("qkv", x), 3, 0);
-                q          = parts[0];
-                k          = parts[1];
-                v          = parts[2];
-            } else {
-                q = project("to_q", x);
-                if (fused_kv) {
-                    auto parts = ggml_ext_chunk(ctx, project("to_kv", kv), 2, 0);
-                    k          = parts[0];
-                    v          = parts[1];
-                } else {
-                    k = project("to_k", kv);
-                    v = project("to_v", kv);
-                }
-            }
+            auto split_views = [&](ggml_tensor* qkv, int n, int i) {
+                int64_t slice = qkv->ne[0] / n;
+                return ggml_view_4d(c, qkv, head_dim, slice / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * slice * qkv->nb[0]);
+            };
             auto reshape = [&](ggml_tensor* h) {
                 return ggml_reshape_4d(c, h, head_dim, heads, h->ne[1], h->ne[2]);
             };
-            q            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, reshape(q));
-            k            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, reshape(k));
-            v            = reshape(v);
+            ggml_tensor *q, *k, *v;
+            if (fused_qkv) {
+                auto qkv = project("qkv", x);
+                q        = split_views(qkv, 3, 0);
+                k        = split_views(qkv, 3, 1);
+                v        = split_views(qkv, 3, 2);
+            } else {
+                q = reshape(project("to_q", x));
+                if (fused_kv) {
+                    auto kv_out = project("to_kv", kv);
+                    k           = split_views(kv_out, 2, 0);
+                    v           = split_views(kv_out, 2, 1);
+                } else {
+                    k = reshape(project("to_k", kv));
+                    v = reshape(project("to_v", kv));
+                }
+            }
+            q            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, q);
+            k            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, k);
             auto prepare = [&](ggml_tensor* h) {
                 if (pe) {
                     return Rope::apply_rope(ctx, h, pe);

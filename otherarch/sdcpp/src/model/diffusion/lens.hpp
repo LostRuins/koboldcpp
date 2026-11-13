@@ -151,22 +151,24 @@ namespace Lens {
             int64_t N       = img->ne[2];
             int64_t inner   = dim_head * num_heads;
 
-            auto img_qkv_vec = ggml_ext_chunk(ctx, img_qkv->forward(ctx, img), 3, 0);
-            auto txt_qkv_vec = ggml_ext_chunk(ctx, txt_qkv->forward(ctx, txt), 3, 0);
+            auto img_qkv_f = img_qkv->forward(ctx, img);
+            auto txt_qkv_f = txt_qkv->forward(ctx, txt);
+            auto split_qkv = [&](ggml_tensor* qkv, int i) {
+                int64_t qkv_dim = qkv->ne[0] / 3;
+                return ggml_view_4d(ctx->ggml_ctx, qkv, dim_head, qkv_dim / dim_head, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    dim_head * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+            auto img_q = split_qkv(img_qkv_f, 0);
+            auto img_k = split_qkv(img_qkv_f, 1);
+            auto img_v = split_qkv(img_qkv_f, 2);
+            img_q      = norm_q->forward(ctx, img_q);
+            img_k      = norm_k->forward(ctx, img_k);
 
-            auto img_q = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[0], dim_head, num_heads, n_img, N);
-            auto img_k = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[1], dim_head, num_heads, n_img, N);
-            auto img_v = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[2], dim_head, num_heads, n_img, N);
-
-            img_q = norm_q->forward(ctx, img_q);
-            img_k = norm_k->forward(ctx, img_k);
-
-            auto txt_q = ggml_reshape_4d(ctx->ggml_ctx, txt_qkv_vec[0], dim_head, num_heads, n_txt, N);
-            auto txt_k = ggml_reshape_4d(ctx->ggml_ctx, txt_qkv_vec[1], dim_head, num_heads, n_txt, N);
-            auto txt_v = ggml_reshape_4d(ctx->ggml_ctx, txt_qkv_vec[2], dim_head, num_heads, n_txt, N);
-
-            txt_q = norm_add_q->forward(ctx, txt_q);
-            txt_k = norm_add_k->forward(ctx, txt_k);
+            auto txt_q = split_qkv(txt_qkv_f, 0);
+            auto txt_k = split_qkv(txt_qkv_f, 1);
+            auto txt_v = split_qkv(txt_qkv_f, 2);
+            txt_q      = norm_add_q->forward(ctx, txt_q);
+            txt_k      = norm_add_k->forward(ctx, txt_k);
 
             auto q = ggml_concat(ctx->ggml_ctx, img_q, txt_q, 2);
             auto k = ggml_concat(ctx->ggml_ctx, img_k, txt_k, 2);
