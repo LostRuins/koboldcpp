@@ -91,11 +91,17 @@ namespace Iris {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe = nullptr, ggml_tensor* mask = nullptr) {
-            auto c   = ctx->ggml_ctx;
-            auto qkv = ggml_ext_chunk(ctx, std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x), 3, 0);
-            auto q   = ggml_reshape_4d(c, qkv[0], dim / heads, heads, x->ne[1], x->ne[2]);
-            auto k   = ggml_reshape_4d(c, qkv[1], dim / heads, heads, x->ne[1], x->ne[2]);
-            auto v   = ggml_reshape_4d(c, qkv[2], dim / heads, heads, x->ne[1], x->ne[2]);
+            auto c         = ctx->ggml_ctx;
+            auto head_dim  = dim / heads;
+            auto qkv       = std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x);
+            auto qkv_dim   = qkv->ne[0] / 3;
+            auto split_qkv = [&](int i) {
+                return ggml_view_4d(c, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+            auto q = split_qkv(0);
+            auto k = split_qkv(1);
+            auto v = split_qkv(2);
             if (qk_norm) {
                 q = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"])->forward(ctx, q);
                 k = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"])->forward(ctx, k);
@@ -103,10 +109,9 @@ namespace Iris {
             if (pe) {
                 x = Rope::attention(ctx, q, k, v, pe, mask);
             } else {
-                q = ggml_reshape_3d(c, q, dim, x->ne[1], x->ne[2]);
-                k = ggml_reshape_3d(c, k, dim, x->ne[1], x->ne[2]);
-                v = ggml_reshape_3d(c, v, dim, x->ne[1], x->ne[2]);
-                x = ggml_ext_attention_ext(ctx, q, k, v, heads, mask, false, ctx->flash_attn_enabled);
+                q = ggml_reshape_3d(c, ggml_cont(c, ggml_permute(c, q, 0, 2, 1, 3)), head_dim, x->ne[1], heads * x->ne[2]);
+                k = ggml_reshape_3d(c, ggml_cont(c, ggml_permute(c, k, 0, 2, 1, 3)), head_dim, x->ne[1], heads * x->ne[2]);
+                x = ggml_ext_attention_ext(ctx, q, k, v, heads, mask, true, ctx->flash_attn_enabled);
             }
             return std::dynamic_pointer_cast<Linear>(blocks["proj"])->forward(ctx, x);
         }

@@ -2030,11 +2030,23 @@ struct LLMEmbedder : public Conditioner {
                                                "text_encoders.llm",
                                                enable_vision,
                                                weight_manager);
-        if (version == VERSION_P_H3_IMAGE) {
-            if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
-                throw std::runtime_error("P-H3-Image requires the Qwen3-VL-4B text encoder");
+        if (sd_version_is_minimax_h3(version)) {
+            const bool has_ph3_connector = tensor_storage_map.count(std::string(PH3ImageTextConnectorRunner::prefix) + ".proj.weight") != 0;
+            if (has_ph3_connector) {
+                if (llm->config.num_layers != 36 || llm->config.hidden_size != 2560) {
+                    throw std::runtime_error("The P-H3-Image text connector requires the Qwen3-VL-4B text encoder");
+                }
+                ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
+            } else if (llm->config.hidden_size == 2560) {
+                throw std::runtime_error(
+                    sd_format("%s with Qwen3-VL-4B requires the P-H3-Image text connector; "
+                              "pass it with --embeddings-connectors or use the MiniMax-H3 Qwen3-VL-32B text encoder",
+                              sd_version_name(version)));
+            } else if (llm->config.hidden_size != 5120 || (llm->config.num_layers != 50 && llm->config.num_layers != 64)) {
+                throw std::runtime_error(
+                    sd_format("%s requires the MiniMax-H3 Qwen3-VL-32B text encoder or Qwen3-VL-4B with the P-H3-Image text connector",
+                              sd_version_name(version)));
             }
-            ph3_connector = std::make_shared<PH3ImageTextConnectorRunner>(backend, tensor_storage_map, weight_manager);
         }
         int pad_id = 151643;
         if (arch == LLM::LLMArch::MISTRAL_SMALL_3_2 || arch == LLM::LLMArch::MINISTRAL_3_3B) {
@@ -2493,7 +2505,7 @@ struct LLMEmbedder : public Conditioner {
         if (sd_version_is_minimax_h3(version)) {
             prompt_template_encode_start_idx = 0;
             // The final tap is normalized; LLMRunner exposes it at num_layers + 1.
-            out_layers        = version == VERSION_P_H3_IMAGE ? std::set<int>{13, 19, 25, 31, 37} : std::set<int>{50};
+            out_layers        = ph3_connector ? std::set<int>{13, 19, 25, 31, 37} : std::set<int>{50};
             prompt_attn_range = {0, 0};
 
             if (llm->enable_vision) {
@@ -2589,7 +2601,9 @@ struct LLMEmbedder : public Conditioner {
                 } else if (conditioner_params.ref_images != nullptr) {
                     for (size_t i = 0; i < conditioner_params.ref_images->size(); ++i) {
                         auto resized = resize_for_vision((*conditioner_params.ref_images)[i]);
-                        prompt += "<Picture " + std::to_string(i + 1) + ">: ";
+                        prompt += version == VERSION_MINIMAX_H3_IMAGE
+                                      ? "Picture " + std::to_string(i + 1) + ": "
+                                      : "<Picture " + std::to_string(i + 1) + ">: ";
                         if (!add_vision_outputs(llm->encode_image_outputs(n_threads,
                                                                           resized,
                                                                           false),

@@ -588,8 +588,7 @@ namespace LTXV {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
-            x         = ggml_ext_pad_ext(ctx->ggml_ctx,
-                                         ctx->backend,
+            x         = ggml_ext_pad_ext(ctx,
                                          x,
                                          0,
                                          1,
@@ -669,7 +668,7 @@ namespace LTXV {
                                       ggml_tensor* latent,
                                       ggml_tensor* mean,
                                       ggml_tensor* stddev) {
-            latent = ggml_ext_slice(ctx->ggml_ctx, latent, 2, 0, config.latent_channels);
+            latent = ggml_ext_slice(ctx, latent, 2, 0, config.latent_channels);
             latent = ggml_permute(ctx->ggml_ctx, latent, 0, 2, 1, 3);
             latent = ggml_cont(ctx->ggml_ctx, latent);
             latent = ggml_reshape_4d(ctx->ggml_ctx, latent, config.latent_frequency_bins * config.latent_channels, latent->ne[2], 1, latent->ne[3]);

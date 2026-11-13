@@ -41,6 +41,7 @@
 #include "model/audio/wav2vec2.hpp"
 #include "model/diffusion/animatediff.hpp"
 #include "model/diffusion/control.hpp"
+#include "model/diffusion/minimax_h3.hpp"
 #include "model/diffusion/model.hpp"
 #include "model/diffusion/z_image.hpp"
 #include "model/vae/audio_vae.hpp"
@@ -1492,6 +1493,11 @@ bool StableDiffusionGGML::build_denoiser() {
             break;
         }
         case H3_AV_FLOW_PRED: {
+            if (version == VERSION_MINIMAX_H3_IMAGE) {
+                LOG_INFO("running in MiniMax H3 Image FLOW mode");
+                denoiser = std::make_shared<MiniMaxH3ImageDenoiser>(MiniMaxH3::pdd_sigmas);
+                break;
+            }
             LOG_INFO("running in MiniMax H3 AV FLOW mode");
             denoiser = std::make_shared<H3AVFlowDenoiser>(default_flow_shift, version == VERSION_P_H3_IMAGE ? 1.f : 3.f, get_latent_channel());
             break;
@@ -2633,7 +2639,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                     condition.c_position_ids.empty() ? nullptr : &condition.c_position_ids,
                     condition.c_ref_audios.empty() ? nullptr : &condition.c_ref_audios,
                     condition.c_reference_blocks.empty() ? nullptr : &condition.c_reference_blocks,
-                    version == VERSION_P_H3_IMAGE ? 2 : audio_length,
+                    version == VERSION_MINIMAX_H3_IMAGE ? 0 : (version == VERSION_P_H3_IMAGE ? 2 : audio_length),
                     std::isfinite(active_flow_shift) ? active_flow_shift : 12.f,
                     version == VERSION_P_H3_IMAGE ? 1.f : 3.f,
                     target_index > 0 && target_index < sigmas.size() ? sigmas[target_index] : NAN};
@@ -3072,7 +3078,7 @@ sd::Tensor<float> StableDiffusionGGML::decode_first_stage(const sd::Tensor<float
             return {};
         }
         auto decoded = first_stage_model->decode(n_threads, latents, tiling_params, decode_video, circular_x, circular_y);
-        if (version == VERSION_P_H3_IMAGE && !decoded.empty() && decoded.dim() == 5) {
+        if (sd_version_is_minimax_h3_image(version) && !decoded.empty() && decoded.dim() == 5) {
             decoded = decoded.squeeze(2);
         }
         if (!decoded.empty() ||

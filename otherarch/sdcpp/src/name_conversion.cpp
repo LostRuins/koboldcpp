@@ -1741,7 +1741,7 @@ std::string convert_tensor_name(std::string name, SDVersion version) {
 
     const std::vector<std::pair<std::string, std::string>> connector_prefix_map = {
         {"embeddings_connectors.text_encoders.", "text_encoders."},
-        {"embeddings_connectors.", version == VERSION_P_H3_IMAGE ? "text_encoders.ph3_image_connector." : ""},
+        {"embeddings_connectors.", sd_version_is_minimax_h3(version) ? "text_encoders.ph3_image_connector." : ""},
     };
     replace_with_prefix_map(name, connector_prefix_map);
 
