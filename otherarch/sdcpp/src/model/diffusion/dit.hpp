@@ -5,11 +5,12 @@
 #include "core/ggml_runner.h"
 
 namespace DiT {
-    inline ggml_tensor* patchify(ggml_context* ctx,
+    inline ggml_tensor* patchify(GGMLRunnerContext* runner_ctx,
                                  ggml_tensor* x,
                                  int pw,
                                  int ph,
                                  bool patch_last = true) {
+        auto ctx = runner_ctx->ggml_ctx;
         // x: [N, C, H, W]
         // return: [N, h*w, C*ph*pw] if patch_last else [N, h*w, ph*pw*C]
         int64_t N = x->ne[3];
@@ -28,19 +29,20 @@ namespace DiT {
             x = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, h*w, C, ph*pw]
             x = ggml_reshape_3d(ctx, x, pw * ph * C, w * h, N);    // [N, h*w, C*ph*pw]
         } else {
-            x = ggml_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));  // [N, h*w, C, ph*pw]
-            x = ggml_reshape_3d(ctx, x, C * pw * ph, w * h, N);              // [N, h*w, ph*pw*C]
+            x = ggml_cont(ctx, ggml_ext_torch_permute(runner_ctx, x, 2, 0, 1, 3));  // [N, h*w, C, ph*pw]
+            x = ggml_reshape_3d(ctx, x, C * pw * ph, w * h, N);                     // [N, h*w, ph*pw*C]
         }
         return x;
     }
 
-    inline ggml_tensor* unpatchify(ggml_context* ctx,
+    inline ggml_tensor* unpatchify(GGMLRunnerContext* runner_ctx,
                                    ggml_tensor* x,
                                    int64_t h,
                                    int64_t w,
                                    int ph,
                                    int pw,
                                    bool patch_last = true) {
+        auto ctx = runner_ctx->ggml_ctx;
         // x: [N, h*w, C*ph*pw] if patch_last else [N, h*w, ph*pw*C]
         // return: [N, C, H, W]
         int64_t N = x->ne[2];
@@ -74,7 +76,7 @@ namespace DiT {
 
         int pad_h = (ph - H % ph) % ph;
         int pad_w = (pw - W % pw) % pw;
-        x         = ggml_ext_pad(ctx->ggml_ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+        x         = ggml_ext_pad(ctx, x, pad_w, pad_h, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
         return x;
     }
 
@@ -84,11 +86,11 @@ namespace DiT {
                                          int pw,
                                          bool patch_last = true) {
         x = pad_to_patch_size(ctx, x, ph, pw);
-        x = patchify(ctx->ggml_ctx, x, ph, pw, patch_last);
+        x = patchify(ctx, x, ph, pw, patch_last);
         return x;
     }
 
-    inline ggml_tensor* unpatchify_and_crop(ggml_context* ctx,
+    inline ggml_tensor* unpatchify_and_crop(GGMLRunnerContext* runner_ctx,
                                             ggml_tensor* x,
                                             int64_t H,
                                             int64_t W,
@@ -99,19 +101,20 @@ namespace DiT {
         int pad_w = (pw - W % pw) % pw;
         int64_t h = ((H + pad_h) / ph);
         int64_t w = ((W + pad_w) / pw);
-        x         = unpatchify(ctx, x, h, w, ph, pw, patch_last);  // [N, C, H + pad_h, W + pad_w]
-        x         = ggml_ext_slice(ctx, x, 1, 0, H);               // [N, C, H, W + pad_w]
-        x         = ggml_ext_slice(ctx, x, 0, 0, W);               // [N, C, H, W]
+        x         = unpatchify(runner_ctx, x, h, w, ph, pw, patch_last);  // [N, C, H + pad_h, W + pad_w]
+        x         = ggml_ext_slice(runner_ctx, x, 1, 0, H);               // [N, C, H, W + pad_w]
+        x         = ggml_ext_slice(runner_ctx, x, 0, 0, W);               // [N, C, H, W]
         return x;
     }
 
-    inline ggml_tensor* patchify_3d(ggml_context* ctx,
+    inline ggml_tensor* patchify_3d(GGMLRunnerContext* runner_ctx,
                                     ggml_tensor* x,
                                     int pt,
                                     int ph,
                                     int pw,
                                     int64_t N       = 1,
                                     bool patch_last = true) {
+        auto ctx = runner_ctx->ggml_ctx;
         // x: [N*C, T, H, W]
         // return: [N, t_len*h_len*w_len, C*pt*ph*pw] if patch_last else [N, t_len*h_len*w_len, C*pt*ph*pw] or [N, t_len*h_len*w_len, pt*ph*pw*C]
         int64_t C     = x->ne[3] / N;
@@ -125,24 +128,24 @@ namespace DiT {
         GGML_ASSERT(C * N == x->ne[3]);
         GGML_ASSERT(t_len * pt == T && h_len * ph == H && w_len * pw == W);
 
-        x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt, t_len * C * N);  // [N*C*t_len, pt, h_len*ph, w_len*pw]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len, h_len*ph, pt, w_len*pw]
-        x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph, h_len * t_len * C * N);  // [N*C*t_len*h_len, ph, pt, w_len*pw]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, pt, ph, w_len*pw]
-        x = ggml_reshape_4d(ctx, x, pw, w_len, ph * pt, h_len * t_len * C * N);  // [N*C*t_len*h_len, pt*ph, w_len, pw]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, w_len, pt*ph, pw]
-        x = ggml_reshape_4d(ctx, x, pw * ph * pt, w_len * h_len * t_len, C, N);  // [N, C, t_len*h_len*w_len, pt*ph*pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt, t_len * C * N);            // [N*C*t_len, pt, h_len*ph, w_len*pw]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len, h_len*ph, pt, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph, h_len * t_len * C * N);            // [N*C*t_len*h_len, ph, pt, w_len*pw]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len*h_len, pt, ph, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw, w_len, ph * pt, h_len * t_len * C * N);            // [N*C*t_len*h_len, pt*ph, w_len, pw]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len*h_len, w_len, pt*ph, pw]
+        x = ggml_reshape_4d(ctx, x, pw * ph * pt, w_len * h_len * t_len, C, N);            // [N, C, t_len*h_len*w_len, pt*ph*pw]
         if (patch_last) {
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [N, t_len*h_len*w_len, C, pt*ph*pw]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N, t_len*h_len*w_len, C, pt*ph*pw]
         } else {
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));  // [N, t_len*h_len*w_len, pt*ph*pw, C]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 2, 0, 1, 3));  // [N, t_len*h_len*w_len, pt*ph*pw, C]
         }
         // [N, t_len*h_len*w_len, C*pt*ph*pw] or [N, t_len*h_len*w_len, pt*ph*pw*C]
         x = ggml_reshape_4d(ctx, x, pw * ph * pt * C, w_len * h_len * t_len, N, 1);
         return x;
     }
 
-    inline ggml_tensor* unpatchify_3d(ggml_context* ctx,
+    inline ggml_tensor* unpatchify_3d(GGMLRunnerContext* runner_ctx,
                                       ggml_tensor* x,
                                       int64_t t_len,
                                       int64_t h_len,
@@ -151,6 +154,7 @@ namespace DiT {
                                       int ph,
                                       int pw,
                                       bool patch_last = true) {
+        auto ctx = runner_ctx->ggml_ctx;
         // x: [N, t_len*h_len*w_len, C*pt*ph*pw] if patch_last else [N, t_len*h_len*w_len, pt*ph*pw*C]
         // return: [N*C, t_len*pt, h_len*ph, w_len*pw]
         int64_t N = x->ne[2];
@@ -159,20 +163,20 @@ namespace DiT {
         GGML_ASSERT(C * pt * ph * pw == x->ne[0]);
 
         if (patch_last) {
-            x = ggml_reshape_4d(ctx, x, pw * ph * pt, C, w_len * h_len * t_len, N);  // [N, t_len*h_len*w_len, C, pt*ph*pw]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N, C, t_len*h_len*w_len, pt*ph*pw]
+            x = ggml_reshape_4d(ctx, x, pw * ph * pt, C, w_len * h_len * t_len, N);            // [N, t_len*h_len*w_len, C, pt*ph*pw]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N, C, t_len*h_len*w_len, pt*ph*pw]
         } else {
-            x = ggml_reshape_4d(ctx, x, C, pw * ph * pt, w_len * h_len * t_len, N);  // [N, t_len*h_len*w_len, pt*ph*pw, C]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));      // [N, C, t_len*h_len*w_len, pt*ph*pw]
+            x = ggml_reshape_4d(ctx, x, C, pw * ph * pt, w_len * h_len * t_len, N);            // [N, t_len*h_len*w_len, pt*ph*pw, C]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 1, 2, 0, 3));  // [N, C, t_len*h_len*w_len, pt*ph*pw]
         }
 
-        x = ggml_reshape_4d(ctx, x, pw, ph * pt, w_len, h_len * t_len * C * N);  // [N*C*t_len*h_len, w_len, pt*ph, pw]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, pt*ph, w_len, pw]
-        x = ggml_reshape_4d(ctx, x, pw * w_len, ph, pt, h_len * t_len * C * N);  // [N*C*t_len*h_len, pt, ph, w_len*pw]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, ph, pt, w_len*pw]
-        x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph * h_len, t_len * C * N);  // [N*C*t_len, h_len*ph, pt, w_len*pw]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len, pt, h_len*ph, w_len*pw]
-        x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);  // [N*C, t_len*pt, h_len*ph, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw, ph * pt, w_len, h_len * t_len * C * N);            // [N*C*t_len*h_len, w_len, pt*ph, pw]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len*h_len, pt*ph, w_len, pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, ph, pt, h_len * t_len * C * N);            // [N*C*t_len*h_len, pt, ph, w_len*pw]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len*h_len, ph, pt, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph * h_len, t_len * C * N);            // [N*C*t_len, h_len*ph, pt, w_len*pw]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len, pt, h_len*ph, w_len*pw]
+        x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);            // [N*C, t_len*pt, h_len*ph, w_len*pw]
         return x;
     }
 }  // namespace DiT

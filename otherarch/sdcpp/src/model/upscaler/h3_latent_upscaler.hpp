@@ -195,8 +195,8 @@ namespace H3VUpsampler {
             ggml_tensor* emb_silu = ggml_silu(ctx->ggml_ctx, emb);
             ggml_tensor* emb_out  = emb_layers->forward(ctx, emb_silu);
             ggml_tensor* emb_1d   = ggml_reshape_1d(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, emb_out), 2 * channels);
-            ggml_tensor* scale    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, emb_1d, 0, 0, channels), 1, 1, 1, channels);
-            ggml_tensor* shift    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, emb_1d, 0, channels, 2 * channels), 1, 1, 1, channels);
+            ggml_tensor* scale    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx, emb_1d, 0, 0, channels), 1, 1, 1, channels);
+            ggml_tensor* shift    = ggml_reshape_4d(ctx->ggml_ctx, ggml_ext_slice(ctx, emb_1d, 0, channels, 2 * channels), 1, 1, 1, channels);
             ggml_tensor* gain     = ggml_scale_bias(ctx->ggml_ctx, scale, 1.f, 1.f);
 
             h = out_norm->forward(ctx, h);
@@ -236,7 +236,7 @@ namespace H3VUpsampler {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             ggml_tensor* w = params["weight"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+                w = ctx->weight_adapter->patch_weight(ctx, w, prefix + "weight");
             }
             ggml_tensor* w32 = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F32);
             ggml_tensor* xa  = x;
@@ -250,7 +250,7 @@ namespace H3VUpsampler {
             // ggml_pad only pads the end; concatenate zeros for symmetric padding.
             ggml_tensor* xp = xa;
             if (pad > 0) {
-                ggml_tensor* zero = ggml_scale(ctx->ggml_ctx, ggml_ext_slice(ctx->ggml_ctx, xa, 2, 0, 1), 0.0f);
+                ggml_tensor* zero = ggml_scale(ctx->ggml_ctx, ggml_ext_slice(ctx, xa, 2, 0, 1), 0.0f);
                 ggml_tensor* lead = zero;
                 for (int i = 1; i < pad; ++i) {
                     lead = ggml_concat(ctx->ggml_ctx, lead, zero, 2);
@@ -261,15 +261,15 @@ namespace H3VUpsampler {
 
             ggml_tensor* acc = nullptr;
             for (int j = 0; j < kernel; ++j) {
-                ggml_tensor* xs   = ggml_ext_slice(ctx->ggml_ctx, xp, 2, j, j + T);
-                ggml_tensor* wj   = ggml_ext_slice(ctx->ggml_ctx, w32, 2, j, j + 1);  // [1, 1, 1, C]
+                ggml_tensor* xs   = ggml_ext_slice(ctx, xp, 2, j, j + T);
+                ggml_tensor* wj   = ggml_ext_slice(ctx, w32, 2, j, j + 1);  // [1, 1, 1, C]
                 ggml_tensor* term = ggml_mul(ctx->ggml_ctx, xs, wj);
                 acc               = acc == nullptr ? term : ggml_add(ctx->ggml_ctx, acc, term);
             }
             if (has_bias) {
                 ggml_tensor* b = params["bias"];
                 if (ctx->weight_adapter) {
-                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                    b = ctx->weight_adapter->patch_weight(ctx, b, prefix + "bias");
                 }
                 acc = ggml_add(ctx->ggml_ctx, acc, ggml_reshape_4d(ctx->ggml_ctx, b, 1, 1, 1, channels));
             }

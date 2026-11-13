@@ -2,8 +2,9 @@
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "generation_info.h"
+#include "model/upscaler/esrgan.hpp"
+#include "model/upscaler/mosr.hpp"
 #include "model_loader.h"
-#include "runtime/tiling.h"
 #include "stable-diffusion.h"
 
 #include <cstdlib>
@@ -19,188 +20,44 @@ UpscalerGGML::UpscalerGGML(int n_threads,
       direct(direct),
       tile_size(tile_size),
       backend_spec(std::move(backend_spec)),
-      params_backend_spec(std::move(params_backend_spec)) {
-}
+      params_backend_spec(std::move(params_backend_spec)) {}
 
-UpscalerGGML::~UpscalerGGML() {
-    // ModelManager holds raw ggml tensor pointers owned by the runner context.
-    model_manager.reset();
-    esrgan_upscaler.reset();
-    mosr_upscaler.reset();
-}
+UpscalerGGML::~UpscalerGGML() = default;
 
 void UpscalerGGML::set_max_graph_vram_bytes(size_t max_vram_bytes) {
     max_graph_vram_bytes = max_vram_bytes;
-    if (runner() != nullptr) {
-        runner()->set_max_graph_vram_bytes(max_vram_bytes);
+    if (model != nullptr) {
+        model->runner()->set_max_graph_vram_bytes(max_vram_bytes);
     }
-}
-
-GGMLRunner* UpscalerGGML::runner() {
-    if (mosr_upscaler) {
-        return mosr_upscaler.get();
-    }
-    return esrgan_upscaler.get();
 }
 
 int UpscalerGGML::get_scale() {
-    if (mosr_upscaler) {
-        return mosr_upscaler->config.scale;
-    }
-    if (esrgan_upscaler) {
-        return esrgan_upscaler->config.scale;
-    }
-    return 1;
+    return model != nullptr ? model->scale() : 1;
 }
 
-sd::Tensor<float> UpscalerGGML::compute(const sd::Tensor<float>& input_tensor) {
-    if (mosr_upscaler) {
-        return mosr_upscaler->compute(n_threads, input_tensor);
-    }
-    return esrgan_upscaler->compute(n_threads, input_tensor);
-}
-
-bool UpscalerGGML::load_from_file(const std::string& esrgan_path,
-                                  int n_threads) {
+bool UpscalerGGML::load_from_file(const std::string& path, int n_threads) {
     sd::ParallelScope tensor_scope(&tensor_executor);
     kcpp_sd_ggml_log_set();
-
+    model.reset();
     std::string error;
-    if (!backend_manager.init(backend_spec.c_str(),
-                              params_backend_spec.c_str(),
-                              /*split_mode_spec=*/nullptr,
-                              &error)) {
+    if (!backend_manager.init(backend_spec.c_str(), params_backend_spec.c_str(), nullptr, &error)) {
         LOG_ERROR("upscaler backend config failed: %s", error.c_str());
         return false;
     }
-    auto backend_for = [&](SDBackendModule module) {
-        ggml_backend_t module_backend = backend_manager.runtime_backend(module);
-        if (module_backend == nullptr) {
-            LOG_ERROR("failed to initialize %s backend", sd_backend_module_name(module));
-        }
-        return module_backend;
-    };
-    auto params_backend_for = [&](SDBackendModule module) {
-        ggml_backend_t module_backend = backend_manager.params_backend(module);
-        if (module_backend == nullptr) {
-            LOG_ERROR("failed to initialize %s params backend", sd_backend_module_name(module));
-        }
-        return module_backend;
-    };
-    auto ensure_backend_pair = [&](SDBackendModule module) {
-        if (backend_for(module) == nullptr) {
-            return false;
-        }
-        return params_backend_for(module) != nullptr;
-    };
-    if (!ensure_backend_pair(SDBackendModule::UPSCALER)) {
-        return false;
-    }
-
     model_manager = std::make_shared<ModelManager>();
     model_manager->set_n_threads(n_threads);
     model_manager->set_enable_mmap(false);
-
-    ModelLoader model_loader;
-    if (!model_loader.init_from_file_and_convert_name(esrgan_path, "", VERSION_ESRGAN)) {
-        LOG_ERROR("init model loader from file failed: '%s'", esrgan_path.c_str());
-        return false;
-    }
-    model_loader.set_wtype_override(model_data_type);
-    LOG_INFO("Upscaler weight type: %s", ggml_type_name(model_data_type));
-    const auto& tensor_storage_map = model_loader.get_tensor_storage_map();
-    std::map<std::string, ggml_tensor*> tensors;
-    if (tensor_storage_map.count("gblocks.0.weight") > 0) {
-        mosr_upscaler = std::make_shared<MoSR>(backend_for(SDBackendModule::UPSCALER),
-                                               tensor_storage_map,
-                                               model_manager);
-        if (mosr_upscaler->mosr_net == nullptr) {
-            LOG_ERROR("init mosr model from metadata failed: '%s'", esrgan_path.c_str());
-            return false;
-        }
-        mosr_upscaler->get_param_tensors(tensors);
-    } else {
-        esrgan_upscaler = std::make_shared<ESRGAN>(backend_for(SDBackendModule::UPSCALER),
-                                                   tensor_storage_map,
-                                                   model_manager);
-        if (esrgan_upscaler->rrdb_net == nullptr) {
-            LOG_ERROR("init esrgan model from metadata failed: '%s'", esrgan_path.c_str());
-            return false;
-        }
-        esrgan_upscaler->get_param_tensors(tensors);
-    }
-    LOG_INFO("Upscaler architecture: %s", runner()->get_desc().c_str());
-    runner()->set_max_graph_vram_bytes(max_graph_vram_bytes);
-    if (direct) {
-        runner()->set_conv2d_direct_enabled(true);
-    }
-
-    if (!model_manager->set_loader(model_loader) ||
-        !model_manager->register_param_tensors(ModelComponent::Upscaler,
-                                               std::move(tensors),
-                                               backend_manager.params_backend_is_disk(SDBackendModule::UPSCALER) ? ModelManager::ResidencyMode::Disk : ModelManager::ResidencyMode::ParamBackend,
-                                               backend_for(SDBackendModule::UPSCALER),
-                                               params_backend_for(SDBackendModule::UPSCALER)) ||
-        !model_manager->validate_registered_tensors()) {
-        LOG_ERROR("register upscaler tensors with model manager failed");
-        return false;
-    }
-    return true;
+    model = sd::pipeline::load_image_upscale_model(model_manager, backend_manager, path,
+                                                   max_graph_vram_bytes, direct, model_data_type);
+    return model != nullptr;
 }
 
 sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_tensor) {
     sd::ParallelScope tensor_scope(&tensor_executor);
-    if (input_tensor.empty() || input_tensor.dim() != 4 ||
-        (input_tensor.shape()[2] != 3 && input_tensor.shape()[2] != 4)) {
-        LOG_ERROR("upscaler expects a 4D RGB or RGBA image tensor");
+    if (model == nullptr) {
         return {};
     }
-
-    const bool has_alpha = input_tensor.shape()[2] == 4;
-    sd::Tensor<float> rgb;
-    if (has_alpha) {
-        rgb = sd::ops::slice(input_tensor, 2, 0, 3);
-    }
-    const sd::Tensor<float>& model_input = has_alpha ? rgb : input_tensor;
-    sd::Tensor<float> upscaled;
-    const int scale = get_scale();
-    if (tile_size <= 0 || (input_tensor.shape()[0] <= tile_size && input_tensor.shape()[1] <= tile_size)) {
-        upscaled = compute(model_input);
-    } else {
-        auto on_processing = [&](const sd::Tensor<float>& input_tile) -> sd::Tensor<float> {
-            auto output_tile = compute(input_tile);
-            if (output_tile.empty()) {
-                LOG_ERROR("upscaler compute failed while processing a tile");
-                return {};
-            }
-            return output_tile;
-        };
-
-        upscaled = process_tiles_2d(model_input,
-                                    static_cast<int>(input_tensor.shape()[0] * scale),
-                                    static_cast<int>(input_tensor.shape()[1] * scale),
-                                    scale,
-                                    tile_size,
-                                    tile_size,
-                                    0.25f,
-                                    false,
-                                    false,
-                                    on_processing);
-    }
-    runner()->runner_end();
-    if (upscaled.empty()) {
-        LOG_ERROR("upscaler compute failed");
-        return {};
-    }
-    if (has_alpha) {
-        auto alpha       = sd::ops::slice(input_tensor, 2, 3, 4);
-        auto alpha_shape = alpha.shape();
-        alpha_shape[0]   = upscaled.shape()[0];
-        alpha_shape[1]   = upscaled.shape()[1];
-        alpha            = sd::ops::interpolate(alpha, alpha_shape, sd::ops::InterpolateMode::Bilinear);
-        upscaled         = sd::ops::concat(upscaled, alpha, 2);
-    }
-    return upscaled;
+    return sd::pipeline::upscale_image_tensor(*model, input_tensor, n_threads, tile_size);
 }
 
 sd_image_t UpscalerGGML::upscale(sd_image_t input_image, uint32_t upscale_factor) {

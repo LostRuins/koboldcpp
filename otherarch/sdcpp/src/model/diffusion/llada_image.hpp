@@ -217,8 +217,8 @@ namespace LLaDAImage {
 
             GGML_ASSERT(txt->ne[1] + img->ne[1] == pe->ne[3]);
 
-            auto txt_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, 0, txt->ne[1]);
-            auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1], pe->ne[3]);
+            auto txt_pe = ggml_ext_slice(ctx, pe, 3, 0, txt->ne[1]);
+            auto img_pe = ggml_ext_slice(ctx, pe, 3, txt->ne[1], pe->ne[3]);
 
             for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["context_refiner." + std::to_string(i)]);
@@ -246,7 +246,7 @@ namespace LLaDAImage {
 
             txt_img = final_layer->forward(ctx, txt_img, t_emb);
 
-            return ggml_ext_slice(ctx->ggml_ctx, txt_img, 1, n_txt_token + n_txt_pad_token, n_txt_token + n_txt_pad_token + n_img_token);
+            return ggml_ext_slice(ctx, txt_img, 1, n_txt_token + n_txt_pad_token, n_txt_token + n_txt_pad_token + n_img_token);
         }
 
         ggml_tensor* pad_stream(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pad_token) {
@@ -308,8 +308,8 @@ namespace LLaDAImage {
 
             GGML_ASSERT(cap_len * 2 + img_len * 2 + sig_len == pe->ne[3]);
 
-            auto cap_pe = ggml_ext_slice(gctx, pe, 3, 0, cap_len * 2);
-            auto img_pe = ggml_ext_slice(gctx, pe, 3, cap_len * 2, cap_len * 2 + img_len * 2);
+            auto cap_pe = ggml_ext_slice(ctx, pe, 3, 0, cap_len * 2);
+            auto img_pe = ggml_ext_slice(ctx, pe, 3, cap_len * 2, cap_len * 2 + img_len * 2);
 
             auto img_adaln = ggml_concat(gctx, per_token(t_clean, img_len), per_token(t_noisy, img_len), 1);
 
@@ -322,7 +322,7 @@ namespace LLaDAImage {
                 img        = block->forward(ctx, img, img_pe, nullptr, img_adaln);
             }
             if (sig != nullptr) {
-                auto sig_pe = ggml_ext_slice(gctx, pe, 3, cap_len * 2 + img_len * 2, pe->ne[3]);
+                auto sig_pe = ggml_ext_slice(ctx, pe, 3, cap_len * 2 + img_len * 2, pe->ne[3]);
                 for (int i = 0; i < config.num_refiner_layers; i++) {
                     auto block = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["sigvq_refiner." + std::to_string(i)]);
                     sig        = block->forward(ctx, sig, sig_pe, nullptr, nullptr);
@@ -350,7 +350,7 @@ namespace LLaDAImage {
             // The stream is padded to SEQ_MULTI_OF, so drop the pad tokens: they are not part of
             // the latent grid that unpatchify reconstructs.
             int64_t target_start = cap_len * 2 + img_len;
-            return ggml_ext_slice(gctx, seq, 1, target_start, target_start + n_img_token);
+            return ggml_ext_slice(ctx, seq, 1, target_start, target_start + n_img_token);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx,
@@ -372,10 +372,10 @@ namespace LLaDAImage {
 
             auto out = forward_core(ctx, img, timestep, context, pe);
 
-            out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, patch_size, patch_size, false);
+            out = DiT::unpatchify_and_crop(ctx, out, H, W, patch_size, patch_size, false);
 
             // The reference pipeline negates the model output before the scheduler step.
-            return ggml_ext_scale(ctx->ggml_ctx, out, -1.f);
+            return ggml_ext_scale(ctx, out, -1.f);
         }
     };
 
@@ -488,8 +488,8 @@ namespace LLaDAImage {
             auto src    = DiT::pad_and_patchify(&runner_ctx, source, config.patch_size, config.patch_size, false);
 
             auto out = llada_image.forward_editing(&runner_ctx, target, timesteps, context, semantic, src, pe);
-            out      = DiT::unpatchify_and_crop(runner_ctx.ggml_ctx, out, H, W, config.patch_size, config.patch_size, false);
-            out      = ggml_ext_scale(runner_ctx.ggml_ctx, out, -1.f);
+            out      = DiT::unpatchify_and_crop(&runner_ctx, out, H, W, config.patch_size, config.patch_size, false);
+            out      = ggml_ext_scale(&runner_ctx, out, -1.f);
 
             ggml_build_forward_expand(gf, out);
             return gf;

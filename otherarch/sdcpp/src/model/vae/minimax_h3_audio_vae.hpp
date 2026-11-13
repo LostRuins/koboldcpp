@@ -28,7 +28,7 @@ namespace MiniMaxH3 {
             auto alpha       = params["alpha"];
             auto oscillation = ggml_sin(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, x, alpha));
             oscillation      = ggml_mul(ctx->ggml_ctx, oscillation, oscillation);
-            auto eps         = ggml_ext_scale(ctx->ggml_ctx, ggml_ext_ones(ctx->ggml_ctx, 1, 1, 1, 1), 1e-9f);
+            auto eps         = ggml_ext_scale(ctx, ggml_ext_ones(ctx, 1, 1, 1, 1), 1e-9f);
             return ggml_add(ctx->ggml_ctx,
                             x,
                             ggml_div(ctx->ggml_ctx, oscillation, ggml_add(ctx->ggml_ctx, alpha, eps)));
@@ -59,7 +59,7 @@ namespace MiniMaxH3 {
             auto h     = conv2->forward(ctx, act2->forward(ctx, conv1->forward(ctx, act1->forward(ctx, x))));
             if (x->ne[0] != h->ne[0]) {
                 int64_t pad = (x->ne[0] - h->ne[0]) / 2;
-                x           = ggml_ext_slice(ctx->ggml_ctx, x, 0, pad, x->ne[0] - pad);
+                x           = ggml_ext_slice(ctx, x, 0, pad, x->ne[0] - pad);
             }
             return ggml_add(ctx->ggml_ctx, x, h);
         }
@@ -162,7 +162,7 @@ namespace MiniMaxH3 {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             auto qkv_layer  = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto proj       = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
-            auto qkv        = ggml_ext_chunk(ctx->ggml_ctx, qkv_layer->forward(ctx, x), 3, 0);
+            auto qkv        = ggml_ext_chunk(ctx, qkv_layer->forward(ctx, x), 3, 0);
             auto bias_shape = [&](ggml_tensor* bias) {
                 return ggml_reshape_4d(ctx->ggml_ctx, bias, bias->ne[0], 1, 1, 1);
             };
@@ -172,7 +172,7 @@ namespace MiniMaxH3 {
 
             int64_t sequence = x->ne[1];
             auto mask        = ggml_diag_mask_inf(ctx->ggml_ctx,
-                                                  ggml_ext_zeros(ctx->ggml_ctx, sequence, sequence, 1, 1),
+                                                  ggml_ext_zeros(ctx, sequence, sequence, 1, 1),
                                                   0);
             auto attn_out    = ggml_ext_attention_ext(ctx,
                                                       q,
@@ -323,7 +323,7 @@ namespace MiniMaxH3 {
                     auto value = block->forward(ctx, x);
                     sum        = sum == nullptr ? value : ggml_add(ctx->ggml_ctx, sum, value);
                 }
-                x = ggml_ext_scale(ctx->ggml_ctx, sum, 1.f / num_kernels);
+                x = ggml_ext_scale(ctx, sum, 1.f / num_kernels);
             }
             auto activation = std::dynamic_pointer_cast<LTXV::Activation1D>(blocks["activation_post"]);
             auto conv_post  = std::dynamic_pointer_cast<LTXV::Conv1D>(blocks["conv_post"]);
@@ -412,7 +412,7 @@ namespace MiniMaxH3 {
                                                     streams);
             ggml_tensor* waveform = nullptr;
             for (int64_t stream = 0; stream < streams; ++stream) {
-                auto stream_latent   = ggml_ext_slice(ctx->ggml_ctx, latent, 2, stream, stream + 1);
+                auto stream_latent   = ggml_ext_slice(ctx, latent, 2, stream, stream + 1);
                 auto stream_waveform = decoder->forward(ctx, dec_in->forward(ctx, stream_latent));
                 waveform             = waveform == nullptr
                                            ? stream_waveform

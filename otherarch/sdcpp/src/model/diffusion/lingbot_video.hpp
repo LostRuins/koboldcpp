@@ -365,7 +365,7 @@ namespace LingBotVideo {
             }
             selected_mask = ggml_reshape_2d(gctx, selected_mask, num_experts, n_token_total);
 
-            ggml_tensor* excluded_group_mask = ggml_sub(gctx, selected_mask, ggml_ext_ones_like(gctx, selected_mask));
+            ggml_tensor* excluded_group_mask = ggml_sub(gctx, selected_mask, ggml_ext_ones_like(ctx, selected_mask));
             ggml_tensor* masked_scores       = ggml_add(gctx, choice_scores, ggml_scale(gctx, excluded_group_mask, 1.0e9f));
             return ggml_argsort_top_k(gctx, masked_scores, static_cast<int>(num_experts_per_tok));
         }
@@ -476,7 +476,7 @@ namespace LingBotVideo {
 
             auto table = ggml_reshape_3d(ctx->ggml_ctx, params["scale_shift_table"], hidden_size * 6, 1, 1);
             auto mod   = ggml_add(ctx->ggml_ctx, temb6, table);
-            auto mods  = ggml_ext_chunk(ctx->ggml_ctx, mod, 6, 0);
+            auto mods  = ggml_ext_chunk(ctx, mod, 6, 0);
 
             auto shift_msa = mods[0];
             auto scale_msa = mods[1];
@@ -556,13 +556,13 @@ namespace LingBotVideo {
             int64_t w_len = W / config.patch_w;
             int64_t n_img = t_len * h_len * w_len;
 
-            auto img = DiT::patchify_3d(ctx->ggml_ctx, x, config.patch_t, config.patch_h, config.patch_w, N, false);
+            auto img = DiT::patchify_3d(ctx, x, config.patch_t, config.patch_h, config.patch_w, N, false);
             img      = patch_embedder->forward(ctx, img);
 
             auto txt           = text_embedder->forward(ctx, context);
             auto hidden_states = ggml_concat(ctx->ggml_ctx, img, txt, 1);
 
-            auto timestep_proj = ggml_ext_timestep_embedding(ctx->ggml_ctx,
+            auto timestep_proj = ggml_ext_timestep_embedding(ctx,
                                                              timestep,
                                                              static_cast<int>(config.freq_dim),
                                                              10000,
@@ -582,16 +582,16 @@ namespace LingBotVideo {
                 sd::ggml_graph_cut::mark_graph_cut(hidden_states, "lingbot_video.blocks." + std::to_string(i), "hidden_states");
             }
 
-            auto final_mods = ggml_ext_chunk(ctx->ggml_ctx,
+            auto final_mods = ggml_ext_chunk(ctx,
                                              norm_out_modulation->forward(ctx, ggml_silu(ctx->ggml_ctx, temb_tokens)),
                                              2,
                                              0);
             hidden_states   = norm_out->forward(ctx, hidden_states);
             hidden_states   = Flux::modulate(ctx, hidden_states, final_mods[0], final_mods[1], true);
             hidden_states   = proj_out->forward(ctx, hidden_states);
-            hidden_states   = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, 0, n_img);
+            hidden_states   = ggml_ext_slice(ctx, hidden_states, 1, 0, n_img);
 
-            auto out = DiT::unpatchify_3d(ctx->ggml_ctx,
+            auto out = DiT::unpatchify_3d(ctx,
                                           hidden_states,
                                           t_len,
                                           h_len,

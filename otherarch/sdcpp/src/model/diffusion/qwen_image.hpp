@@ -113,7 +113,7 @@ namespace Qwen {
             // return: [N, embedding_dim]
             auto timestep_embedder = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["timestep_embedder"]);
 
-            auto timesteps_proj = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 256, 10000, 1.f);
+            auto timesteps_proj = ggml_ext_timestep_embedding(ctx, timesteps, 256, 10000, 1.f);
             auto timesteps_emb  = timestep_embedder->forward(ctx, timesteps_proj);
             if (use_additional_t_cond) {
                 GGML_ASSERT(addition_t_cond != nullptr);
@@ -186,9 +186,7 @@ namespace Qwen {
             auto to_v     = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                to_out_0->set_force_prec_f32(true);
-            }
+            to_out_0->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
             auto norm_added_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_q"]);
             auto norm_added_k = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_k"]);
@@ -289,14 +287,17 @@ namespace Qwen {
                                                                                eps));
         }
 
-        std::vector<ggml_tensor*> get_mod_params_vec(ggml_context* ctx, ggml_tensor* mod_params, ggml_tensor* index = nullptr) {
+        std::vector<ggml_tensor*> get_mod_params_vec(GGMLRunnerContext* runner_ctx,
+                                                     ggml_tensor* mod_params,
+                                                     ggml_tensor* index = nullptr) {
+            auto ctx = runner_ctx->ggml_ctx;
             // index: [N, n_img_token]
             // mod_params: [N, hidden_size * 12]
             if (index == nullptr) {
-                return ggml_ext_chunk(ctx, mod_params, 6, 0);
+                return ggml_ext_chunk(runner_ctx, mod_params, 6, 0);
             }
             mod_params          = ggml_reshape_1d(ctx, mod_params, ggml_nelements(mod_params));
-            auto mod_params_vec = ggml_ext_chunk(ctx, mod_params, 12, 0);
+            auto mod_params_vec = ggml_ext_chunk(runner_ctx, mod_params, 12, 0);
             index               = ggml_reshape_3d(ctx, index, 1, index->ne[0], index->ne[1]);                                      // [N, n_img_token, 1]
             index               = ggml_repeat_4d(ctx, index, mod_params_vec[0]->ne[0], index->ne[1], index->ne[2], index->ne[3]);  // [N, n_img_token, hidden_size]
             std::vector<ggml_tensor*> mod_results;
@@ -339,15 +340,15 @@ namespace Qwen {
 
             auto img_mod_params    = ggml_silu(ctx->ggml_ctx, t_emb);
             img_mod_params         = img_mod_1->forward(ctx, img_mod_params);
-            auto img_mod_param_vec = get_mod_params_vec(ctx->ggml_ctx, img_mod_params, modulate_index);
+            auto img_mod_param_vec = get_mod_params_vec(ctx, img_mod_params, modulate_index);
 
             if (zero_cond_t) {
-                t_emb = ggml_ext_chunk(ctx->ggml_ctx, t_emb, 2, 1)[0];
+                t_emb = ggml_ext_chunk(ctx, t_emb, 2, 1)[0];
             }
 
             auto txt_mod_params    = ggml_silu(ctx->ggml_ctx, t_emb);
             txt_mod_params         = txt_mod_1->forward(ctx, txt_mod_params);
-            auto txt_mod_param_vec = get_mod_params_vec(ctx->ggml_ctx, txt_mod_params);
+            auto txt_mod_param_vec = get_mod_params_vec(ctx, txt_mod_params);
 
             auto img_normed    = img_norm1->forward(ctx, img);
             auto img_modulated = Flux::modulate(ctx, img_normed, img_mod_param_vec[0], img_mod_param_vec[1], modulate_index != nullptr);
@@ -402,7 +403,7 @@ namespace Qwen {
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
 
             auto emb   = linear->forward(ctx, ggml_silu(ctx->ggml_ctx, c));
-            auto mods  = ggml_ext_chunk(ctx->ggml_ctx, emb, 2, 0);
+            auto mods  = ggml_ext_chunk(ctx, emb, 2, 0);
             auto scale = mods[0];
             auto shift = mods[1];
 
@@ -461,7 +462,7 @@ namespace Qwen {
 
             auto t_emb = time_text_embed->forward(ctx, timestep, addition_t_cond);
             if (config.zero_cond_t) {
-                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros_like(ctx->ggml_ctx, timestep), addition_t_cond);
+                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros_like(ctx, timestep), addition_t_cond);
                 t_emb        = ggml_concat(ctx->ggml_ctx, t_emb, t_emb_0, 1);
             }
             auto img = img_in->forward(ctx, x);
@@ -482,7 +483,7 @@ namespace Qwen {
             }
 
             if (config.zero_cond_t) {
-                t_emb = ggml_ext_chunk(ctx->ggml_ctx, t_emb, 2, 1)[0];
+                t_emb = ggml_ext_chunk(ctx, t_emb, 2, 1)[0];
             }
 
             img = norm_out->forward(ctx, img, t_emb);
@@ -519,12 +520,12 @@ namespace Qwen {
             auto patchify_input = [&](ggml_tensor* input) -> ggml_tensor* {
                 input = DiT::pad_to_patch_size(ctx, input, config.patch_size, config.patch_size);
                 if (!has_time_axis) {
-                    return DiT::patchify(ctx->ggml_ctx, input, config.patch_size, config.patch_size);
+                    return DiT::patchify(ctx, input, config.patch_size, config.patch_size);
                 }
                 if (input->ne[3] == 1) {
                     input = ggml_reshape_4d(ctx->ggml_ctx, input, input->ne[0], input->ne[1], 1, input->ne[2]);
                 }
-                return DiT::patchify_3d(ctx->ggml_ctx, input, 1, config.patch_size, config.patch_size, N);
+                return DiT::patchify_3d(ctx, input, 1, config.patch_size, config.patch_size, N);
             };
 
             auto img           = patchify_input(x);
@@ -550,11 +551,11 @@ namespace Qwen {
                 int pad_w = (config.patch_size - W % config.patch_size) % config.patch_size;
                 int h_len = static_cast<int>((H + pad_h) / config.patch_size);
                 int w_len = static_cast<int>((W + pad_w) / config.patch_size);
-                out       = DiT::unpatchify_3d(ctx->ggml_ctx, out, T, h_len, w_len, 1, config.patch_size, config.patch_size);
-                out       = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N*C, T, H, W + pad_w]
-                out       = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N*C, T, H, W]
+                out       = DiT::unpatchify_3d(ctx, out, T, h_len, w_len, 1, config.patch_size, config.patch_size);
+                out       = ggml_ext_slice(ctx, out, 1, 0, H);  // [N*C, T, H, W + pad_w]
+                out       = ggml_ext_slice(ctx, out, 0, 0, W);  // [N*C, T, H, W]
             } else {
-                out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, config.patch_size, config.patch_size);  // [N, C, H, W]
+                out = DiT::unpatchify_and_crop(ctx, out, H, W, config.patch_size, config.patch_size);  // [N, C, H, W]
             }
 
             return out;

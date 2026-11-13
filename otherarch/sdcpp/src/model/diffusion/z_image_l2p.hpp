@@ -134,7 +134,7 @@ namespace ZImageL2P {
             const int64_t n_img = w * h;
             const int64_t n_txt = context->ne[1];
 
-            auto img = DiT::patchify(gctx, x, config.patch_size, config.patch_size, false);
+            auto img = DiT::patchify(ctx, x, config.patch_size, config.patch_size, false);
             img      = std::dynamic_pointer_cast<Linear>(blocks["x_embedder"])->forward(ctx, img);
             auto txt = std::dynamic_pointer_cast<RMSNorm>(blocks["cap_embedder.0"])->forward(ctx, context);
             txt      = std::dynamic_pointer_cast<Linear>(blocks["cap_embedder.1"])->forward(ctx, txt);
@@ -155,8 +155,8 @@ namespace ZImageL2P {
             }
             GGML_ASSERT(txt->ne[1] + img->ne[1] == pe->ne[3]);
 
-            auto txt_pe = ggml_ext_slice(gctx, pe, 3, 0, txt->ne[1]);
-            auto img_pe = ggml_ext_slice(gctx, pe, 3, txt->ne[1], pe->ne[3]);
+            auto txt_pe = ggml_ext_slice(ctx, pe, 3, 0, txt->ne[1]);
+            auto img_pe = ggml_ext_slice(ctx, pe, 3, txt->ne[1], pe->ne[3]);
             for (int64_t i = 0; i < config.num_refiner_layers; ++i) {
                 txt = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["context_refiner." + std::to_string(i)])->forward(ctx, txt, txt_pe);
                 sd::ggml_graph_cut::mark_graph_cut(txt, "z_image_l2p.context_refiner." + std::to_string(i), "txt");
@@ -175,11 +175,11 @@ namespace ZImageL2P {
             // The local decoder consumes the raw last-layer hidden states: there is no final
             // norm or adaLN modulation in front of it, unlike Z-Image's final_layer.
             const int64_t img_start = n_txt + n_txt_pad;
-            auto feat               = ggml_ext_slice(gctx, txt_img, 1, img_start, img_start + n_img);                           // [N, h*w, hidden_size]
+            auto feat               = ggml_ext_slice(ctx, txt_img, 1, img_start, img_start + n_img);                            // [N, h*w, hidden_size]
             feat                    = ggml_reshape_4d(gctx, feat, config.hidden_size, w, h, N);                                 // [N, h, w, hidden_size]
             feat                    = ggml_cont(gctx, ggml_permute(gctx, feat, 2, 0, 1, 3));                                    // [N, hidden_size, h, w]
             auto out                = std::dynamic_pointer_cast<LocalDecoder>(blocks["local_decoder"])->forward(ctx, x, feat);  // [N, C, H, W]
-            return ggml_ext_scale(gctx, out, -1.f);
+            return ggml_ext_scale(ctx, out, -1.f);
         }
     };
 

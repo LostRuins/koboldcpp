@@ -45,20 +45,20 @@ namespace SeedVR2 {
                 // equivalent spatial filter to F16, instead of copying and convolving the halo.
                 auto w       = ggml_cast(c, params["weight"], GGML_TYPE_F32);
                 w            = ggml_reshape_3d(c, w, kw * kh, kt, in_channels * out_channels);
-                auto spatial = ggml_ext_slice(c, w, 1, 0, 1, false);
+                auto spatial = ggml_ext_slice(ctx, w, 1, 0, 1, false);
                 for (int i = 1; i < kt; ++i)
-                    spatial = ggml_add(c, spatial, ggml_ext_slice(c, w, 1, i, i + 1, false));
+                    spatial = ggml_add(c, spatial, ggml_ext_slice(ctx, w, 1, i, i + 1, false));
                 w = ggml_cast(c, ggml_reshape_4d(c, spatial, kw, kh, 1, in_channels * out_channels), GGML_TYPE_F16);
                 if (ctx->conv2d_direct_enabled) {
                     w = ggml_reshape_4d(c, w, kw, kh, in_channels, out_channels);
-                    x = ggml_reshape_4d(c, ggml_ext_cont(c, x), x->ne[0], x->ne[1], in_channels, 1);
-                    x = ggml_ext_conv_2d(c, x, w, bias ? params["bias"] : nullptr,
+                    x = ggml_reshape_4d(c, ggml_ext_cont(ctx, x), x->ne[0], x->ne[1], in_channels, 1);
+                    x = ggml_ext_conv_2d(ctx, x, w, bias ? params["bias"] : nullptr,
                                          std::get<2>(stride), std::get<1>(stride),
                                          std::get<2>(padding), std::get<1>(padding),
                                          std::get<2>(dilation), std::get<1>(dilation), true);
                     return ggml_reshape_4d(c, x, x->ne[0], x->ne[1], 1, out_channels);
                 }
-                return ggml_ext_conv_3d(c, ctx->backend, x, w, bias ? params["bias"] : nullptr, in_channels,
+                return ggml_ext_conv_3d(ctx, x, w, bias ? params["bias"] : nullptr, in_channels,
                                         std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                         std::get<2>(padding), std::get<1>(padding), 0,
                                         std::get<2>(dilation), std::get<1>(dilation), 1, force_prec_f32, true);
@@ -66,8 +66,8 @@ namespace SeedVR2 {
             if (temporal_padding_) {
                 const int64_t w = x->ne[0], h = x->ne[1], t = x->ne[2], ch = x->ne[3];
                 // Merge spatial axes so concat does not launch separately for every channel.
-                x          = ggml_reshape_3d(c, ggml_ext_cont(c, x), w * h, t, ch);
-                auto head  = ggml_ext_slice(c, x, 1, 0, 1);
+                x          = ggml_reshape_3d(c, ggml_ext_cont(ctx, x), w * h, t, ch);
+                auto head  = ggml_ext_slice(ctx, x, 1, 0, 1);
                 auto shape = ggml_new_tensor_3d(c, x->type, w * h, temporal_padding_, ch);
                 x          = ggml_concat(c, ggml_repeat(c, head, shape), x, 1);
                 x          = ggml_reshape_4d(c, x, w, h, t + temporal_padding_, ch);
@@ -92,16 +92,16 @@ namespace SeedVR2 {
                 ~RestorePadding() { target = value; }
             } restore{padding, padding};
             padding     = {0, 0, pw};
-            auto output = ggml_ext_zeros(c, ow, oh, ot, out_channels);
+            auto output = ggml_ext_zeros(ctx, ow, oh, ot, out_channels);
             for (int64_t t = 0; t < ot; ++t) {
-                auto frame = ggml_ext_slice(c, x, 2, t * st, t * st + kt, false);
+                auto frame = ggml_ext_slice(ctx, x, 2, t * st, t * st + kt, false);
                 for (int64_t y = 0; y < oh; y += rows) {
                     const int64_t end = std::min(oh, y + rows);
                     const int64_t top = y * sh - ph, bottom = (end - 1) * sh - ph + kh;
-                    auto strip = ggml_ext_slice(c, frame, 1, std::max<int64_t>(0, top), std::min(x->ne[1], bottom), false);
-                    strip      = ggml_ext_pad_ext(c, ctx->backend, strip, 0, 0, int(std::max<int64_t>(0, -top)),
+                    auto strip = ggml_ext_slice(ctx, frame, 1, std::max<int64_t>(0, top), std::min(x->ne[1], bottom), false);
+                    strip      = ggml_ext_pad_ext(ctx, strip, 0, 0, int(std::max<int64_t>(0, -top)),
                                                   int(std::max<int64_t>(0, bottom - x->ne[1])), 0, 0, 0, 0);
-                    strip      = ggml_ext_cont(c, strip);
+                    strip      = ggml_ext_cont(ctx, strip);
                     strip      = Conv3d::forward(ctx, strip);
                     output     = ggml_set_inplace(c, output, strip, output->nb[1], output->nb[2], output->nb[3], y * output->nb[1] + t * output->nb[2]);
                 }
@@ -153,7 +153,7 @@ namespace SeedVR2 {
             h           = ggml_reshape_3d(c, h, width * height, frames, channels);
             h           = ggml_cont(c, ggml_permute(c, h, 1, 2, 0, 3));
             auto linear = [&](const char* name, ggml_tensor* value) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, value); };
-            h           = ggml_ext_attention_ext(c, ctx->backend, linear("to_q", h), linear("to_k", h), linear("to_v", h), 1, nullptr, false, ctx->flash_attn_enabled);
+            h           = ggml_ext_attention_ext(ctx, linear("to_q", h), linear("to_k", h), linear("to_v", h), 1, nullptr, false, ctx->flash_attn_enabled);
             h           = linear("to_out.0", h);
             h           = ggml_cont(c, ggml_permute(c, h, 2, 0, 1, 3));
             return ggml_add(c, x, ggml_reshape_4d(c, h, width, height, frames, channels));
@@ -184,8 +184,8 @@ namespace SeedVR2 {
             x = ggml_cont(c, ggml_permute(c, x, 0, 2, 3, 1));
             x = ggml_reshape_4d(c, x, w * 2, h * 2, t * temporal_, ch);
             if (temporal_ == 2) {
-                auto first = ggml_ext_slice(c, x, 2, 0, 1);
-                x          = t == 1 ? first : ggml_concat(c, first, ggml_ext_slice(c, x, 2, 2, t * 2), 2);
+                auto first = ggml_ext_slice(ctx, x, 2, 0, 1);
+                x          = t == 1 ? first : ggml_concat(c, first, ggml_ext_slice(ctx, x, 2, 2, t * 2), 2);
             }
             return std::dynamic_pointer_cast<UnaryBlock>(blocks["conv"])->forward(ctx, x);
         }
@@ -255,7 +255,7 @@ namespace SeedVR2 {
                 mid();
             x = ggml_silu(c, causal_norm(ctx, x, blocks[root + "conv_norm_out"]));
             apply("conv_out");
-            return decode ? x : ggml_ext_slice(c, x, 3, 0, 16);
+            return decode ? x : ggml_ext_slice(ctx, x, 3, 0, 16);
         }
     };
 

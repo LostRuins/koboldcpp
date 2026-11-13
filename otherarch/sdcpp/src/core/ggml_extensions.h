@@ -9,18 +9,24 @@ void sd_ggml_register_extensions(ggml_backend_t backend);
 #include "ggml-ext.h"
 
 ggml_ext_op_t sd_ggml_modulate_op();
+
 bool sd_ggml_modulate_describe(const ggml_tensor* node);
+
 size_t sd_ggml_modulate_workspace_size(const ggml_tensor* node);
 
 ggml_ext_op_t sd_ggml_rope_op();
+
 bool sd_ggml_rope_describe(const ggml_tensor* node);
-// Apply precomputed rotary matrices, with shapes in ne[] order:
-// a: F32 [head_dim, heads, tokens, batch], pe: F32 [2, 2, rot_dim/2, tokens].
-// pe stores [[cos, -sin], [sin, cos]] for each pair and token, shared across heads/batches.
-// Returns contiguous F32 [head_dim, tokens, heads*batch]. Input strides are preserved.
-// Interleaved pairs are (2*i, 2*i+1); otherwise pairs are (i, i+rot_dim/2).
-// Channels from rot_dim to head_dim are copied unchanged.
-ggml_tensor* sd_ggml_rope_apply(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* x, ggml_tensor* pe, bool interleaved);
+
+struct SDI8Attributes {
+    int64_t shape[3];
+    int32_t group_size;
+    int32_t flags;
+};
+enum SDI8Flags { SD_I8_PACKED       = 1,
+                 SD_I8_INPUT_SCALE  = 2,
+                 SD_I8_WEIGHT_SCALE = 4,
+                 SD_I8_BIAS         = 8 };
 
 struct SDI8Operation {
     const ggml_tensor* weight;
@@ -32,15 +38,24 @@ struct SDI8Operation {
     bool packed;
 };
 
+bool sd_ggml_valid_convrot_group(int group);
+
 ggml_ext_op_t sd_ggml_i8_op();
+
 ggml_ext_op_t sd_ggml_convrot_op();
+
 bool sd_ggml_i8_describe(const ggml_tensor* node, SDI8Operation* operation);
+
 bool sd_ggml_convrot_describe(const ggml_tensor* node, int* group_size);
-ggml_tensor* ggml_mul_mat_i8_tensorwise(ggml_context* ctx, ggml_tensor* weight, ggml_tensor* input, ggml_tensor* weight_scale, ggml_tensor* bias, int group_size, ggml_tensor* input_scale = nullptr);
-ggml_tensor* ggml_quantize_i8_convrot(ggml_context* ctx, ggml_tensor* input, int group_size);
 
 enum class SDW4Kind : int32_t { W4A4 = 1,
                                 W4A8 = 2 };
+
+struct SDW4Attributes {
+    int64_t shape[3];
+    SDW4Kind kind;
+    int32_t has_bias;
+};
 
 struct SDW4Operation {
     const ggml_tensor* weight;
@@ -53,10 +68,8 @@ struct SDW4Operation {
 };
 
 ggml_ext_op_t sd_ggml_w4_op();
+
 bool sd_ggml_w4_describe(const ggml_tensor* node, SDW4Operation* operation);
-// Packed I8 [K/2, N], low nibble first. W4A8 uses a 16-entry F32 codebook
-// and F8_E4M3 [K/16, N] relative scales. F32 inputs get an explicit quantize node.
-ggml_tensor* ggml_mul_mat_w4_convrot(ggml_context* ctx, ggml_tensor* weight, ggml_tensor* input, ggml_tensor* weight_scale, ggml_tensor* s_channel, ggml_tensor* s_rel, ggml_tensor* bias, SDW4Kind kind, int group_size);
 
 enum ggml_sage_attn_mode {
     GGML_SAGE_ATTN_AUTO = 0,
@@ -70,10 +83,8 @@ struct SDSageAttentionParams {
 };
 
 ggml_ext_op_t sd_ggml_sage_attn_op();
+
 bool sd_ggml_sage_attn_describe(const ggml_tensor* node, SDSageAttentionParams* params);
-// Q/K: contiguous F32 [D, tokens, heads, batch], V: contiguous F16 in the same layout.
-// Output: F32 [D, query heads, query tokens, batch]. CUDA-only, unmasked inference.
-ggml_tensor* ggml_sage_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, float scale, ggml_sage_attn_mode mode);
 
 struct SDSolAttentionParams {
     float scale;
@@ -86,16 +97,19 @@ struct SDWindowAttentionParams {
     int32_t preserve_boundary;
 };
 
+bool sd_ggml_window_attn_infer(ggml_tensor* const* inputs,
+                               int count,
+                               const void* attributes,
+                               ggml_ext_tensor_desc* out);
+
 ggml_ext_op_t sd_ggml_window_attn_op();
+
 bool sd_ggml_window_attn_describe(const ggml_tensor* node, SDWindowAttentionParams* params);
-// Contiguous F32 Q [D*heads, W*H], K/V [D*kv_heads, W*H*planes].
-// Returns Q's layout, or nullptr when the backend has no compatible kernel.
-ggml_tensor* sd_ggml_window_attn(ggml_context* ctx, ggml_backend_t backend, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, const SDWindowAttentionParams& params);
 
 ggml_ext_op_t sd_ggml_sol_attn_op();
+
 bool sd_ggml_sol_attn_describe(const ggml_tensor* node, SDSolAttentionParams* params);
-// Noncausal Sol-Attn: contiguous F32 Q/K/V [128, tokens, heads, batch], output [128, heads, tokens, batch].
-ggml_tensor* ggml_sol_attn(ggml_context* ctx, ggml_tensor* q, ggml_tensor* k, ggml_tensor* v, float scale, float tau);
+
 #endif
 
 #endif

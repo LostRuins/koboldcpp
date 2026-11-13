@@ -116,14 +116,14 @@ inline sd::Tensor<float> process_vae_temporal_tiles(const sd::Tensor<float>& inp
     return output;
 }
 
-template <typename Fn>
+template <typename FrameCount, typename FrameOffset, typename Fn>
 inline sd::Tensor<float> process_vae_temporal_tiles_blended(const sd::Tensor<float>& input,
                                                             const VAETemporalTilePlan& plan,
-                                                            int output_scale,
+                                                            FrameCount frame_count,
+                                                            FrameOffset frame_offset,
                                                             Fn&& on_processing) {
-    GGML_ASSERT(output_scale >= 1);
-    const int64_t output_frames = 1 + (input.shape()[2] - 1) * output_scale;
-    const int overlap_frames    = plan.overlap > 0 ? 1 + (plan.overlap - 1) * output_scale : 0;
+    const int64_t output_frames  = frame_count(input.shape()[2]);
+    const int64_t overlap_frames = frame_count(plan.overlap);
     std::vector<float> weights(static_cast<size_t>(output_frames), 0.f);
     sd::Tensor<float> output;
 
@@ -138,7 +138,7 @@ inline sd::Tensor<float> process_vae_temporal_tiles_blended(const sd::Tensor<flo
             return {};
         }
 
-        const int64_t expected_tile_frames = 1 + (input_tile.shape()[2] - 1) * output_scale;
+        const int64_t expected_tile_frames = frame_count(input_tile.shape()[2]);
         if (output_tile.dim() < 3 || output_tile.shape()[2] != expected_tile_frames) {
             LOG_ERROR("unexpected temporal tile output shape: expected %lld frames, got %lld",
                       (long long)expected_tile_frames,
@@ -165,7 +165,7 @@ inline sd::Tensor<float> process_vae_temporal_tiles_blended(const sd::Tensor<flo
             }
         }
 
-        const int64_t output_start = tile.start * output_scale;
+        const int64_t output_start = frame_offset(tile.start);
         const int64_t inner        = output.shape()[0] * output.shape()[1];
         const int64_t outer        = output.numel() / (inner * output.shape()[2]);
         const int64_t tile_frames  = output_tile.shape()[2];
@@ -212,6 +212,17 @@ inline sd::Tensor<float> process_vae_temporal_tiles_blended(const sd::Tensor<flo
         }
     }
     return output;
+}
+
+template <typename Fn>
+inline sd::Tensor<float> process_vae_temporal_tiles_blended(const sd::Tensor<float>& input,
+                                                            const VAETemporalTilePlan& plan,
+                                                            int output_scale,
+                                                            Fn&& on_processing) {
+    GGML_ASSERT(output_scale >= 1);
+    auto frame_count  = [&](int64_t frames) { return frames > 0 ? 1 + (frames - 1) * output_scale : 0; };
+    auto frame_offset = [&](int64_t start) { return start * output_scale; };
+    return process_vae_temporal_tiles_blended(input, plan, frame_count, frame_offset, std::forward<Fn>(on_processing));
 }
 
 #endif  // __SD_MODEL_VAE_VAE_TILING_HPP__

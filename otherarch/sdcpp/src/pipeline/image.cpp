@@ -9,10 +9,10 @@
 #include "core/rng.hpp"
 #include "diffusion_engine.h"
 #include "model/vae/vae.hpp"
+#include "pipeline/image_upscale.h"
 #include "request.h"
 #include "runtime/denoiser.hpp"
 #include "runtime/image_preprocess.h"
-#include "upscaler.h"
 
 namespace sd::pipeline {
 
@@ -751,7 +751,7 @@ namespace sd::pipeline {
     static sd::Tensor<float> upscale_hires_latent(StableDiffusionGGML* sd,
                                                   const sd::Tensor<float>& latent,
                                                   const GenerationRequest& request,
-                                                  UpscalerGGML* upscaler) {
+                                                  ImageUpscaleModel* upscaler) {
         if (sd->get_cancel_flag() == SD_CANCEL_ALL) {
             LOG_ERROR("cancelling hires latent upscale");
             return {};
@@ -837,7 +837,7 @@ namespace sd::pipeline {
             sd->generation_progress.report("upscaling", "hires");
             sd::Tensor<float> upscaled_tensor;
             if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
-                upscaled_tensor = upscaler->upscale_tensor(decoded);
+                upscaled_tensor = upscale_image_tensor(*upscaler, decoded, sd->n_threads, request.hires.upscale_tile_size);
                 if (upscaled_tensor.empty()) {
                     LOG_ERROR("hires model upscale failed");
                     return {};
@@ -1034,22 +1034,18 @@ namespace sd::pipeline {
             LOG_INFO("hires fix: upscaling to %dx%d", request.hires.target_width, request.hires.target_height);
 
             sd->generation_progress.report("upscaling", "hires");
-            std::unique_ptr<UpscalerGGML> hires_upscaler;
+            std::unique_ptr<ImageUpscaleModel> hires_upscaler;
             if (request.hires.upscaler == SD_HIRES_UPSCALER_MODEL) {
                 if (sd->get_cancel_flag() == SD_CANCEL_ALL) {
                     LOG_ERROR("cancelling generation before hires model load");
                     return false;
                 }
                 LOG_INFO("hires fix: loading model upscaler from '%s'", request.hires.model_path);
-                hires_upscaler                    = std::make_unique<UpscalerGGML>(sd->n_threads,
-                                                                                   false,
-                                                                                   request.hires.upscale_tile_size,
-                                                                                   sd->backend_spec,
-                                                                                   sd->params_backend_spec);
-                const size_t max_graph_vram_bytes = sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER);
-                hires_upscaler->set_max_graph_vram_bytes(max_graph_vram_bytes);
-                if (!hires_upscaler->load_from_file(request.hires.model_path,
-                                                    sd->n_threads)) {
+                hires_upscaler = load_image_upscale_model(sd->model_manager,
+                                                          sd->backend_manager,
+                                                          request.hires.model_path,
+                                                          sd->max_graph_vram_bytes_for_module(SDBackendModule::UPSCALER));
+                if (hires_upscaler == nullptr) {
                     LOG_ERROR("load hires model upscaler failed");
                     return false;
                 }

@@ -123,7 +123,7 @@ namespace Anima {
                 emb = ggml_add(ctx->ggml_ctx, emb, temb);
             }
 
-            auto emb_chunks = ggml_ext_chunk(ctx->ggml_ctx, emb, 3, 0);
+            auto emb_chunks = ggml_ext_chunk(ctx, emb, 3, 0);
             auto shift      = emb_chunks[0];
             auto scale      = emb_chunks[1];
             auto gate       = emb_chunks[2];
@@ -164,7 +164,7 @@ namespace Anima {
                 emb          = ggml_add(ctx->ggml_ctx, emb, temb_2c);
             }
 
-            auto emb_chunks = ggml_ext_chunk(ctx->ggml_ctx, emb, 2, 0);
+            auto emb_chunks = ggml_ext_chunk(ctx, emb, 2, 0);
             auto shift      = emb_chunks[0];
             auto scale      = emb_chunks[1];
 
@@ -275,7 +275,7 @@ namespace Anima {
             auto layer2 = std::dynamic_pointer_cast<Linear>(blocks["layer2"]);
 
             x = layer1->forward(ctx, x);
-            x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
+            x = ggml_ext_gelu(ctx, x, true);
             x = layer2->forward(ctx, x);
             return x;
         }
@@ -293,7 +293,7 @@ namespace Anima {
             auto layer2 = std::dynamic_pointer_cast<Linear>(blocks["2"]);
 
             x = layer0->forward(ctx, x);
-            x = ggml_ext_gelu(ctx->ggml_ctx, x, true);
+            x = ggml_ext_gelu(ctx, x, true);
             x = layer2->forward(ctx, x);
             return x;
         }
@@ -500,14 +500,14 @@ namespace Anima {
             int64_t W = x->ne[0];
             int64_t H = x->ne[1];
 
-            auto padding_mask = ggml_ext_zeros(ctx->ggml_ctx, x->ne[0], x->ne[1], 1, x->ne[3]);
+            auto padding_mask = ggml_ext_zeros(ctx, x->ne[0], x->ne[1], 1, x->ne[3]);
             x                 = ggml_concat(ctx->ggml_ctx, x, padding_mask, 2);  // [N, C + 1, H, W]
 
             x               = DiT::pad_and_patchify(ctx, x, config.patch_size, config.patch_size);  // [N, h*w, (C+1)*ph*pw]
             int64_t img_len = x->ne[1];
             if (ref_latents.size() > 0) {
                 for (ggml_tensor* ref : ref_latents) {
-                    auto padding_mask = ggml_ext_zeros(ctx->ggml_ctx, ref->ne[0], ref->ne[1], 1, ref->ne[3]);
+                    auto padding_mask = ggml_ext_zeros(ctx, ref->ne[0], ref->ne[1], 1, ref->ne[3]);
                     ref               = ggml_concat(ctx->ggml_ctx, ref, padding_mask, 2);  // [N, C + 1, H, W]
                     ref               = DiT::pad_and_patchify(ctx, ref, config.patch_size, config.patch_size);
                     x                 = ggml_concat(ctx->ggml_ctx, x, ref, 1);
@@ -515,7 +515,7 @@ namespace Anima {
             }
             x = x_embedder->forward(ctx, x);
 
-            auto timestep_proj     = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(config.hidden_size));
+            auto timestep_proj     = ggml_ext_timestep_embedding(ctx, timestep, static_cast<int>(config.hidden_size));
             auto temb              = t_embedder->forward(ctx, timestep_proj);
             auto embedded_timestep = t_embedding_norm->forward(ctx, timestep_proj);
 
@@ -530,14 +530,14 @@ namespace Anima {
                     adapted_context = ggml_mul(ctx->ggml_ctx, adapted_context, w);
                 }
                 if (adapted_context->ne[1] < 512) {
-                    auto pad_ctx    = ggml_ext_zeros(ctx->ggml_ctx,
+                    auto pad_ctx    = ggml_ext_zeros(ctx,
                                                      adapted_context->ne[0],
                                                      512 - adapted_context->ne[1],
                                                      adapted_context->ne[2],
                                                      1);
                     adapted_context = ggml_concat(ctx->ggml_ctx, adapted_context, pad_ctx, 1);
                 } else if (adapted_context->ne[1] > 512) {
-                    adapted_context = ggml_ext_slice(ctx->ggml_ctx, adapted_context, 1, 0, 512);
+                    adapted_context = ggml_ext_slice(ctx, adapted_context, 1, 0, 512);
                 }
                 encoder_hidden_states = adapted_context;
             }
@@ -552,11 +552,11 @@ namespace Anima {
                 x          = block->forward(ctx, x, encoder_hidden_states, embedded_timestep, temb, image_pe);
                 sd::ggml_graph_cut::mark_graph_cut(x, "anima.blocks." + std::to_string(i), "x");
             }
-            x = ggml_ext_slice(ctx->ggml_ctx, x, 1, 0, img_len);
+            x = ggml_ext_slice(ctx, x, 1, 0, img_len);
 
             x = final_layer->forward(ctx, x, embedded_timestep, temb);  // [N, h*w, ph*pw*C]
 
-            x = DiT::unpatchify_and_crop(ctx->ggml_ctx, x, H, W, config.patch_size, config.patch_size, false);  // [N, C, H, W]
+            x = DiT::unpatchify_and_crop(ctx, x, H, W, config.patch_size, config.patch_size, false);  // [N, C, H, W]
 
             return x;
         }

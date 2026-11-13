@@ -95,7 +95,7 @@ namespace Flux3 {
             auto k           = norm->key_norm(ctx, split(linear(ctx, "k_proj", x_mod)));
             auto v           = split(linear(ctx, "v_proj", x_mod));
             auto attn        = Rope::attention(ctx, q, k, v, pe, nullptr);
-            auto mlp         = ggml_ext_silu_act(gc, linear(ctx, "mlp_in", x_mod));
+            auto mlp         = ggml_ext_silu_act(ctx, linear(ctx, "mlp_in", x_mod));
             auto update      = ggml_add(gc, linear(ctx, "attn_out", attn), linear(ctx, "mlp_out", mlp));
             ggml_tensor* out = nullptr;
             offset           = 0;
@@ -140,16 +140,16 @@ namespace Flux3 {
             auto gc             = ctx->ggml_ctx;
             const int64_t width = image->ne[0], height = image->ne[1];
             auto time_in   = std::dynamic_pointer_cast<Flux::MLPEmbedder>(blocks["time_in"]);
-            auto image_vec = time_in->forward(ctx, ggml_ext_timestep_embedding(gc, timestep, 256, 10000, 1000.f));
-            auto clean_vec = time_in->forward(ctx, ggml_ext_timestep_embedding(gc, zero, 256, 10000, 1000.f));
+            auto image_vec = time_in->forward(ctx, ggml_ext_timestep_embedding(ctx, timestep, 256, 10000, 1000.f));
+            auto clean_vec = time_in->forward(ctx, ggml_ext_timestep_embedding(ctx, zero, 256, 10000, 1000.f));
             if (config.flow_map) {
                 auto ref_time = std::dynamic_pointer_cast<Flux::MLPEmbedder>(blocks["ref_time_in"]);
-                auto ref_vec  = ref_time->forward(ctx, ggml_ext_timestep_embedding(gc, target, 256, 10000, 1000.f));
+                auto ref_vec  = ref_time->forward(ctx, ggml_ext_timestep_embedding(ctx, target, 256, 10000, 1000.f));
                 image_vec     = ggml_add(gc, image_vec, ref_vec);
                 clean_vec     = ggml_add(gc, clean_vec, ref_vec);
             }
             std::vector<std::string> modes{"image"};
-            std::vector<ggml_tensor*> inputs{DiT::patchify(gc, image, 1, 1)};
+            std::vector<ggml_tensor*> inputs{DiT::patchify(ctx, image, 1, 1)};
             if (reference) {
                 modes.push_back("image_cond");
                 inputs.push_back(reference);
@@ -184,7 +184,7 @@ namespace Flux3 {
                 sd::ggml_graph_cut::mark_graph_cut(joint, "flux3.single_blocks." + std::to_string(i), "joint");
             }
             auto out = std::dynamic_pointer_cast<Flux::LastLayer>(blocks["final_layer.image"])->forward(ctx, token_slice(gc, joint, 0, lengths[0]), image_vec);
-            return DiT::unpatchify(gc, out, height, width, 1, 1);
+            return DiT::unpatchify(ctx, out, height, width, 1, 1);
         }
     };
 
@@ -215,9 +215,10 @@ namespace Flux3 {
             GGML_ASSERT(params.x && params.context && params.timesteps);
             GGML_ASSERT(!config.flow_map || extra->target_timestep);
             auto get_graph = [&]() {
-                auto gf   = new_graph_custom(FLUX_GRAPH_SIZE);
-                auto x    = make_input(*params.x);
-                auto text = make_input(*params.context);
+                auto gf         = new_graph_custom(FLUX_GRAPH_SIZE);
+                auto runner_ctx = get_context();
+                auto x          = make_input(*params.x);
+                auto text       = make_input(*params.context);
                 GGML_ASSERT(x->ne[3] == 1 && text->ne[2] == 1);
                 std::vector<ggml_tensor*> refs;
                 ggml_tensor* references = nullptr;
@@ -225,13 +226,13 @@ namespace Flux3 {
                     for (const auto& ref : *params.ref_latents) {
                         auto r = make_input(ref);
                         refs.push_back(r);
-                        r          = DiT::patchify(compute_ctx, r, 1, 1);
+                        r          = DiT::patchify(&runner_ctx, r, 1, 1);
                         references = references ? ggml_concat(compute_ctx, references, r, 1) : r;
                     }
                 }
                 sd::PECacheKey pe_key("flux3.pe");
                 pe_key.add_shape(x).add_shape(text).add_shapes(refs).add(circular_x_enabled).add(circular_y_enabled);
-                auto pe         = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe  = make_input(pe_cache_.get_or_create(pe_key, [&]() {
                     Rope::Embedding embedding;
                     auto append_image = [&](int64_t w, int64_t h, float index) {
                         embedding.positions.append_image(static_cast<int>(h), static_cast<int>(w), 1, 0.5f, 0.5f);
@@ -254,9 +255,8 @@ namespace Flux3 {
                     const int64_t tokens = static_cast<int64_t>(values.size() / 256);
                     return sd::Tensor<float>({2, 2, 64, tokens}, std::move(values));
                 }));
-                auto runner_ctx = get_context();
-                auto out        = model.forward(&runner_ctx, x, text, references, make_input(*params.timesteps), make_input(zero),
-                                                config.flow_map ? make_input(*extra->target_timestep) : nullptr, pe);
+                auto out = model.forward(&runner_ctx, x, text, references, make_input(*params.timesteps), make_input(zero),
+                                         config.flow_map ? make_input(*extra->target_timestep) : nullptr, pe);
                 ggml_build_forward_expand(gf, out);
                 return gf;
             };

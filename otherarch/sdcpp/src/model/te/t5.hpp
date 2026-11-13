@@ -249,7 +249,7 @@ public:
             }
         }
 
-        k = ggml_ext_scale(ctx->ggml_ctx, k, ::sqrtf(static_cast<float>(d_head)), true);
+        k = ggml_ext_scale(ctx, k, ::sqrtf(static_cast<float>(d_head)), true);
 
         x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, mask);  // [N, n_token, d_head * n_head]
 

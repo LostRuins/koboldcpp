@@ -257,14 +257,18 @@ namespace MiniT2I {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* t) {
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
-            auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size, 10000, 1.0f);
+            auto t_emb = ggml_ext_timestep_embedding(ctx, t, frequency_embedding_size, 10000, 1.0f);
             t_emb      = mlp_0->forward(ctx, t_emb);
             t_emb      = ggml_silu_inplace(ctx->ggml_ctx, t_emb);
             return mlp_2->forward(ctx, t_emb);
         }
     };
 
-    inline std::vector<ggml_tensor*> split_qkv(ggml_context* ctx, ggml_tensor* qkv, int64_t num_heads, int64_t head_dim) {
+    inline std::vector<ggml_tensor*> split_qkv(GGMLRunnerContext* runner_ctx,
+                                               ggml_tensor* qkv,
+                                               int64_t num_heads,
+                                               int64_t head_dim) {
+        auto ctx  = runner_ctx->ggml_ctx;
         int64_t N = qkv->ne[2];
         int64_t L = qkv->ne[1];
         auto q    = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
@@ -301,7 +305,7 @@ namespace MiniT2I {
             auto q_norm    = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
             auto k_norm    = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
 
-            auto qkv = split_qkv(ctx->ggml_ctx, qkv_proj->forward(ctx, norm1->forward(ctx, txt)), num_heads, head_dim);
+            auto qkv = split_qkv(ctx, qkv_proj->forward(ctx, norm1->forward(ctx, txt)), num_heads, head_dim);
             auto q   = q_norm->forward(ctx, qkv[0]);
             auto k   = k_norm->forward(ctx, qkv[1]);
             auto v   = qkv[2];
@@ -353,16 +357,16 @@ namespace MiniT2I {
             int64_t li = img->ne[1];
             int64_t lt = txt->ne[1];
 
-            auto img_qkv = split_qkv(ctx->ggml_ctx, img_qkv_p->forward(ctx, img_norm1->forward(ctx, img)), num_heads, head_dim);
-            auto txt_qkv = split_qkv(ctx->ggml_ctx, txt_qkv_p->forward(ctx, txt_norm1->forward(ctx, txt)), num_heads, head_dim);
+            auto img_qkv = split_qkv(ctx, img_qkv_p->forward(ctx, img_norm1->forward(ctx, img)), num_heads, head_dim);
+            auto txt_qkv = split_qkv(ctx, txt_qkv_p->forward(ctx, txt_norm1->forward(ctx, txt)), num_heads, head_dim);
 
             auto q = ggml_concat(ctx->ggml_ctx, q_norm->forward(ctx, txt_qkv[0]), q_norm->forward(ctx, img_qkv[0]), 2);
             auto k = ggml_concat(ctx->ggml_ctx, k_norm->forward(ctx, txt_qkv[1]), k_norm->forward(ctx, img_qkv[1]), 2);
             auto v = ggml_concat(ctx->ggml_ctx, txt_qkv[2], img_qkv[2], 2);
 
             auto out     = Rope::attention(ctx, q, k, v, pe, nullptr, 1.0f, false);
-            auto out_txt = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, lt);
-            auto out_img = ggml_ext_slice(ctx->ggml_ctx, out, 1, lt, lt + li);
+            auto out_txt = ggml_ext_slice(ctx, out, 1, 0, lt);
+            auto out_img = ggml_ext_slice(ctx, out, 1, lt, lt + li);
 
             img = ggml_add(ctx->ggml_ctx, img, img_proj->forward(ctx, out_img));
             txt = ggml_add(ctx->ggml_ctx, txt, txt_proj->forward(ctx, out_txt));
@@ -416,7 +420,7 @@ namespace MiniT2I {
             mask            = ggml_reshape_3d(ctx->ggml_ctx, mask, 1, mask->ne[0], mask->ne[1]);
             mask            = ggml_repeat(ctx->ggml_ctx, mask, context);
             auto keep       = ggml_mul(ctx->ggml_ctx, context, mask);
-            auto inv        = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx->ggml_ctx, mask), mask);
+            auto inv        = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx, mask), mask);
             auto mask_token = ggml_repeat(ctx->ggml_ctx, params["mask_token"], context);
             return ggml_add(ctx->ggml_ctx, keep, ggml_mul(ctx->ggml_ctx, mask_token, inv));
         }
@@ -468,8 +472,8 @@ namespace MiniT2I {
             }
             auto combined = ggml_concat(ctx->ggml_ctx, txt, x, 1);
             auto out      = final_layer->forward(ctx, combined);
-            auto img_out  = ggml_ext_slice(ctx->ggml_ctx, out, 1, txt->ne[1], txt->ne[1] + x->ne[1]);
-            return DiT::unpatchify(ctx->ggml_ctx, img_out, hp, wp, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size), false);
+            auto img_out  = ggml_ext_slice(ctx, out, 1, txt->ne[1], txt->ne[1] + x->ne[1]);
+            return DiT::unpatchify(ctx, img_out, hp, wp, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size), false);
         }
     };
 

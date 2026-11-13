@@ -333,7 +333,7 @@ namespace LTXV {
 
         auto x = ggml_reshape_3d(ctx, waveform, time, 1, channels * batch);
         if (left_pad > 0) {
-            x = ggml_ext_pad_ext(ctx, runner_ctx->backend, x, static_cast<int>(left_pad), 0, 0, 0, 0, 0, 0, 0);
+            x = ggml_ext_pad_ext(runner_ctx, x, static_cast<int>(left_pad), 0, 0, 0, 0, 0, 0, 0);
         }
 
         auto frames = ggml_conv_1d(ctx, forward_basis, x, hop_length, 0, 1);
@@ -341,8 +341,8 @@ namespace LTXV {
         GGML_ASSERT(frames->ne[1] == stft_channels);
         GGML_ASSERT(frames->ne[2] == channels * batch);
 
-        auto real      = ggml_ext_slice(ctx, frames, 1, 0, n_freqs);
-        auto imag      = ggml_ext_slice(ctx, frames, 1, n_freqs, stft_channels);
+        auto real      = ggml_ext_slice(runner_ctx, frames, 1, 0, n_freqs);
+        auto imag      = ggml_ext_slice(runner_ctx, frames, 1, n_freqs, stft_channels);
         auto magnitude = ggml_sqrt(ctx,
                                    ggml_add(ctx,
                                             ggml_sqr(ctx, real),
@@ -378,42 +378,19 @@ namespace LTXV {
         return type == GGML_TYPE_BF16 ? GGML_TYPE_F16 : type;
     }
 
-    static ggml_tensor* repeat_with_vulkan_f32_workaround(ggml_backend_t backend,
-                                                          ggml_context* ctx,
-                                                          ggml_tensor* x,
-                                                          int64_t ne0,
-                                                          int64_t ne1,
-                                                          int64_t ne2,
-                                                          int64_t ne3) {
-        if (x->type != GGML_TYPE_F32 &&
-            (x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16) &&
-            sd_backend_is(backend, "vulkan")) {
-            auto x_f32    = ggml_cast(ctx, x, GGML_TYPE_F32);
-            auto repeated = ggml_repeat_4d(ctx,
-                                           x_f32,
-                                           ne0,
-                                           ne1,
-                                           ne2,
-                                           ne3);
-            return ggml_cast(ctx, repeated, x->type);
-        }
-        return ggml_repeat_4d(ctx, x, ne0, ne1, ne2, ne3);
-    }
-
     static ggml_tensor* repeat_1d_value(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t count) {
-        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[0] == 1);
-        return repeat_with_vulkan_f32_workaround(runner_ctx->backend, ctx, x, count, x->ne[1], x->ne[2], x->ne[3]);
+        return ggml_ext_repeat_4d(runner_ctx, x, count, x->ne[1], x->ne[2], x->ne[3]);
     }
 
     static ggml_tensor* replicate_pad_1d(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t left, int64_t right) {
         auto ctx = runner_ctx->ggml_ctx;
         if (left > 0) {
-            auto first = ggml_ext_slice(ctx, x, 0, 0, 1);
+            auto first = ggml_ext_slice(runner_ctx, x, 0, 0, 1);
             x          = ggml_concat(ctx, repeat_1d_value(runner_ctx, first, left), x, 0);
         }
         if (right > 0) {
-            auto last = ggml_ext_slice(ctx, x, 0, x->ne[0] - 1, x->ne[0]);
+            auto last = ggml_ext_slice(runner_ctx, x, 0, x->ne[0] - 1, x->ne[0]);
             x         = ggml_concat(ctx, x, repeat_1d_value(runner_ctx, last, right), 0);
         }
         return x;
@@ -427,7 +404,7 @@ namespace LTXV {
         } else if (ggml_n_dims(base) == 1) {
             base = ggml_reshape_4d(ctx, base, base->ne[0], 1, 1, 1);
         }
-        return repeat_with_vulkan_f32_workaround(runner_ctx->backend, ctx, base, base->ne[0], 1, channels, 1);
+        return ggml_ext_repeat_4d(runner_ctx, base, base->ne[0], 1, channels, 1);
     }
 
     static ggml_tensor* depthwise_conv1d(GGMLRunnerContext* runner_ctx,
@@ -442,7 +419,8 @@ namespace LTXV {
         return ggml_reshape_4d(ctx, out, out->ne[0], out->ne[1], 1, 1);
     }
 
-    static ggml_tensor* reverse_1d_filter(ggml_context* ctx, ggml_tensor* filter) {
+    static ggml_tensor* reverse_1d_filter(GGMLRunnerContext* runner_ctx, ggml_tensor* filter) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(ctx != nullptr);
         GGML_ASSERT(filter != nullptr);
         GGML_ASSERT(filter->ne[1] == 1);
@@ -451,16 +429,17 @@ namespace LTXV {
 
         ggml_tensor* reversed = nullptr;
         for (int64_t k = filter->ne[0] - 1; k >= 0; --k) {
-            auto slice = ggml_ext_slice(ctx, filter, 0, k, k + 1);
+            auto slice = ggml_ext_slice(runner_ctx, filter, 0, k, k + 1);
             reversed   = reversed == nullptr ? slice : ggml_concat(ctx, reversed, slice, 0);
         }
         return reversed;
     }
 
-    static ggml_tensor* depthwise_conv_transpose1d(ggml_context* ctx,
+    static ggml_tensor* depthwise_conv_transpose1d(GGMLRunnerContext* runner_ctx,
                                                    ggml_tensor* x,
                                                    ggml_tensor* filter,
                                                    int stride) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(x->ne[2] == 1 && x->ne[3] == 1);
         GGML_ASSERT(filter->ne[1] == 1);
         GGML_ASSERT(filter->ne[2] == 1 && filter->ne[3] == 1);
@@ -472,7 +451,7 @@ namespace LTXV {
 
         auto x_flat = ggml_reshape_3d(ctx, x, 1, time, channels);
         if (stride > 1) {
-            auto zero_unit = ggml_ext_scale(ctx, x_flat, 0.0f);
+            auto zero_unit = ggml_ext_scale(runner_ctx, x_flat, 0.0f);
             auto zero_tail = zero_unit;
             for (int i = 1; i < stride - 1; ++i) {
                 zero_tail = ggml_concat(ctx, zero_tail, zero_unit, 0);
@@ -481,16 +460,16 @@ namespace LTXV {
         }
         x_flat = ggml_reshape_3d(ctx, x_flat, time * stride, 1, channels);
 
-        auto reversed_filter = reverse_1d_filter(ctx, filter);
+        auto reversed_filter = reverse_1d_filter(runner_ctx, filter);
         auto out             = ggml_conv_1d(ctx, reversed_filter, x_flat, 1, static_cast<int>(kernel_size - 1), 1);
         if (out->ne[0] > out_time) {
-            out = ggml_ext_slice(ctx, out, 0, 0, out_time);
+            out = ggml_ext_slice(runner_ctx, out, 0, 0, out_time);
         }
         GGML_ASSERT(out->ne[0] == out_time);
         GGML_ASSERT(out->ne[1] == 1);
         GGML_ASSERT(out->ne[2] == channels);
 
-        out = ggml_ext_scale(ctx, out, static_cast<float>(stride));
+        out = ggml_ext_scale(runner_ctx, out, static_cast<float>(stride));
         return ggml_reshape_4d(ctx, out, out_time, channels, 1, 1);
     }
 
@@ -522,21 +501,22 @@ namespace LTXV {
 
         auto x = ggml_reshape_3d(ctx, waveform, time, channels * batch, 1);
         x      = replicate_pad_1d(runner_ctx, x, pad, pad);
-        x      = depthwise_conv_transpose1d(ctx, x, filter, ratio);
-        x      = ggml_ext_slice(ctx, x, 0, pad_left, x->ne[0] - pad_right);
+        x      = depthwise_conv_transpose1d(runner_ctx, x, filter, ratio);
+        x      = ggml_ext_slice(runner_ctx, x, 0, pad_left, x->ne[0] - pad_right);
         return ggml_reshape_3d(ctx, x, x->ne[0], channels, batch);
     }
 
-    static ggml_tensor* crop_waveform_samples(ggml_context* ctx,
+    static ggml_tensor* crop_waveform_samples(GGMLRunnerContext* runner_ctx,
                                               ggml_tensor* waveform,
                                               int64_t target_samples) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(ctx != nullptr);
         GGML_ASSERT(waveform != nullptr);
         if (waveform->ne[0] == target_samples) {
             return waveform;
         }
         GGML_ASSERT(waveform->ne[0] > target_samples);
-        return ggml_ext_slice(ctx, waveform, 0, 0, target_samples);
+        return ggml_ext_slice(runner_ctx, waveform, 0, 0, target_samples);
     }
 
     struct PixelNorm2D : public UnaryBlock {
@@ -546,9 +526,9 @@ namespace LTXV {
             : eps(eps) {}
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-            auto h = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));
+            auto h = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));
             h      = ggml_rms_norm(ctx->ggml_ctx, h, eps);
-            h      = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 0, 3));
+            h      = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, h, 1, 2, 0, 3));
             return h;
         }
     };
@@ -569,8 +549,7 @@ namespace LTXV {
             auto conv = std::dynamic_pointer_cast<Conv2d>(blocks["conv"]);
             int pad_h = kernel_size.first - 1;
             int pad_w = kernel_size.second - 1;
-            x         = ggml_ext_pad_ext(ctx->ggml_ctx,
-                                         ctx->backend,
+            x         = ggml_ext_pad_ext(ctx,
                                          x,
                                          pad_w / 2,
                                          pad_w - pad_w / 2,
@@ -594,7 +573,7 @@ namespace LTXV {
             auto conv = std::dynamic_pointer_cast<HeightCausalConv2D>(blocks["conv"]);
             x         = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);
             x         = conv->forward(ctx, x);
-            return ggml_ext_slice(ctx->ggml_ctx, x, 1, 1, x->ne[1]);
+            return ggml_ext_slice(ctx, x, 1, 1, x->ne[1]);
         }
     };
 
@@ -825,7 +804,7 @@ namespace LTXV {
             GGML_ASSERT(dilation == 1);
             x = ggml_conv_transpose_1d(ctx->ggml_ctx, params["weight"], x, stride, 0, dilation);
             if (padding > 0) {
-                x = ggml_ext_slice(ctx->ggml_ctx, x, 0, padding, x->ne[0] - padding);
+                x = ggml_ext_slice(ctx, x, 0, padding, x->ne[0] - padding);
             }
             if (bias) {
                 auto b = ggml_reshape_4d(ctx->ggml_ctx, params["bias"], 1, params["bias"]->ne[0], 1, 1);
@@ -858,7 +837,7 @@ namespace LTXV {
             beta             = ggml_reshape_4d(ctx->ggml_ctx, beta, 1, beta->ne[0], 1, 1);
             auto oscillation = ggml_sin(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, x, alpha));
             oscillation      = ggml_mul(ctx->ggml_ctx, oscillation, oscillation);
-            auto eps_tensor  = ggml_ext_scale(ctx->ggml_ctx, ggml_ext_ones(ctx->ggml_ctx, 1, 1, 1, 1), eps);
+            auto eps_tensor  = ggml_ext_scale(ctx, ggml_ext_ones(ctx, 1, 1, 1, 1), eps);
             oscillation      = ggml_div(ctx->ggml_ctx, oscillation, ggml_add(ctx->ggml_ctx, beta, eps_tensor));
             return ggml_add(ctx->ggml_ctx, x, oscillation);
         }
@@ -894,8 +873,8 @@ namespace LTXV {
             int up_pad_right = up_pad * up_ratio + (up_kernel_size - up_ratio + 1) / 2;
 
             x = replicate_pad_1d(ctx, x, up_pad, up_pad);
-            x = depthwise_conv_transpose1d(ctx->ggml_ctx, x, up_filter, up_ratio);
-            x = ggml_ext_slice(ctx->ggml_ctx, x, 0, up_pad_left, x->ne[0] - up_pad_right);
+            x = depthwise_conv_transpose1d(ctx, x, up_filter, up_ratio);
+            x = ggml_ext_slice(ctx, x, 0, up_pad_left, x->ne[0] - up_pad_right);
 
             x = act->forward(ctx, x);
 
@@ -997,7 +976,7 @@ namespace LTXV {
 
         ggml_tensor* prepare_input(GGMLRunnerContext* ctx, ggml_tensor* mel) {
             mel       = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, mel, 1, 0, 2, 3));
-            auto mels = ggml_ext_chunk(ctx->ggml_ctx, mel, 2, 2);
+            auto mels = ggml_ext_chunk(ctx, mel, 2, 2);
             mel       = ggml_concat(ctx->ggml_ctx, mels[0], mels[1], 1);
             // mel = ggml_reshape_4d(ctx->ggml_ctx,
             //                       mel,
@@ -1029,7 +1008,7 @@ namespace LTXV {
                     auto block_out = resblock->forward(ctx, x);
                     sum            = sum == nullptr ? block_out : ggml_add(ctx->ggml_ctx, sum, block_out);
                 }
-                x = ggml_ext_scale(ctx->ggml_ctx, sum, 1.0f / static_cast<float>(resblock_kernel_sizes.size()));
+                x = ggml_ext_scale(ctx, sum, 1.0f / static_cast<float>(resblock_kernel_sizes.size()));
             }
 
             x = act_post->forward(ctx, x);
@@ -1095,8 +1074,8 @@ namespace LTXV {
                                          int target_freq) {
             int64_t time = std::min<int64_t>(decoded->ne[1], target_time);
             int64_t freq = std::min<int64_t>(decoded->ne[0], target_freq);
-            decoded      = ggml_ext_slice(ctx->ggml_ctx, decoded, 0, 0, freq);
-            decoded      = ggml_ext_slice(ctx->ggml_ctx, decoded, 1, 0, time);
+            decoded      = ggml_ext_slice(ctx, decoded, 0, 0, freq);
+            decoded      = ggml_ext_slice(ctx, decoded, 1, 0, time);
             return decoded;
         }
 
@@ -1217,7 +1196,7 @@ namespace LTXV {
                                        ggml_add(ctx->ggml_ctx, residual, skip),
                                        -1.0f,
                                        1.0f);
-                waveform  = crop_waveform_samples(ctx->ggml_ctx, waveform, out_time);
+                waveform  = crop_waveform_samples(ctx, waveform, out_time);
             }
 
             return waveform;
