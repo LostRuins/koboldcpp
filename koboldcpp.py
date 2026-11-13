@@ -1221,6 +1221,11 @@ def set_backend_props(inputs):
             vulkangpus = ','.join([str(g) for g in args.usevulkan])
             handle.set_environment_variable("GGML_VK_VISIBLE_DEVICES".encode("UTF-8"),vulkangpus.encode("UTF-8"))
 
+    # Test high-priority Vulkan allocations on all supported devices. This is
+    # consumed when the Vulkan device is initialized during model loading.
+    if args.usevulkan is not None:
+        handle.set_environment_variable(b"GGML_VK_ENABLE_MEMORY_PRIORITY", b"1")
+
     # set universal flags
     inputs.devices_override = (args.device if args.device else "").encode("UTF-8")
     inputs.quiet = args.quiet
