@@ -621,7 +621,9 @@ static size_t estimate_draft_autofit_tax_mb(
         draft_model_params.tensor_split = draft_gpusplit;
     }
 
-    const char * estimate_model_path = has_draft_model ? spec_model_filename.c_str() : main_model_filename.c_str();
+    const std::vector<std::string> estimate_model_paths = {
+        has_draft_model ? spec_model_filename : main_model_filename
+    };
     bool measure_model_bytes = true;
     common_speculative_type draft_spec_type_estimate = !has_draft_model && use_mtp ? COMMON_SPECULATIVE_TYPE_DRAFT_MTP : COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE;
 
@@ -711,7 +713,7 @@ static size_t estimate_draft_autofit_tax_mb(
     try
     {
         dmd = common_get_device_memory_data(
-            estimate_model_path,
+            estimate_model_paths,
             &draft_model_params,
             &draft_ctx_params,
             devs,
@@ -3768,7 +3770,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 common_log_set_verbosity_thold(GGML_LOG_LEVEL_NONE);
             }
             fit_params_target[0] = taxmb*1024*1024;
-            bool success = (common_fit_params(kcpp_data->model_filename.c_str(), &model_params, &llama_ctx_params,
+            bool success = (common_fit_params({kcpp_data->model_filename}, &model_params, &llama_ctx_params,
             tensor_split_temp.data(), fit_tensor_overrides.data(), fit_params_target.data(), kcpp_data->n_ctx, nullptr,
             dospam?GGML_LOG_LEVEL_DEBUG:GGML_LOG_LEVEL_NONE, mmproj_reserves)==COMMON_PARAMS_FIT_STATUS_SUCCESS);
             if(!dospam)
