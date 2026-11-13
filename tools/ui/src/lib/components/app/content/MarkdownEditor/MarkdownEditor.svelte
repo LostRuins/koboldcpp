@@ -1,3 +1,15 @@
+<script lang="ts" module>
+	import { EditorView } from '@codemirror/view';
+
+	/**
+	 * Takes text input through contenteditable on every browser: Chrome on Android opens no
+	 * virtual keyboard for an editor that takes it through EditContext.
+	 */
+	class ContentEditableView extends EditorView {
+		static EDIT_CONTEXT = false;
+	}
+</script>
+
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
 	import MarkdownSurface from '../MarkdownContent/MarkdownSurface.svelte';
@@ -25,7 +37,7 @@
 		type Extension,
 		Transaction
 	} from '@codemirror/state';
-	import { EditorView, keymap, placeholder as placeholderExt } from '@codemirror/view';
+	import { keymap, placeholder as placeholderExt } from '@codemirror/view';
 	import { tags } from '@lezer/highlight';
 	import { DialogCodePreview, DialogMermaidPreview } from '$lib/components/app';
 	import { ColorMode } from '$lib/enums';
@@ -137,16 +149,17 @@
 		if (!host) return;
 
 		docText = value;
-		view = new EditorView({
+		view = new ContentEditableView({
 			parent: host,
 			state: EditorState.create({
 				doc: value,
 				extensions: [
 					customCompartment.of(extensions),
 					history(),
-					// Shift+Enter and Ctrl/Cmd+Enter add a line, continuing lists and quotes
+					// Shift+Enter and Ctrl/Cmd+Enter add a line, continuing lists and quotes. Mod is
+					// Ctrl off macOS, where the chat form still takes Meta+Enter as Ctrl+Enter
 					keymap.of(
-						['Shift-Enter', 'Mod-Enter', 'Ctrl-Enter'].map((key) => ({
+						['Shift-Enter', 'Mod-Enter', 'Ctrl-Enter', 'Meta-Enter'].map((key) => ({
 							key,
 							run: (target) => insertNewlineContinueMarkup(target) || insertNewlineAndIndent(target)
 						}))
