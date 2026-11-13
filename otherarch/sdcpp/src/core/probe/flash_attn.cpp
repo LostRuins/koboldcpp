@@ -9,6 +9,7 @@
 
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
 #include "core/probe/backend_probe.h"
 #include "core/util.h"
 
@@ -41,8 +42,11 @@ static void build_flash_attention_probe(BackendProbeGraph& graph, ggml_backend_t
     auto k              = ggml_dup_tensor(graph.ctx, q);
     auto v              = ggml_dup_tensor(graph.ctx, q);
     graph.inputs        = {q, k, v};
+    GGMLRunnerContext runner_ctx;
+    runner_ctx.ggml_ctx = graph.ctx;
+    runner_ctx.backend  = backend;
     bool used_flash     = false;
-    auto output         = ggml_ext_attention_ext(graph.ctx, backend, q, k, v, heads, nullptr, false, flash, 1.f, false, &used_flash);
+    auto output         = ggml_ext_attention_ext(&runner_ctx, q, k, v, heads, nullptr, false, flash, 1.f, &used_flash);
     graph.output        = flash && !used_flash ? nullptr : output;
 }
 

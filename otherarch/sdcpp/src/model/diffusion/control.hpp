@@ -230,7 +230,7 @@ public:
         auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["control_add_embedding.linear_2"]);
 
         // [N*num_control_types, CONTROL_TYPE_EMBED_DIM]
-        auto e = ggml_ext_timestep_embedding(ctx->ggml_ctx, control_types, ControlNetUnionConfig::CONTROL_TYPE_EMBED_DIM);
+        auto e = ggml_ext_timestep_embedding(ctx, control_types, ControlNetUnionConfig::CONTROL_TYPE_EMBED_DIM);
         e      = ggml_reshape_2d(ctx->ggml_ctx, e, ControlNetUnionConfig::CONTROL_TYPE_EMBED_DIM * config.num_control_types, batch);
         e      = linear_1->forward(ctx, e);
         e      = ggml_silu_inplace(ctx->ggml_ctx, e);
@@ -238,8 +238,9 @@ public:
     }
 
     // [N, C, H, W] => [N, C]
-    static ggml_tensor* spatial_mean(ggml_context* ctx, ggml_tensor* x) {
-        auto flat = ggml_reshape_3d(ctx, ggml_ext_cont(ctx, x), x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
+    static ggml_tensor* spatial_mean(GGMLRunnerContext* runner_ctx, ggml_tensor* x) {
+        auto ctx  = runner_ctx->ggml_ctx;
+        auto flat = ggml_reshape_3d(ctx, ggml_ext_cont(runner_ctx, x), x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
         return ggml_reshape_2d(ctx, ggml_mean(ctx, flat), x->ne[2], x->ne[3]);
     }
 
@@ -255,11 +256,11 @@ public:
         auto task_embedding = params["task_embedding"];  // [num_control_types, C]
         auto task           = ggml_view_2d(c, task_embedding, channels, 1, task_embedding->nb[1], control_type_index * task_embedding->nb[1]);
 
-        auto hint_feat = ggml_add(c, spatial_mean(c, hint), task);  // [N, C]
+        auto hint_feat = ggml_add(c, spatial_mean(ctx, hint), task);  // [N, C]
         if (hint_feat->ne[1] != batch) {
             hint_feat = ggml_repeat(c, hint_feat, ggml_new_tensor_2d(c, GGML_TYPE_F32, channels, batch));
         }
-        auto sample_feat = spatial_mean(c, sample);  // [N, C]
+        auto sample_feat = spatial_mean(ctx, sample);  // [N, C]
 
         // as in the reference (nn.MultiheadAttention without batch_first) the attention is over
         // the batch, and the 2 features (hint, sample) are its batch: [2, N, C]
@@ -273,7 +274,7 @@ public:
         }
 
         auto projection = std::dynamic_pointer_cast<Linear>(blocks["spatial_ch_projs"]);
-        auto alpha      = ggml_reshape_2d(c, ggml_ext_slice(c, x, 2, 0, 1), channels, batch);
+        auto alpha      = ggml_reshape_2d(c, ggml_ext_slice(ctx, x, 2, 0, 1), channels, batch);
         alpha           = projection->forward(ctx, alpha);
         alpha           = ggml_reshape_4d(c, alpha, 1, 1, channels, batch);
 
@@ -346,7 +347,7 @@ public:
 
         auto middle_block_out = std::dynamic_pointer_cast<Conv2d>(blocks["middle_block_out.0"]);
 
-        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, model_channels);  // [N, model_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
 
         auto emb = time_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx->ggml_ctx, emb);

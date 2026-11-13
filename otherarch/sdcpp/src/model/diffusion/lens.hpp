@@ -87,7 +87,7 @@ namespace Lens {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* timesteps) {
             auto timestep_embedder = std::dynamic_pointer_cast<Qwen::TimestepEmbedding>(blocks["timestep_embedder"]);
-            auto timesteps_proj    = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 256, 10000, 1000.f);
+            auto timesteps_proj    = ggml_ext_timestep_embedding(ctx, timesteps, 256, 10000, 1000.f);
             return timestep_embedder->forward(ctx, timesteps_proj);
         }
     };
@@ -151,8 +151,8 @@ namespace Lens {
             int64_t N       = img->ne[2];
             int64_t inner   = dim_head * num_heads;
 
-            auto img_qkv_vec = split_qkv(ctx->ggml_ctx, img_qkv->forward(ctx, img));
-            auto txt_qkv_vec = split_qkv(ctx->ggml_ctx, txt_qkv->forward(ctx, txt));
+            auto img_qkv_vec = ggml_ext_chunk(ctx, img_qkv->forward(ctx, img), 3, 0);
+            auto txt_qkv_vec = ggml_ext_chunk(ctx, txt_qkv->forward(ctx, txt), 3, 0);
 
             auto img_q = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[0], dim_head, num_heads, n_img, N);
             auto img_k = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[1], dim_head, num_heads, n_img, N);
@@ -232,9 +232,9 @@ namespace Lens {
             auto temb = ggml_silu(ctx->ggml_ctx, t_emb);
 
             auto img_mod_params = img_mod_1->forward(ctx, temb);
-            auto img_mod_vec    = ggml_ext_chunk(ctx->ggml_ctx, img_mod_params, 6, 0);
+            auto img_mod_vec    = ggml_ext_chunk(ctx, img_mod_params, 6, 0);
             auto txt_mod_params = txt_mod_1->forward(ctx, temb);
-            auto txt_mod_vec    = ggml_ext_chunk(ctx->ggml_ctx, txt_mod_params, 6, 0);
+            auto txt_mod_vec    = ggml_ext_chunk(ctx, txt_mod_params, 6, 0);
 
             auto img_normed    = img_norm1->forward(ctx, img);
             auto img_modulated = Flux::modulate(ctx, img_normed, img_mod_vec[0], img_mod_vec[1]);
@@ -268,7 +268,7 @@ namespace Lens {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* conditioning) {
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
-            auto mods   = ggml_ext_chunk(ctx->ggml_ctx, linear->forward(ctx, ggml_silu(ctx->ggml_ctx, conditioning)), 2, 0);
+            auto mods   = ggml_ext_chunk(ctx, linear->forward(ctx, ggml_silu(ctx->ggml_ctx, conditioning)), 2, 0);
             auto scale  = mods[0];
             auto shift  = mods[1];
             x           = ggml_norm(ctx->ggml_ctx, x, eps);
@@ -319,10 +319,10 @@ namespace Lens {
             auto t_emb = time_text_embed->forward(ctx, timestep);
 
             auto img = ggml_reshape_3d(ctx->ggml_ctx, x, W * H, C, N);
-            img      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img, 1, 0, 2, 3));
+            img      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, img, 1, 0, 2, 3));
             img      = img_in->forward(ctx, img);
 
-            std::vector<ggml_tensor*> txt_chunks = ggml_ext_chunk(ctx->ggml_ctx, context, config.selected_layer_count, 0);
+            std::vector<ggml_tensor*> txt_chunks = ggml_ext_chunk(ctx, context, config.selected_layer_count, 0);
             ggml_tensor* txt                     = nullptr;
             for (int i = 0; i < config.selected_layer_count; ++i) {
                 auto txt_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["txt_norm." + std::to_string(i)]);
@@ -346,7 +346,7 @@ namespace Lens {
             img = norm_out->forward(ctx, img, t_emb);
             img = proj_out->forward(ctx, img);
 
-            auto out = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img, 1, 0, 2, 3));
+            auto out = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, img, 1, 0, 2, 3));
             out      = ggml_reshape_4d(ctx->ggml_ctx, out, W, H, config.patch_size * config.patch_size * config.out_channels, N);
             return out;
         }

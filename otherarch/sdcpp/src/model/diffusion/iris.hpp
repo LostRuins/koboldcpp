@@ -92,7 +92,7 @@ namespace Iris {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe = nullptr, ggml_tensor* mask = nullptr) {
             auto c   = ctx->ggml_ctx;
-            auto qkv = split_qkv(c, std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x));
+            auto qkv = ggml_ext_chunk(ctx, std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x), 3, 0);
             auto q   = ggml_reshape_4d(c, qkv[0], dim / heads, heads, x->ne[1], x->ne[2]);
             auto k   = ggml_reshape_4d(c, qkv[1], dim / heads, heads, x->ne[1], x->ne[2]);
             auto v   = ggml_reshape_4d(c, qkv[2], dim / heads, heads, x->ne[1], x->ne[2]);
@@ -247,24 +247,24 @@ namespace Iris {
         std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* y, ggml_tensor* img_mod, ggml_tensor* txt_mod, ggml_tensor* pe) {
             auto c     = ctx->ggml_ctx;
             int64_t nt = y->ne[1];
-            auto mx    = ggml_ext_chunk(c, ggml_add(c, img_mod, params[dual ? "adaln_img.bias" : "adaln.bias"]), 6, 0);
+            auto mx    = ggml_ext_chunk(ctx, ggml_add(c, img_mod, params[dual ? "adaln_img.bias" : "adaln.bias"]), 6, 0);
             if (!dual) {
                 auto tokens = ggml_concat(c, y, x, 1);
                 auto h      = Pid::apply_adaln(c, norm(ctx, "norm1", tokens), mx[0], mx[1]);
                 auto qkv    = project(ctx, h, "");
                 auto out    = Rope::attention(ctx, qkv[0], qkv[1], qkv[2], pe, nullptr);
                 tokens      = finish(ctx, tokens, h, out, mx, "");
-                return {ggml_ext_slice(c, tokens, 1, nt, tokens->ne[1]), ggml_ext_slice(c, tokens, 1, 0, nt)};
+                return {ggml_ext_slice(ctx, tokens, 1, nt, tokens->ne[1]), ggml_ext_slice(ctx, tokens, 1, 0, nt)};
             }
-            auto my  = ggml_ext_chunk(c, ggml_add(c, txt_mod, params["adaln_txt.bias"]), 6, 0);
+            auto my  = ggml_ext_chunk(ctx, ggml_add(c, txt_mod, params["adaln_txt.bias"]), 6, 0);
             auto hx  = Pid::apply_adaln(c, norm(ctx, "norm_x1", x), mx[0], mx[1]);
             auto hy  = Pid::apply_adaln(c, norm(ctx, "norm_y1", y), my[0], my[1]);
             auto qx  = project(ctx, hx, "_x");
             auto qy  = project(ctx, hy, "_y");
             auto out = Rope::attention(ctx, ggml_concat(c, qy[0], qx[0], 2), ggml_concat(c, qy[1], qx[1], 2),
                                        ggml_concat(c, qy[2], qx[2], 2), pe, nullptr);
-            x        = finish(ctx, x, hx, ggml_ext_slice(c, out, 1, nt, out->ne[1]), mx, "_x");
-            y        = finish(ctx, y, hy, ggml_ext_slice(c, out, 1, 0, nt), my, "_y");
+            x        = finish(ctx, x, hx, ggml_ext_slice(ctx, out, 1, nt, out->ne[1]), mx, "_x");
+            y        = finish(ctx, y, hy, ggml_ext_slice(ctx, out, 1, 0, nt), my, "_y");
             return {x, y};
         }
     };
@@ -294,7 +294,7 @@ namespace Iris {
             auto batch   = cond->ne[2];
             auto mods    = std::dynamic_pointer_cast<Linear>(blocks["adaln"])->forward(ctx, cond);
             mods         = ggml_reshape_3d(c, mods, 4 * d, p2, patches * batch);
-            auto m       = ggml_ext_chunk(c, mods, 4, 0);
+            auto m       = ggml_ext_chunk(ctx, mods, 4, 0);
             auto h       = std::dynamic_pointer_cast<RMSNorm>(blocks["norm1"])->forward(ctx, x);
             h            = ggml_reshape_3d(c, h, d * p2, patches, batch);
             h            = std::dynamic_pointer_cast<Linear>(blocks["compress"])->forward(ctx, h);
@@ -337,7 +337,7 @@ namespace Iris {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* image, ggml_tensor* t, ggml_tensor* text, ggml_tensor* mask, ggml_tensor* joint_pe, ggml_tensor* pixel_pe, ggml_tensor* pixel_pos) {
             auto c    = ctx->ggml_ctx;
             int p     = static_cast<int>(config.patch_size);
-            auto x    = DiT::patchify(c, image, p, p, true);
+            auto x    = DiT::patchify(ctx, image, p, p, true);
             x         = std::dynamic_pointer_cast<Pid::PatchTokenEmbedder>(blocks["s_embedder"])->forward(ctx, x);
             auto te   = std::dynamic_pointer_cast<Pid::PixelDiTTimestepEmbedder>(blocks["t_embedder"])->forward(ctx, t);
             te        = ggml_reshape_3d(c, te, config.hidden_size, 1, image->ne[3]);
@@ -360,7 +360,7 @@ namespace Iris {
             }
             x = std::dynamic_pointer_cast<Pid::FinalLayer>(blocks["final_layer"])->forward(ctx, x);
             x = ggml_reshape_3d(c, x, 3 * p * p, cond->ne[1], image->ne[3]);
-            return DiT::unpatchify(c, x, image->ne[1] / p, image->ne[0] / p, p, p, false);
+            return DiT::unpatchify(ctx, x, image->ne[1] / p, image->ne[0] / p, p, p, false);
         }
     };
 

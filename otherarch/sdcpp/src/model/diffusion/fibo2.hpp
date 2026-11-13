@@ -108,14 +108,14 @@ namespace Fibo2 {
             };
             ggml_tensor *q, *k, *v;
             if (fused_qkv) {
-                auto parts = ggml_ext_chunk(c, project("qkv", x), 3, 0);
+                auto parts = ggml_ext_chunk(ctx, project("qkv", x), 3, 0);
                 q          = parts[0];
                 k          = parts[1];
                 v          = parts[2];
             } else {
                 q = project("to_q", x);
                 if (fused_kv) {
-                    auto parts = ggml_ext_chunk(c, project("to_kv", kv), 2, 0);
+                    auto parts = ggml_ext_chunk(ctx, project("to_kv", kv), 2, 0);
                     k          = parts[0];
                     v          = parts[1];
                 } else {
@@ -158,9 +158,7 @@ namespace Fibo2 {
                 return ZImage::FeedForward::forward(ctx, x);
             }
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                w2->set_force_prec_f32(true);
-            }
+            w2->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
             x = std::dynamic_pointer_cast<Linear>(blocks["w13"])->forward(ctx, x);
             return w2->forward(ctx, ggml_swiglu(ctx->ggml_ctx, x));
         }
@@ -206,7 +204,7 @@ namespace Fibo2 {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* text, int gist_count) {
-            auto x = ggml_ext_slice(ctx->ggml_ctx, params["latent_queries"], 1, 0, gist_count);
+            auto x = ggml_ext_slice(ctx, params["latent_queries"], 1, 0, gist_count);
             for (int i = 0; i < config.perceiver_depth; ++i) {
                 x = std::dynamic_pointer_cast<PerceiverLayer>(blocks["layers." + std::to_string(i)])->forward(ctx, x, text);
             }
@@ -244,8 +242,8 @@ namespace Fibo2 {
                 return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h);
             };
             auto modulation = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.0"]);
-            auto mn         = ggml_ext_chunk(c, modulation->forward(ctx, noisy), 4, 0);
-            auto mc         = ggml_ext_chunk(c, modulation->forward(ctx, clean), 4, 0);
+            auto mn         = ggml_ext_chunk(ctx, modulation->forward(ctx, noisy), 4, 0);
+            auto mc         = ggml_ext_chunk(ctx, modulation->forward(ctx, clean), 4, 0);
             auto select     = [&](int index, bool gate) {
                 auto n      = gate ? ggml_tanh(c, mn[index]) : mn[index];
                 auto k      = gate ? ggml_tanh(c, mc[index]) : mc[index];
@@ -311,12 +309,12 @@ namespace Fibo2 {
             auto embedder = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
             auto noisy    = embedder->forward(ctx, t);
             auto clean    = embedder->forward(ctx, ggml_scale(c, t, 0.f));
-            auto image_pe = ggml_ext_slice(c, pe, 3, gist_count, pe->ne[3]);
+            auto image_pe = ggml_ext_slice(ctx, pe, 3, gist_count, pe->ne[3]);
             for (int i = 0; i < config.refiner_depth; ++i) {
                 x = std::dynamic_pointer_cast<TransformerBlock>(blocks["noise_refiner." + std::to_string(i)])->forward(ctx, x, image_pe, noisy, clean, 0, image_count);
                 sd::ggml_graph_cut::mark_graph_cut(x, "fibo2.noise_refiner." + std::to_string(i), "x");
             }
-            auto bundle      = [&](int i) { return ggml_ext_slice(c, text, 0, i * config.text_dim, (i + 1) * config.text_dim); };
+            auto bundle      = [&](int i) { return ggml_ext_slice(ctx, text, 0, i * config.text_dim, (i + 1) * config.text_dim); };
             auto gist        = std::dynamic_pointer_cast<Perceiver>(blocks["perceiver"])->forward(ctx, bundle(0), gist_count);
             x                = ggml_concat(c, gist, x, 1);
             int bundle_index = 1;
@@ -326,7 +324,7 @@ namespace Fibo2 {
                 x            = block->forward(ctx, x, pe, noisy, clean, gist_count, image_count, context);
                 sd::ggml_graph_cut::mark_graph_cut(x, "fibo2.layers." + std::to_string(i), "x");
             }
-            x = ggml_ext_slice(c, x, 1, gist_count, gist_count + image_count);
+            x = ggml_ext_slice(ctx, x, 1, gist_count, gist_count + image_count);
             x = std::dynamic_pointer_cast<ZImage::FinalLayer>(blocks["final_layer"])->forward(ctx, x, noisy);
             x = ggml_cont(c, ggml_permute(c, x, 1, 0, 2, 3));
             return ggml_reshape_4d(c, x, width, height, config.channels, 1);

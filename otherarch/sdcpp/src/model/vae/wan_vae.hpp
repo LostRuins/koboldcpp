@@ -86,26 +86,12 @@ namespace WAN {
                 lp2 -= (int)cache_x->ne[2];
             }
 
-            x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
-            if (w->ne[2] == 1 && x->ne[2] == 1 && x->ne[3] == in_channels) {
-                // One frame through a one-frame-deep kernel is a 2D conv; backends without
-                // im2col_3d (Metal) otherwise fall back to a much slower direct conv_3d.
-                if (!ggml_is_contiguous(x)) {
-                    x = ggml_cont(ctx->ggml_ctx, x);
-                }
-                ggml_tensor* x2 = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], x->ne[1], in_channels, 1);
-                ggml_tensor* w2 = ggml_reshape_4d(ctx->ggml_ctx, w, w->ne[0], w->ne[1], in_channels, out_channels);
-                x2              = ggml_ext_conv_2d(ctx->ggml_ctx, x2, w2, b,
-                                                   std::get<2>(stride), std::get<1>(stride), 0, 0,
-                                                   std::get<2>(dilation), std::get<1>(dilation),
-                                                   ctx->conv2d_direct_enabled, false, false, scale);
-                return ggml_reshape_4d(ctx->ggml_ctx, x2, x2->ne[0], x2->ne[1], 1, out_channels);
-            }
-            return ggml_ext_conv_3d(ctx->ggml_ctx, ctx->backend, x, w, b, in_channels,
+            x = ggml_ext_pad_ext(ctx, x, lp0, rp0, lp1, rp1, lp2, rp2, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+            return ggml_ext_conv_3d(ctx, x, w, b, in_channels,
                                     std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                     0, 0, 0,
                                     std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
-                                    false, ctx->conv3d_direct_enabled, scale);
+                                    false, ctx->conv3d_direct_enabled, scale, true);
         }
     };
 
@@ -133,10 +119,10 @@ namespace WAN {
 
             ggml_tensor* w = params["gamma"];
             w              = ggml_reshape_1d(ctx->ggml_ctx, w, ggml_nelements(w));
-            auto h         = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
+            auto h         = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 3, 0, 1, 2));  // [ID, IH, IW, N*IC]
             h              = ggml_rms_norm(ctx->ggml_ctx, h, 1e-12f);
             h              = ggml_mul(ctx->ggml_ctx, h, w);
-            h              = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 3, 0));
+            h              = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, h, 1, 2, 3, 0));
 
             return h;
         }
@@ -223,16 +209,16 @@ namespace WAN {
                     } else {
                         auto time_conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["time_conv"]);
 
-                        auto cache_x = ggml_ext_slice(ctx->ggml_ctx, x, 2, -CACHE_T, x->ne[2]);
+                        auto cache_x = ggml_ext_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
                         if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {  // chunk_idx >= 2
                             // cache last frame of last two chunk
                             cache_x = ggml_concat(ctx->ggml_ctx,
-                                                  ggml_ext_slice(ctx->ggml_ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
+                                                  ggml_ext_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
                                                   cache_x,
                                                   2);
                         }
                         if (chunk_idx == 1 && cache_x->ne[2] < 2) {  // Rep
-                            cache_x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
+                            cache_x = ggml_ext_pad_ext(ctx, cache_x, 0, 0, 0, 0, (int)cache_x->ne[2], 0, 0, 0);
                             // aka cache_x = torch.cat([torch.zeros_like(cache_x).to(cache_x.device),cache_x],dim=2)
                         }
                         if (chunk_idx == 1) {
@@ -241,9 +227,9 @@ namespace WAN {
                             x = time_conv->forward(ctx, x, feat_cache[idx]);
                         }
                         feat_cache[idx] = cache_x;
-                        x               = ggml_reshape_4d(ctx->ggml_ctx, x, w * h, t, c, 2);                                   // (2, c, t, h*w)
-                        x               = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 3, 1, 2));  // (c, t, 2, h*w)
-                        x               = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, 2 * t, c);                                   // (c, t*2, h, w)
+                        x               = ggml_reshape_4d(ctx->ggml_ctx, x, w * h, t, c, 2);               // (2, c, t, h*w)
+                        x               = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 3, 1, 2));  // (c, t, 2, h*w)
+                        x               = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, 2 * t, c);               // (c, t*2, h, w)
                     }
                 }
             }
@@ -252,18 +238,18 @@ namespace WAN {
             if (mode != "none") {
                 auto resample_1 = std::dynamic_pointer_cast<Conv2d>(blocks["resample.1"]);
 
-                x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
+                x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
                 if (mode == "upsample2d") {
                     x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);
                 } else if (mode == "upsample3d") {
                     x = ggml_upscale(ctx->ggml_ctx, x, 2, GGML_SCALE_MODE_NEAREST);
                 } else if (mode == "downsample2d") {
-                    x = ggml_ext_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+                    x = ggml_ext_pad(ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
                 } else if (mode == "downsample3d") {
-                    x = ggml_ext_pad(ctx->ggml_ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
+                    x = ggml_ext_pad(ctx, x, 1, 1, 0, 0, ctx->circular_x_enabled, ctx->circular_y_enabled);
                 }
                 x = resample_1->forward(ctx, x);
-                x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
+                x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
             }
 
             if (mode == "downsample3d") {
@@ -275,9 +261,9 @@ namespace WAN {
                     } else {
                         auto time_conv = std::dynamic_pointer_cast<CausalConv3d>(blocks["time_conv"]);
 
-                        auto cache_x    = ggml_ext_slice(ctx->ggml_ctx, x, 2, -1, x->ne[2]);
+                        auto cache_x    = ggml_ext_slice(ctx, x, 2, -1, x->ne[2]);
                         x               = ggml_concat(ctx->ggml_ctx,
-                                                      ggml_ext_slice(ctx->ggml_ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
+                                                      ggml_ext_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
                                                       x,
                                                       2);
                         x               = time_conv->forward(ctx, x);
@@ -320,19 +306,19 @@ namespace WAN {
 
             int pad_t = (factor_t - T % factor_t) % factor_t;
 
-            x = ggml_ext_pad_ext(ctx->ggml_ctx, ctx->backend, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
+            x = ggml_ext_pad_ext(ctx, x, 0, 0, 0, 0, pad_t, 0, 0, 0);
             T = x->ne[2];
 
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, factor_t, T / factor_t, C);                                                  // [C, T/factor_t, factor_t, H*W]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));                                       // [C, factor_t, T/factor_t, H*W]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));                                                 // [C, factor_t, T/factor_t, H*W]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W, factor_s, (H / factor_s) * (T / factor_t), factor_t * C);                        // [C*factor_t, T/factor_t*H/factor_s, factor_s, W]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));                                       // [C*factor_t, factor_s, T/factor_t*H/factor_s, W]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));                                                 // [C*factor_t, factor_s, T/factor_t*H/factor_s, W]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s, W / factor_s, (H / factor_s) * (T / factor_t), factor_s * factor_t * C);  // [C*factor_t*factor_s, T/factor_t*H/factor_s, W/factor_s, factor_s]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));                                       // [C*factor_t*factor_s, factor_s, T/factor_t*H/factor_s, W/factor_s]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));                                                 // [C*factor_t*factor_s, factor_s, T/factor_t*H/factor_s, W/factor_s]
             x = ggml_reshape_3d(ctx->ggml_ctx, x, (W / factor_s) * (H / factor_s) * (T / factor_t), group_size, out_channels);        // [out_channels, group_size, T/factor_t*H/factor_s*W/factor_s]
 
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [out_channels, T/factor_t*H/factor_s*W/factor_s, group_size]
-            x = ggml_mean(ctx->ggml_ctx, x);                                                     // [out_channels, T/factor_t*H/factor_s*W/factor_s, 1]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 1, 0, 2, 3));  // [out_channels, T/factor_t*H/factor_s*W/factor_s, group_size]
+            x = ggml_mean(ctx->ggml_ctx, x);                                           // [out_channels, T/factor_t*H/factor_s*W/factor_s, 1]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W / factor_s, H / factor_s, T / factor_t, out_channels);
             return x;
         }
@@ -374,15 +360,15 @@ namespace WAN {
             C = out_channels;
 
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H * T, factor_s, factor_s * factor_t * C);  // [C*factor_t*factor_s, factor_s, T*H, W]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));  // [C*factor_t*factor_s, T*H, W, factor_s]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));            // [C*factor_t*factor_s, T*H, W, factor_s]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W, H * T, factor_s, factor_t * C);  // [C*factor_t, factor_s, T*H, W*factor_s]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // [C*factor_t, T*H, factor_s, W*factor_s]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));            // [C*factor_t, T*H, factor_s, W*factor_s]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W * factor_s * H, T, factor_t, C);  // [C, factor_t, T, H*factor_s*W*factor_s]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // [C, T, factor_t, H*factor_s*W*factor_s]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));            // [C, T, factor_t, H*factor_s*W*factor_s]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W, factor_s * H, factor_t * T, C);  // [C, T*factor_t, H*factor_s, W*factor_s]
 
             if (first_chunk) {
-                x = ggml_ext_slice(ctx->ggml_ctx, x, 2, factor_t - 1, x->ne[2]);
+                x = ggml_ext_slice(ctx, x, 2, factor_t - 1, x->ne[2]);
             }
 
             return x;
@@ -451,11 +437,11 @@ namespace WAN {
 
                     if (feat_cache.size() > 0) {
                         int idx      = feat_idx;
-                        auto cache_x = ggml_ext_slice(ctx->ggml_ctx, x, 2, -CACHE_T, x->ne[2]);
+                        auto cache_x = ggml_ext_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
                         if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                             // cache last frame of last two chunk
                             cache_x = ggml_concat(ctx->ggml_ctx,
-                                                  ggml_ext_slice(ctx->ggml_ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
+                                                  ggml_ext_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
                                                   cache_x,
                                                   2);
                         }
@@ -629,7 +615,7 @@ namespace WAN {
 
             x = norm->forward(ctx, x);
 
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
+            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));  // (t, c, h, w)
 
             const int64_t n = x->ne[3];
             const int64_t c = x->ne[2];
@@ -637,28 +623,28 @@ namespace WAN {
             const int64_t w = x->ne[0];
 
             auto qkv     = to_qkv->forward(ctx, x);
-            auto qkv_vec = split_image_qkv(ctx->ggml_ctx, qkv);
+            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 2);
 
             auto q = qkv_vec[0];
-            q      = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, q, 2, 0, 1, 3));  // [t, h, w, c]
-            q      = ggml_reshape_3d(ctx->ggml_ctx, q, c, h * w, n);                                      // [t, h * w, c]
+            q      = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, q, 2, 0, 1, 3));  // [t, h, w, c]
+            q      = ggml_reshape_3d(ctx->ggml_ctx, q, c, h * w, n);                  // [t, h * w, c]
 
             auto k = qkv_vec[1];
-            k      = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 2, 0, 1, 3));  // [t, h, w, c]
-            k      = ggml_reshape_3d(ctx->ggml_ctx, k, c, h * w, n);                                      // [t, h * w, c]
+            k      = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, k, 2, 0, 1, 3));  // [t, h, w, c]
+            k      = ggml_reshape_3d(ctx->ggml_ctx, k, c, h * w, n);                  // [t, h * w, c]
 
             auto v = qkv_vec[2];
             v      = ggml_reshape_3d(ctx->ggml_ctx, v, h * w, c, n);  // [t, c, h * w]
 
-            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));    // [t, h * w, c]
+            v = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, v, 1, 0, 2, 3));              // [t, h * w, c]
             x = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);  // [t, h * w, c]
 
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
-            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, c, n);                             // [t, c, h, w]
+            x = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [t, c, h * w]
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, c, n);                   // [t, c, h, w]
 
             x = proj->forward(ctx, x);
 
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
+            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));  // (c, t, h, w)
 
             x = ggml_add(ctx->ggml_ctx, x, identity);
             return x;
@@ -770,11 +756,11 @@ namespace WAN {
                 x          = conv1->forward(ctx, x);
             } else if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
-                auto cache_x = ggml_ext_slice(ctx->ggml_ctx, x, 2, -CACHE_T, x->ne[2]);
+                auto cache_x = ggml_ext_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
                 if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx->ggml_ctx,
-                                          ggml_ext_slice(ctx->ggml_ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
+                                          ggml_ext_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
                                           cache_x,
                                           2);
                 }
@@ -828,11 +814,11 @@ namespace WAN {
                 x           = head_2->forward(ctx, x);
             } else if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
-                auto cache_x = ggml_ext_slice(ctx->ggml_ctx, x, 2, -CACHE_T, x->ne[2]);
+                auto cache_x = ggml_ext_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
                 if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx->ggml_ctx,
-                                          ggml_ext_slice(ctx->ggml_ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
+                                          ggml_ext_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
                                           cache_x,
                                           2);
                 }
@@ -962,11 +948,11 @@ namespace WAN {
                 x          = conv1->forward(ctx, x);
             } else if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
-                auto cache_x = ggml_ext_slice(ctx->ggml_ctx, x, 2, -CACHE_T, x->ne[2]);
+                auto cache_x = ggml_ext_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
                 if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx->ggml_ctx,
-                                          ggml_ext_slice(ctx->ggml_ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
+                                          ggml_ext_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
                                           cache_x,
                                           2);
                 }
@@ -1020,11 +1006,11 @@ namespace WAN {
                 x           = head_2->forward(ctx, x);
             } else if (feat_cache.size() > 0) {
                 int idx      = feat_idx;
-                auto cache_x = ggml_ext_slice(ctx->ggml_ctx, x, 2, -CACHE_T, x->ne[2]);
+                auto cache_x = ggml_ext_slice(ctx, x, 2, -CACHE_T, x->ne[2]);
                 if (cache_x->ne[2] < 2 && feat_cache[idx] != nullptr) {
                     // cache last frame of last two chunk
                     cache_x = ggml_concat(ctx->ggml_ctx,
-                                          ggml_ext_slice(ctx->ggml_ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
+                                          ggml_ext_slice(ctx, feat_cache[idx], 2, -1, feat_cache[idx]->ne[2]),
                                           cache_x,
                                           2);
                 }
@@ -1137,10 +1123,8 @@ namespace WAN {
             }
         }
 
-        static ggml_tensor* patchify(ggml_context* ctx,
-                                     ggml_tensor* x,
-                                     int64_t patch_size,
-                                     int64_t b = 1) {
+        static ggml_tensor* patchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int64_t patch_size, int64_t b = 1) {
+            auto ctx = runner_ctx->ggml_ctx;
             // x: [b*c, f, h*q, w*r]
             // return: [b*c*r*q, f, h, w]
             if (patch_size == 1) {
@@ -1153,21 +1137,22 @@ namespace WAN {
             int64_t h = x->ne[1] / q;
             int64_t w = x->ne[0] / r;
 
-            x = ggml_reshape_4d(ctx, x, r * w, q, h, f * c * b);                 // [b*c*f, h, q, w*r]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c*f, q, h, w*r]
-            x = ggml_reshape_4d(ctx, x, r, w, h * q, f * c * b);                 // [b*c*f, q*h, w, r]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));  // [b*c*f, r, q*h, w]
-            x = ggml_reshape_4d(ctx, x, w * h, q * r, f, c * b);                 // [b*c, f, r*q, h*w]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c, r*q, f, h*w]
-            x = ggml_reshape_4d(ctx, x, w, h, f, q * r * c * b);                 // [b*c*r*q, f, h, w]
+            x = ggml_reshape_4d(ctx, x, r * w, q, h, f * c * b);                               // [b*c*f, h, q, w*r]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [b*c*f, q, h, w*r]
+            x = ggml_reshape_4d(ctx, x, r, w, h * q, f * c * b);                               // [b*c*f, q*h, w, r]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 1, 2, 0, 3));  // [b*c*f, r, q*h, w]
+            x = ggml_reshape_4d(ctx, x, w * h, q * r, f, c * b);                               // [b*c, f, r*q, h*w]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [b*c, r*q, f, h*w]
+            x = ggml_reshape_4d(ctx, x, w, h, f, q * r * c * b);                               // [b*c*r*q, f, h, w]
 
             return x;
         }
 
-        static ggml_tensor* unpatchify(ggml_context* ctx,
+        static ggml_tensor* unpatchify(GGMLRunnerContext* runner_ctx,
                                        ggml_tensor* x,
                                        int64_t patch_size,
                                        int64_t b = 1) {
+            auto ctx = runner_ctx->ggml_ctx;
             // x: [b*c*r*q, f, h, w]
             // return: [b*c, f, h*q, w*r]
             if (patch_size == 1) {
@@ -1180,13 +1165,13 @@ namespace WAN {
             int64_t h = x->ne[1];
             int64_t w = x->ne[0];
 
-            x = ggml_reshape_4d(ctx, x, w * h, f, q * r, c * b);                 // [b*c, r*q, f, h*w]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c, f, r*q, h*w]
-            x = ggml_reshape_4d(ctx, x, w, h * q, r, f * c * b);                 // [b*c*f, r, q*h, w]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));  // [b*c*f, q*h, w, r]
-            x = ggml_reshape_4d(ctx, x, r * w, h, q, f * c * b);                 // [b*c*f, q, h, w*r]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));  // [b*c*f, h, q, w*r]
-            x = ggml_reshape_4d(ctx, x, r * w, q * h, f, c * b);                 // [b*c, f, h*q, w*r]
+            x = ggml_reshape_4d(ctx, x, w * h, f, q * r, c * b);                               // [b*c, r*q, f, h*w]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [b*c, f, r*q, h*w]
+            x = ggml_reshape_4d(ctx, x, w, h * q, r, f * c * b);                               // [b*c*f, r, q*h, w]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 2, 0, 1, 3));  // [b*c*f, q*h, w, r]
+            x = ggml_reshape_4d(ctx, x, r * w, h, q, f * c * b);                               // [b*c*f, q, h, w*r]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [b*c*f, h, q, w*r]
+            x = ggml_reshape_4d(ctx, x, r * w, q * h, f, c * b);                               // [b*c, f, h*q, w*r]
             return x;
         }
 
@@ -1203,7 +1188,7 @@ namespace WAN {
 
             clear_cache();
 
-            x = patchify(ctx->ggml_ctx, x, patch_size, b);
+            x = patchify(ctx, x, patch_size, b);
             // sd::ggml_graph_cut::mark_graph_cut(x, "wan_vae.encode.prelude", "x");
 
             auto encoder = std::dynamic_pointer_cast<Encoder3d>(blocks["encoder"]);
@@ -1215,11 +1200,11 @@ namespace WAN {
             for (int i = 0; i < iter_; i++) {
                 _enc_conv_idx = 0;
                 if (i == 0) {
-                    auto in = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);  // [b*c, 1, h, w]
+                    auto in = ggml_ext_slice(ctx, x, 2, 0, 1);  // [b*c, 1, h, w]
                     out     = encoder->forward(ctx, in, b, _enc_feat_map, _enc_conv_idx, i);
                 } else {
                     // if is_2D, drop 3 out of 4 frames
-                    auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1 + 4 * (i - 1), (is_2D ? 1 - 3 : 1) + 4 * i);  // [b*c, 4, h, w]
+                    auto in   = ggml_ext_slice(ctx, x, 2, 1 + 4 * (i - 1), (is_2D ? 1 - 3 : 1) + 4 * i);  // [b*c, 4, h, w]
                     auto out_ = encoder->forward(ctx, in, b, _enc_feat_map, _enc_conv_idx, i);
                     out       = ggml_concat(ctx->ggml_ctx, out, out_, 2);
                 }
@@ -1230,7 +1215,7 @@ namespace WAN {
             } else {
                 out = conv1->forward(ctx, out);
             }
-            auto mu = ggml_ext_chunk(ctx->ggml_ctx, out, 2, 3)[0];
+            auto mu = ggml_ext_chunk(ctx, out, 2, 3)[0];
             // sd::ggml_graph_cut::mark_graph_cut(mu, "wan_vae.encode.final", "mu");
             clear_cache();
             return mu;
@@ -1264,10 +1249,10 @@ namespace WAN {
             for (int i = 0; i < iter_; i++) {
                 _conv_idx = 0;
                 if (i == 0) {
-                    auto in = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
+                    auto in = ggml_ext_slice(ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
                     out     = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
                 } else {
-                    auto in   = ggml_ext_slice(ctx->ggml_ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
+                    auto in   = ggml_ext_slice(ctx, x, 2, i, i + 1);  // [b*c, 1, h, w]
                     auto out_ = decoder->forward(ctx, in, b, _feat_map, _conv_idx, i);
                     out       = ggml_concat(ctx->ggml_ctx, out, out_, 2);
                     if (is_2D) {
@@ -1278,7 +1263,7 @@ namespace WAN {
                     }
                 }
             }
-            out = unpatchify(ctx->ggml_ctx, out, patch_size, b);
+            out = unpatchify(ctx, out, patch_size, b);
             // sd::ggml_graph_cut::mark_graph_cut(out, "wan_vae.decode.final", "out");
             clear_cache();
             return out;
@@ -1309,7 +1294,7 @@ namespace WAN {
                 const int global_frame = chunk_idx + static_cast<int>(frame);
                 // The first latent frame bypasses temporal upsampling and primes the causal caches.
                 const int64_t count = !is_2D && global_frame > 0 ? std::min<int64_t>(decode_frames, x->ne[2] - frame) : 1;
-                auto in             = ggml_ext_slice(ctx->ggml_ctx, x, 2, frame, frame + count);
+                auto in             = ggml_ext_slice(ctx, x, 2, frame, frame + count);
                 _conv_idx           = 0;
                 auto out_frame      = decoder->forward(ctx, in, b, _feat_map, _conv_idx, global_frame);
                 if (is_2D && global_frame > 0) {
@@ -1322,7 +1307,7 @@ namespace WAN {
                 out = out == nullptr ? out_frame : ggml_concat(ctx->ggml_ctx, out, out_frame, 2);
                 frame += count;
             }
-            return unpatchify(ctx->ggml_ctx, out, patch_size, b);
+            return unpatchify(ctx, out, patch_size, b);
         }
     };
 

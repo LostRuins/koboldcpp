@@ -118,9 +118,9 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         // [N, C, H, W] -> [N, H, W, C] so the norm reduces over channels.
-        x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));
-        x = ggml_ext_layer_norm(ctx->ggml_ctx, x, params["weight"], params["bias"], 1e-6f);
-        return ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));
+        x = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));
+        x = ggml_ext_layer_norm(ctx, x, params["weight"], params["bias"], 1e-6f);
+        return ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));
     }
 };
 
@@ -141,9 +141,8 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         const int pad = kernel_size / 2;
-        x             = ggml_conv_2d_dw_direct(ctx->ggml_ctx, params["weight"], ggml_ext_cont(ctx->ggml_ctx, x), 1, 1, pad, pad, 1, 1);
-        auto b        = ggml_reshape_4d(ctx->ggml_ctx, params["bias"], 1, 1, channels, 1);
-        return ggml_add_inplace(ctx->ggml_ctx, x, b);
+        return ggml_ext_conv_2d_grouped(ctx, ggml_ext_cont(ctx, x), params["weight"], params["bias"], channels,
+                                        1, 1, pad, pad, 1, 1, true);
     }
 };
 
@@ -179,10 +178,10 @@ public:
         auto i = channel_view(hidden, hidden - conv_ch);
         auto c = conv->forward(ctx, channel_view(2 * hidden - conv_ch, conv_ch));
         if (hidden > conv_ch) {
-            c = ggml_concat(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, i), c, 2);
+            c = ggml_concat(ctx->ggml_ctx, ggml_ext_cont(ctx, i), c, 2);
         }
 
-        h = ggml_mul(ctx->ggml_ctx, c, mosr_mish(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, g)));
+        h = ggml_mul(ctx->ggml_ctx, c, mosr_mish(ctx->ggml_ctx, ggml_ext_cont(ctx, g)));
         h = mosr_mish(ctx->ggml_ctx, fc2->forward(ctx, h));
         return ggml_add(ctx->ggml_ctx, h, ggml_scale_bias(ctx->ggml_ctx, x, 1.f, -0.5f));
     }

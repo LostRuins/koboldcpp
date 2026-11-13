@@ -179,12 +179,10 @@ namespace ZImage {
                 auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["to_k"]);
                 auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
 
-                if (sd_backend_is(ctx->backend, "ROCm")) {
-                    out_proj->set_force_prec_f32(true);
-                    q_proj->set_force_prec_f32(true);
-                    k_proj->set_force_prec_f32(true);
-                    v_proj->set_force_prec_f32(true);
-                }
+                out_proj->set_precision_flags(GGML_PRECISION_F32_ROCM);
+                q_proj->set_precision_flags(GGML_PRECISION_F32_ROCM);
+                k_proj->set_precision_flags(GGML_PRECISION_F32_ROCM);
+                v_proj->set_precision_flags(GGML_PRECISION_F32_ROCM);
 
                 auto q = ggml_reshape_4d(ctx->ggml_ctx, q_proj->forward(ctx, x), head_dim, num_heads, n_token, N);
                 auto k = ggml_reshape_4d(ctx->ggml_ctx, k_proj->forward(ctx, x), head_dim, num_kv_heads, n_token, N);
@@ -201,10 +199,8 @@ namespace ZImage {
 
             auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
-            if (sd_backend_is(ctx->backend, "ROCm")) {
-                out_proj->set_force_prec_f32(true);
-                qkv_proj->set_force_prec_f32(true);
-            }
+            out_proj->set_precision_flags(GGML_PRECISION_F32_ROCM);
+            qkv_proj->set_precision_flags(GGML_PRECISION_F32_ROCM);
 
             auto qkv = qkv_proj->forward(ctx, x);                                                                            // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
             qkv      = ggml_reshape_4d(ctx->ggml_ctx, qkv, head_dim, num_heads + num_kv_heads * 2, qkv->ne[1], qkv->ne[2]);  // [N, n_token, num_heads + num_kv_heads*2, head_dim]
@@ -281,9 +277,7 @@ namespace ZImage {
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                w2->set_force_prec_f32(true);
-            }
+            w2->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
             auto x1 = w1->forward(ctx, x);
             auto x3 = w3->forward(ctx, x);
@@ -353,7 +347,7 @@ namespace ZImage {
                 auto adaLN_modulation_0 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.0"]);
 
                 auto m         = adaLN_modulation_0->forward(ctx, adaln_input);  // [N, 4 * hidden_size]
-                auto mods      = ggml_ext_chunk(ctx->ggml_ctx, m, 4, 0);
+                auto mods      = ggml_ext_chunk(ctx, m, 4, 0);
                 auto scale_msa = mods[0];
                 auto gate_msa  = mods[1];
                 auto scale_mlp = mods[2];
@@ -457,12 +451,10 @@ namespace ZImage {
             int64_t n_token = c->ne[1];
             int64_t N       = c->ne[2];
 
-            if (sd_backend_is(ctx->backend, "ROCm")) {
-                out_proj->set_force_prec_f32(true);
-                to_q->set_force_prec_f32(true);
-                to_k->set_force_prec_f32(true);
-                to_v->set_force_prec_f32(true);
-            }
+            out_proj->set_precision_flags(GGML_PRECISION_F32_ROCM);
+            to_q->set_precision_flags(GGML_PRECISION_F32_ROCM);
+            to_k->set_precision_flags(GGML_PRECISION_F32_ROCM);
+            to_v->set_precision_flags(GGML_PRECISION_F32_ROCM);
 
             auto q = ggml_reshape_4d(ctx->ggml_ctx, to_q->forward(ctx, c), head_dim, num_heads, n_token, N);
             auto k = ggml_reshape_4d(ctx->ggml_ctx, to_k->forward(ctx, c), head_dim, num_kv_heads, n_token, N);
@@ -497,7 +489,7 @@ namespace ZImage {
             }
 
             auto m         = adaLN_modulation_0->forward(ctx, t_emb);
-            auto mods      = ggml_ext_chunk(ctx->ggml_ctx, m, 4, 0);
+            auto mods      = ggml_ext_chunk(ctx, m, 4, 0);
             auto scale_msa = mods[0];
             auto gate_msa  = mods[1];
             auto scale_mlp = mods[2];
@@ -713,7 +705,7 @@ namespace ZImage {
 
                 auto out = block->forward(ctx, c, img_pe, img, t_emb);
                 c        = out.second;
-                ref_hints.push_back(ggml_ext_scale(ctx->ggml_ctx, out.first, strength));
+                ref_hints.push_back(ggml_ext_scale(ctx, out.first, strength));
                 sd::ggml_graph_cut::mark_graph_cut(c, "z_image.control.noise_refiner." + std::to_string(i), "control");
             }
 
@@ -757,7 +749,7 @@ namespace ZImage {
 
                 auto out     = block->forward(ctx, ctrl_unified, pe, unified_c, t_emb);
                 ctrl_unified = out.second;
-                main_hints.push_back(ggml_ext_scale(ctx->ggml_ctx, out.first, strength));
+                main_hints.push_back(ggml_ext_scale(ctx, out.first, strength));
                 sd::ggml_graph_cut::mark_graph_cut(ctrl_unified, "z_image.control.layers." + std::to_string(i), "control");
             }
 
@@ -807,8 +799,8 @@ namespace ZImage {
 
             GGML_ASSERT(txt->ne[1] + img->ne[1] == pe->ne[3]);
 
-            auto txt_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, 0, txt->ne[1]);
-            auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt->ne[1], pe->ne[3]);
+            auto txt_pe = ggml_ext_slice(ctx, pe, 3, 0, txt->ne[1]);
+            auto img_pe = ggml_ext_slice(ctx, pe, 3, txt->ne[1], pe->ne[3]);
 
             std::vector<ggml_tensor*> ref_hints;
             ggml_tensor* control_ctx = nullptr;
@@ -858,7 +850,7 @@ namespace ZImage {
 
             txt_img = final_layer->forward(ctx, txt_img, t_emb);  // [N, n_txt_token + n_txt_pad_token + n_img_token + n_img_pad_token, ph*pw*C]
 
-            img = ggml_ext_slice(ctx->ggml_ctx, txt_img, 1, n_txt_token + n_txt_pad_token, n_txt_token + n_txt_pad_token + n_img_token);  // [N, n_img_token, ph*pw*C]
+            img = ggml_ext_slice(ctx, txt_img, 1, n_txt_token + n_txt_pad_token, n_txt_token + n_txt_pad_token + n_img_token);  // [N, n_img_token, ph*pw*C]
 
             return img;
         }
@@ -906,10 +898,10 @@ namespace ZImage {
 
             auto out = forward_core(ctx, img, timestep, context, pe, control, control_strength);
 
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, n_img_token);                              // [N, n_img_token, ph*pw*C]
-            out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, patch_size, patch_size, false);  // [N, C, H, W]
+            out = ggml_ext_slice(ctx, out, 1, 0, n_img_token);                              // [N, n_img_token, ph*pw*C]
+            out = DiT::unpatchify_and_crop(ctx, out, H, W, patch_size, patch_size, false);  // [N, C, H, W]
 
-            out = ggml_ext_scale(ctx->ggml_ctx, out, -1.f);
+            out = ggml_ext_scale(ctx, out, -1.f);
 
             return out;
         }

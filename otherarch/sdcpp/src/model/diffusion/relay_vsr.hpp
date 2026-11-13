@@ -124,7 +124,7 @@ namespace RelayVSR {
                 k   = VSR::apply_rope(ctx, k, key_rope, heads_);
                 out = local->forward(ctx, q, k, v, heads_);
             } else {
-                out = ggml_ext_attention_ext(c, ctx->backend, q, k, v, heads_, nullptr, false, ctx->flash_attn_enabled);
+                out = ggml_ext_attention_ext(ctx, q, k, v, heads_, nullptr, false, ctx->flash_attn_enabled);
             }
             return to_out_0->forward(ctx, out);
         }
@@ -157,7 +157,7 @@ namespace RelayVSR {
             auto ffn_net_2      = std::dynamic_pointer_cast<Linear>(blocks["ffn.net.2"]);
             auto c              = ctx->ggml_ctx;
             auto modulation     = ggml_add(c, timestep_proj, params["scale_shift_table"]);
-            auto pieces         = ggml_ext_chunk(c, modulation, 6, 1);
+            auto pieces         = ggml_ext_chunk(ctx, modulation, 6, 1);
             auto attn1          = std::dynamic_pointer_cast<WanAttention>(blocks["attn1"]);
             auto attn2          = std::dynamic_pointer_cast<WanAttention>(blocks["attn2"]);
             auto y              = attn1->forward(ctx, ggml_ext_modulate(ctx, norm1->forward(ctx, x), pieces[0], pieces[1]), nullptr, qpe, kpe, &local, name + ".attn1");
@@ -165,7 +165,7 @@ namespace RelayVSR {
             x                   = ggml_add(c, x, attn2->forward(ctx, norm2->forward(ctx, x), text, nullptr, nullptr, nullptr, name + ".attn2"));
             y                   = ggml_ext_modulate(ctx, norm3->forward(ctx, x), pieces[3], pieces[4]);
             y                   = ffn_net_0_proj->forward(ctx, y);
-            y                   = ffn_net_2->forward(ctx, ggml_ext_gelu(c, y));
+            y                   = ffn_net_2->forward(ctx, ggml_ext_gelu(ctx, y));
             return ggml_add(c, x, ggml_mul(c, y, pieces[5]));
         }
     };
@@ -213,7 +213,7 @@ namespace RelayVSR {
             auto e0   = condition_embedder_time_proj->forward(ctx, ggml_silu(c, e));
             e0        = ggml_reshape_3d(c, e0, config_.dim, 6, 1);
             auto text = condition_embedder_text_embedder_linear_1->forward(ctx, params["prompt_embeds"]);
-            text      = condition_embedder_text_embedder_linear_2->forward(ctx, ggml_ext_gelu(c, text));
+            text      = condition_embedder_text_embedder_linear_2->forward(ctx, ggml_ext_gelu(ctx, text));
             for (int i = 0; i < config_.num_layers; ++i) {
                 auto name = "blocks." + std::to_string(i);
                 x         = std::dynamic_pointer_cast<WanTransformerBlock>(blocks[name])->forward(ctx, x, text, e0, qpe, kpe, local, name);
@@ -221,7 +221,7 @@ namespace RelayVSR {
             }
             e               = ggml_reshape_3d(c, e, config_.dim, 1, 1);
             auto modulation = ggml_add(c, params["scale_shift_table"], e);
-            auto pieces     = ggml_ext_chunk(c, modulation, 2, 1);
+            auto pieces     = ggml_ext_chunk(ctx, modulation, 2, 1);
             x               = norm_out->forward(ctx, x);
             x               = ggml_ext_modulate(ctx, x, pieces[0], pieces[1]);
             x               = proj_out->forward(ctx, x);

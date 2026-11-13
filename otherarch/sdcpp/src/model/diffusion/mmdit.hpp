@@ -272,7 +272,7 @@ public:
         auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
         auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
 
-        auto t_freq = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size);  // [N, frequency_embedding_size]
+        auto t_freq = ggml_ext_timestep_embedding(ctx, t, frequency_embedding_size);  // [N, frequency_embedding_size]
 
         auto t_emb = mlp_0->forward(ctx, t_freq);
         t_emb      = ggml_silu_inplace(ctx->ggml_ctx, t_emb);
@@ -334,7 +334,7 @@ public:
         auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
 
         auto qkv         = qkv_proj->forward(ctx, x);
-        auto qkv_vec     = split_qkv(ctx->ggml_ctx, qkv);
+        auto qkv_vec     = ggml_ext_chunk(ctx, qkv, 3, 0);
         int64_t head_dim = qkv_vec[0]->ne[0] / num_heads;
         auto q           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
         auto k           = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
@@ -439,7 +439,7 @@ public:
 
         int n_mods = 9;
         auto m     = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, n_mods * hidden_size]
-        auto m_vec = ggml_ext_chunk(ctx->ggml_ctx, m, n_mods, 0);
+        auto m_vec = ggml_ext_chunk(ctx, m, n_mods, 0);
 
         auto shift_msa  = m_vec[0];  // [N, hidden_size]
         auto scale_msa  = m_vec[1];  // [N, hidden_size]
@@ -476,7 +476,7 @@ public:
             n_mods = 2;
         }
         auto m     = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, n_mods * hidden_size]
-        auto m_vec = ggml_ext_chunk(ctx->ggml_ctx, m, n_mods, 0);
+        auto m_vec = ggml_ext_chunk(ctx, m, n_mods, 0);
 
         auto shift_msa = m_vec[0];  // [N, hidden_size]
         auto scale_msa = m_vec[1];  // [N, hidden_size]
@@ -750,7 +750,7 @@ public:
         auto adaLN_modulation_1 = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
 
         auto m     = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, c));  // [N, 2 * hidden_size]
-        auto m_vec = ggml_ext_chunk(ctx->ggml_ctx, m, 2, 0);
+        auto m_vec = ggml_ext_chunk(ctx, m, 2, 0);
         auto shift = m_vec[0];  // [N, hidden_size]
         auto scale = m_vec[1];  // [N, hidden_size]
 
@@ -926,7 +926,7 @@ public:
 
         x = forward_core_with_concat(ctx, x, c, context, skip_layers);  // (N, H*W, patch_size ** 2 * out_channels)
 
-        x = DiT::unpatchify_and_crop(ctx->ggml_ctx, x, H, W, config.patch_size, config.patch_size, /*patch_last*/ false);  // [N, C, H, W]
+        x = DiT::unpatchify_and_crop(ctx, x, H, W, config.patch_size, config.patch_size, /*patch_last*/ false);  // [N, C, H, W]
 
         return x;
     }

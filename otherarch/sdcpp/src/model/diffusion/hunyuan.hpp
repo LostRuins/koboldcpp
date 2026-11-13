@@ -50,7 +50,7 @@ namespace Hunyuan {
 
             // self attn
             auto qkv     = self_attn_qkv->forward(ctx, norm1->forward(ctx, txt));
-            auto qkv_vec = split_qkv(ctx->ggml_ctx, qkv);
+            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 0);
             auto q       = qkv_vec[0];
             auto k       = qkv_vec[1];
             auto v       = qkv_vec[2];
@@ -60,7 +60,7 @@ namespace Hunyuan {
 
             // adaLN_modulation
             auto emb  = adaLN_modulation_1->forward(ctx, ggml_silu(ctx->ggml_ctx, t_emb));
-            auto mods = ggml_ext_chunk(ctx->ggml_ctx, emb, 2, 0);
+            auto mods = ggml_ext_chunk(ctx, emb, 2, 0);
 
             txt = ggml_add(ctx->ggml_ctx, txt, ggml_mul(ctx->ggml_ctx, attn_out, mods[0]));
 
@@ -122,11 +122,11 @@ namespace Hunyuan {
             auto c_embedder               = std::dynamic_pointer_cast<Flux::MLPEmbedder>(blocks["c_embedder"]);
             auto individual_token_refiner = std::dynamic_pointer_cast<IndividualTokenRefiner>(blocks["individual_token_refiner"]);
 
-            auto t_emb = t_embedder->forward(ctx, ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, 256, 10000, 1.f));
+            auto t_emb = t_embedder->forward(ctx, ggml_ext_timestep_embedding(ctx, timestep, 256, 10000, 1.f));
 
-            auto h                  = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, txt, 1, 0, 2, 3));
+            auto h                  = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, txt, 1, 0, 2, 3));
             auto pooled_projections = ggml_scale(ctx->ggml_ctx, ggml_sum_rows(ctx->ggml_ctx, h), 1.f / txt->ne[1]);
-            pooled_projections      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, pooled_projections, 1, 0, 2, 3));
+            pooled_projections      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, pooled_projections, 1, 0, 2, 3));
             auto c_emb              = c_embedder->forward(ctx, pooled_projections);
 
             t_emb = ggml_add(ctx->ggml_ctx, t_emb, c_emb);
@@ -151,9 +151,9 @@ namespace Hunyuan {
             auto fc3       = std::dynamic_pointer_cast<Linear>(blocks["fc3"]);
 
             x = fc1->forward(ctx, layernorm->forward(ctx, x));
-            x = ggml_ext_gelu(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx, x);
             x = fc2->forward(ctx, x);
-            x = ggml_ext_gelu(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx, x);
             return fc3->forward(ctx, x);
         }
     };
@@ -364,11 +364,12 @@ namespace Hunyuan {
             return x;
         }
 
-        ggml_tensor* unpatchify(struct ggml_context* ctx,
+        ggml_tensor* unpatchify(GGMLRunnerContext* runner_ctx,
                                 ggml_tensor* x,
                                 int64_t t_len,
                                 int64_t h_len,
                                 int64_t w_len) {
+            auto ctx = runner_ctx->ggml_ctx;
             // x: [N, t_len*h_len*w_len, C*pt*ph*pw]
             // return: [N*C, t_len*pt, h_len*ph, w_len*pw]
             int64_t N  = x->ne[3];
@@ -379,15 +380,15 @@ namespace Hunyuan {
 
             GGML_ASSERT(C * pt * ph * pw == x->ne[0]);
 
-            x = ggml_reshape_4d(ctx, x, C, pw * ph * pt, w_len * h_len * t_len, N);  // [N, t_len*h_len*w_len, pt*ph*pw, C]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));      // [N, C, t_len*h_len*w_len, pt*ph*pw]
-            x = ggml_reshape_4d(ctx, x, pw, ph * pt, w_len, h_len * t_len * C * N);  // [N*C*t_len*h_len, w_len, pt*ph, pw]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, pt*ph, w_len, pw]
-            x = ggml_reshape_4d(ctx, x, pw * w_len, ph, pt, h_len * t_len * C * N);  // [N*C*t_len*h_len, pt, ph, w_len*pw]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len*h_len, ph, pt, w_len*pw]
-            x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph * h_len, t_len * C * N);  // [N*C*t_len, h_len*ph, pt, w_len*pw]
-            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));      // [N*C*t_len, pt, h_len*ph, w_len*pw]
-            x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);  // [N*C, t_len*pt, h_len*ph, w_len*pw]
+            x = ggml_reshape_4d(ctx, x, C, pw * ph * pt, w_len * h_len * t_len, N);            // [N, t_len*h_len*w_len, pt*ph*pw, C]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 1, 2, 0, 3));  // [N, C, t_len*h_len*w_len, pt*ph*pw]
+            x = ggml_reshape_4d(ctx, x, pw, ph * pt, w_len, h_len * t_len * C * N);            // [N*C*t_len*h_len, w_len, pt*ph, pw]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len*h_len, pt*ph, w_len, pw]
+            x = ggml_reshape_4d(ctx, x, pw * w_len, ph, pt, h_len * t_len * C * N);            // [N*C*t_len*h_len, pt, ph, w_len*pw]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len*h_len, ph, pt, w_len*pw]
+            x = ggml_reshape_4d(ctx, x, pw * w_len, pt, ph * h_len, t_len * C * N);            // [N*C*t_len, h_len*ph, pt, w_len*pw]
+            x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [N*C*t_len, pt, h_len*ph, w_len*pw]
+            x = ggml_reshape_4d(ctx, x, pw * w_len, ph * h_len, pt * t_len, C * N);            // [N*C, t_len*pt, h_len*ph, w_len*pw]
             return x;
         }
 
@@ -431,10 +432,10 @@ namespace Hunyuan {
 
             img      = img_in->forward(ctx, img);                     // [N*C, t_len*h_len*w_len, hidden_size]
             txt      = txt_in->forward(ctx, txt, timestep, nullptr);  // [N, n_txt_token, hidden_size]
-            auto vec = time_in->forward(ctx, ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, 256, 10000, 1.f));
+            auto vec = time_in->forward(ctx, ggml_ext_timestep_embedding(ctx, timestep, 256, 10000, 1.f));
             if (config.use_meanflow && timestep_r != nullptr) {
                 auto time_r_in = std::dynamic_pointer_cast<Flux::MLPEmbedder>(blocks["time_r_in"]);
-                auto vec_r     = time_r_in->forward(ctx, ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_r, 256, 10000, 1000.f));
+                auto vec_r     = time_r_in->forward(ctx, ggml_ext_timestep_embedding(ctx, timestep_r, 256, 10000, 1000.f));
                 vec            = ggml_add(ctx->ggml_ctx, vec, vec_r);
                 if (!config.use_meanflow_sum) {
                     vec = ggml_scale(ctx->ggml_ctx, vec, 0.5f);
@@ -446,7 +447,7 @@ namespace Hunyuan {
             }
             if (config.guidance_embed && guidance != nullptr) {
                 auto guidance_in  = std::dynamic_pointer_cast<Flux::MLPEmbedder>(blocks["guidance_in"]);
-                auto guidance_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, guidance, 256, 10000, 1.f);
+                auto guidance_emb = ggml_ext_timestep_embedding(ctx, guidance, 256, 10000, 1.f);
                 vec               = ggml_add(ctx->ggml_ctx, vec, guidance_in->forward(ctx, guidance_emb));
             }
 
@@ -529,12 +530,12 @@ namespace Hunyuan {
 
             auto out = forward_orig(ctx, x, context, timestep, pe, guidance, y, txt_byt5, clip_fea, timestep_r, N);
 
-            out = unpatchify(ctx->ggml_ctx, out, t_len, h_len, w_len);  // [N*C, (T+pad_t) + (T2+pad_t2), H + pad_h, W + pad_w]
+            out = unpatchify(ctx, out, t_len, h_len, w_len);  // [N*C, (T+pad_t) + (T2+pad_t2), H + pad_h, W + pad_w]
 
             // slice
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 2, 0, T);  // [N*C, T, H + pad_h, W + pad_w]
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N*C, T, H, W + pad_w]
-            out = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N*C, T, H, W]
+            out = ggml_ext_slice(ctx, out, 2, 0, T);  // [N*C, T, H + pad_h, W + pad_w]
+            out = ggml_ext_slice(ctx, out, 1, 0, H);  // [N*C, T, H, W + pad_w]
+            out = ggml_ext_slice(ctx, out, 0, 0, W);  // [N*C, T, H, W]
 
             return out;
         }

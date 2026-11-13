@@ -164,9 +164,9 @@ namespace MOSSImage {
             auto c            = ctx->ggml_ctx;
             auto linear       = [&](const char* name, ggml_tensor* h) { return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h); };
             int64_t image_len = image->ne[0] * image->ne[1];
-            auto x            = linear("video_embedder", DiT::patchify(c, image, 1, 1));
+            auto x            = linear("video_embedder", DiT::patchify(ctx, image, 1, 1));
             text              = linear("text_embedder.proj", text);
-            auto text_pe      = ggml_ext_slice(c, pe, 3, image_len, image_len + text->ne[1]);
+            auto text_pe      = ggml_ext_slice(ctx, pe, 3, image_len, image_len + text->ne[1]);
             for (int i = 0; i < 2; ++i) {
                 text = std::dynamic_pointer_cast<TextBlock>(blocks["text_embedder.blocks." + std::to_string(i)])->forward(ctx, text, text_pe);
             }
@@ -175,7 +175,7 @@ namespace MOSSImage {
             auto head = linear("video_head_modulation", time);
             std::array<ggml_tensor*, 6> parts;
             for (int i = 0; i < 6; ++i) {
-                parts[i] = ggml_ext_slice(c, mod, 0, i * config.dim, (i + 1) * config.dim);
+                parts[i] = ggml_ext_slice(ctx, mod, 0, i * config.dim, (i + 1) * config.dim);
                 if (ctx->graph != nullptr) {
                     ggml_build_forward_expand(ctx->graph, parts[i]);
                 }
@@ -187,13 +187,13 @@ namespace MOSSImage {
                     sd::ggml_graph_cut::mark_graph_cut(x, "moss_image.layers." + std::to_string(i), "x");
                 }
             }
-            x          = ggml_ext_slice(c, x, 1, 0, image_len);
+            x          = ggml_ext_slice(ctx, x, 1, 0, image_len);
             x          = std::dynamic_pointer_cast<RMSNorm>(blocks["final_norm_video"])->forward(ctx, x);
-            auto shift = ggml_ext_slice(c, head, 0, 0, config.dim);
-            auto scale = ggml_ext_slice(c, head, 0, config.dim, 2 * config.dim);
+            auto shift = ggml_ext_slice(ctx, head, 0, 0, config.dim);
+            auto scale = ggml_ext_slice(ctx, head, 0, config.dim, 2 * config.dim);
             x          = ggml_ext_modulate(ctx, x, shift, scale);
             x          = linear("final_linear_video", x);
-            return DiT::unpatchify(c, x, image->ne[1], image->ne[0], 1, 1);
+            return DiT::unpatchify(ctx, x, image->ne[1], image->ne[0], 1, 1);
         }
     };
 

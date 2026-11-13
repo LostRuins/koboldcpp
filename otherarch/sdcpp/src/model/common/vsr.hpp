@@ -177,7 +177,7 @@ namespace VSR {
                     params.window_height[i] = windows[i].first;
                     params.window_width[i]  = windows[i].second;
                 }
-                if (auto out = sd_ggml_window_attn(c, ctx->backend, q, k, v, params))
+                if (auto out = ggml_ext_window_attn(ctx, q, k, v, params))
                     return out;
             }
 #endif
@@ -192,7 +192,7 @@ namespace VSR {
                 auto tk   = ggml_get_rows(c, k, ki);
                 auto tv   = ggml_get_rows(c, v, ki);
                 auto mask = inputs.input(ctx, tile.mask);
-                auto out  = ggml_ext_attention_ext(c, ctx->backend, tq, tk, tv, heads, mask, false, ctx->flash_attn_enabled);
+                auto out  = ggml_ext_attention_ext(ctx, tq, tk, tv, heads, mask, false, ctx->flash_attn_enabled);
                 out       = ggml_reshape_3d(c, out, out->ne[0], tile.width, tile.height);
                 row       = row ? ggml_concat(c, row, out, 1) : out;
                 row_width += tile.width;

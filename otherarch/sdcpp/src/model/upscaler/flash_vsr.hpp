@@ -146,7 +146,7 @@ namespace RelayVSR {
             auto y                         = attention->forward(ctx, attention_norm->forward(ctx, x), qpe, kpe, local, name, condition_slot, start_slot, end_slot, history);
             x                              = ggml_add(c, x, y);
             y                              = feed_forward_gate_up_proj->forward(ctx, feed_forward_norm->forward(ctx, x));
-            auto parts                     = ggml_ext_chunk(c, y, 2, 0);
+            auto parts                     = ggml_ext_chunk(ctx, y, 2, 0);
             y                              = ggml_mul(c, ggml_silu(c, parts[0]), parts[1]);
             return ggml_add(c, x, feed_forward_down->forward(ctx, y));
         }

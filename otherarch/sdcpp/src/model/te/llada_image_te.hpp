@@ -78,15 +78,15 @@ namespace LLaDAImageTE {
             auto b = params["in_proj_bias"];
 
             auto slice_w = [&](int64_t index) {
-                return ggml_ext_slice(gctx, w, 1, index * hidden_size, (index + 1) * hidden_size);
+                return ggml_ext_slice(ctx, w, 1, index * hidden_size, (index + 1) * hidden_size);
             };
             auto slice_b = [&](int64_t index) {
-                return ggml_ext_slice(gctx, b, 0, index * hidden_size, (index + 1) * hidden_size);
+                return ggml_ext_slice(ctx, b, 0, index * hidden_size, (index + 1) * hidden_size);
             };
 
-            auto q = ggml_ext_linear(gctx, query, slice_w(0), slice_b(0));
-            auto k = ggml_ext_linear(gctx, context, slice_w(1), slice_b(1));
-            auto v = ggml_ext_linear(gctx, context, slice_w(2), slice_b(2));
+            auto q = ggml_ext_linear(ctx, query, slice_w(0), slice_b(0));
+            auto k = ggml_ext_linear(ctx, context, slice_w(1), slice_b(1));
+            auto v = ggml_ext_linear(ctx, context, slice_w(2), slice_b(2));
 
             auto x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, mask);  // [N, num_queries, hidden_size]
             return out_proj->forward(ctx, x);
@@ -297,9 +297,9 @@ namespace LLaDAImageTE {
 
             int64_t hidden_size = num_heads * head_dim;
             auto qkv            = qkv_proj->forward(ctx, x);
-            auto q              = ggml_ext_slice(gctx, qkv, 0, 0, hidden_size);
-            auto k              = ggml_ext_slice(gctx, qkv, 0, hidden_size, hidden_size * 2);
-            auto v              = ggml_ext_slice(gctx, qkv, 0, hidden_size * 2, hidden_size * 3);
+            auto q              = ggml_ext_slice(ctx, qkv, 0, 0, hidden_size);
+            auto k              = ggml_ext_slice(ctx, qkv, 0, hidden_size, hidden_size * 2);
+            auto v              = ggml_ext_slice(ctx, qkv, 0, hidden_size * 2, hidden_size * 3);
 
             auto out = ggml_ext_attention_ext(ctx, q, k, v, num_heads);
             return out_proj->forward(ctx, out);

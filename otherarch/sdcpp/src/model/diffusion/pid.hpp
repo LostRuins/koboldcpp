@@ -185,14 +185,15 @@ namespace Pid {
         return ggml_add(ctx, ggml_add(ctx, x, ggml_mul(ctx, x, scale)), shift);
     }
 
-    inline ggml_tensor* replicate_pad_2d(ggml_context* ctx, ggml_tensor* x) {
-        auto left  = ggml_ext_slice(ctx, x, 0, 0, 1);
-        auto right = ggml_ext_slice(ctx, x, 0, x->ne[0] - 1, x->ne[0]);
+    inline ggml_tensor* replicate_pad_2d(GGMLRunnerContext* runner_ctx, ggml_tensor* x) {
+        auto ctx   = runner_ctx->ggml_ctx;
+        auto left  = ggml_ext_slice(runner_ctx, x, 0, 0, 1);
+        auto right = ggml_ext_slice(runner_ctx, x, 0, x->ne[0] - 1, x->ne[0]);
         x          = ggml_concat(ctx, left, x, 0);
         x          = ggml_concat(ctx, x, right, 0);
 
-        auto top    = ggml_ext_slice(ctx, x, 1, 0, 1);
-        auto bottom = ggml_ext_slice(ctx, x, 1, x->ne[1] - 1, x->ne[1]);
+        auto top    = ggml_ext_slice(runner_ctx, x, 1, 0, 1);
+        auto bottom = ggml_ext_slice(runner_ctx, x, 1, x->ne[1] - 1, x->ne[1]);
         x           = ggml_concat(ctx, top, x, 1);
         return ggml_concat(ctx, x, bottom, 1);
     }
@@ -235,7 +236,7 @@ namespace Pid {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* t) {
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
-            auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size, 10);
+            auto t_emb = ggml_ext_timestep_embedding(ctx, t, frequency_embedding_size, 10);
             t_emb      = mlp_0->forward(ctx, t_emb);
             t_emb      = ggml_silu_inplace(ctx->ggml_ctx, t_emb);
             return mlp_2->forward(ctx, t_emb);
@@ -292,7 +293,7 @@ namespace Pid {
             auto proj     = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
             auto qkv         = qkv_proj->forward(ctx, x);
-            auto qkv_vec     = split_qkv(ctx->ggml_ctx, qkv);
+            auto qkv_vec     = ggml_ext_chunk(ctx, qkv, 3, 0);
             int64_t L        = x->ne[1];
             int64_t N        = x->ne[2];
             int64_t head_dim = dim / num_heads;
@@ -342,14 +343,14 @@ namespace Pid {
             int64_t N        = x->ne[2];
             int64_t head_dim = dim / num_heads;
 
-            auto qkv_x = split_qkv(ctx->ggml_ctx, qkv_x_proj->forward(ctx, x));
+            auto qkv_x = ggml_ext_chunk(ctx, qkv_x_proj->forward(ctx, x), 3, 0);
             auto qx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[0], head_dim, num_heads, Nx, N);
             auto kx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[1], head_dim, num_heads, Nx, N);
             auto vx    = ggml_reshape_4d(ctx->ggml_ctx, qkv_x[2], head_dim, num_heads, Nx, N);
             qx         = q_norm_x->forward(ctx, qx);
             kx         = k_norm_x->forward(ctx, kx);
 
-            auto qkv_y = split_qkv(ctx->ggml_ctx, qkv_y_proj->forward(ctx, y));
+            auto qkv_y = ggml_ext_chunk(ctx, qkv_y_proj->forward(ctx, y), 3, 0);
             auto qy    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[0], head_dim, num_heads, Ny, N);
             auto ky    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[1], head_dim, num_heads, Ny, N);
             auto vy    = ggml_reshape_4d(ctx->ggml_ctx, qkv_y[2], head_dim, num_heads, Ny, N);
@@ -362,8 +363,8 @@ namespace Pid {
             auto pos_joint = ggml_concat(ctx->ggml_ctx, pos_txt, pos_img, 3);
             auto out       = Rope::attention(ctx, q_joint, k_joint, v_joint, pos_joint, nullptr, 1.0f, true);
 
-            auto out_y = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, Ny);
-            auto out_x = ggml_ext_slice(ctx->ggml_ctx, out, 1, Ny, Ny + Nx);
+            auto out_y = ggml_ext_slice(ctx, out, 1, 0, Ny);
+            auto out_x = ggml_ext_slice(ctx, out, 1, Ny, Ny + Nx);
             return {proj_x->forward(ctx, out_x), proj_y->forward(ctx, out_y)};
         }
     };
@@ -400,8 +401,8 @@ namespace Pid {
             auto ada_img = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation_img.0"]);
             auto ada_txt = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation_txt.0"]);
 
-            auto mx = ggml_ext_chunk(ctx->ggml_ctx, ada_img->forward(ctx, c), 6, 0);
-            auto my = ggml_ext_chunk(ctx->ggml_ctx, ada_txt->forward(ctx, c), 6, 0);
+            auto mx = ggml_ext_chunk(ctx, ada_img->forward(ctx, c), 6, 0);
+            auto my = ggml_ext_chunk(ctx, ada_txt->forward(ctx, c), 6, 0);
 
             auto x_norm   = apply_adaln(ctx->ggml_ctx, norm_x1->forward(ctx, x), mx[0], mx[1]);
             auto y_norm   = apply_adaln(ctx->ggml_ctx, norm_y1->forward(ctx, y), my[0], my[1]);
@@ -438,13 +439,13 @@ namespace Pid {
             int64_t L  = (W / patch_size) * (H / patch_size);
             int64_t P2 = patch_size * patch_size;
 
-            auto x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, inputs, 2, 0, 1, 3));
+            auto x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, inputs, 2, 0, 1, 3));
             x      = ggml_reshape_3d(ctx->ggml_ctx, x, in_channels, W * H, B);
             x      = proj->forward(ctx, x);
             x      = ggml_add(ctx->ggml_ctx, x, pos_full);
             x      = ggml_reshape_4d(ctx->ggml_ctx, x, hidden_size_output, W, H, B);
-            x      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));
-            x      = DiT::patchify(ctx->ggml_ctx, x, static_cast<int>(patch_size), static_cast<int>(patch_size), false);
+            x      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));
+            x      = DiT::patchify(ctx, x, static_cast<int>(patch_size), static_cast<int>(patch_size), false);
             x      = ggml_reshape_3d(ctx->ggml_ctx, x, hidden_size_output, P2, L * B);
             return x;
         }
@@ -500,7 +501,7 @@ namespace Pid {
 
             auto ada_params = ada->forward(ctx, s_cond);
             ada_params      = ggml_reshape_3d(ctx->ggml_ctx, ada_params, 6 * pixel_dim, P2, BL);
-            auto mod        = ggml_ext_chunk(ctx->ggml_ctx, ada_params, 6, 0);
+            auto mod        = ggml_ext_chunk(ctx, ada_params, 6, 0);
 
             auto x_norm    = apply_adaln(ctx->ggml_ctx, norm1->forward(ctx, x), mod[0], mod[1]);
             auto x_flat    = ggml_reshape_2d(ctx->ggml_ctx, x_norm, P2 * pixel_dim, BL);
@@ -564,12 +565,12 @@ namespace Pid {
             auto conv2 = std::dynamic_pointer_cast<Conv2d>(blocks["block.5"]);
             auto h     = ggml_silu_inplace(ctx->ggml_ctx, norm1->forward(ctx, x));
             if (replicate_padding) {
-                h = replicate_pad_2d(ctx->ggml_ctx, h);
+                h = replicate_pad_2d(ctx, h);
             }
             h = conv1->forward(ctx, h);
             h = ggml_silu_inplace(ctx->ggml_ctx, norm2->forward(ctx, h));
             if (replicate_padding) {
-                h = replicate_pad_2d(ctx->ggml_ctx, h);
+                h = replicate_pad_2d(ctx, h);
             }
             h = conv2->forward(ctx, h);
             return ggml_add(ctx->ggml_ctx, x, h);
@@ -628,13 +629,13 @@ namespace Pid {
             if (unpatchify_factor > 1) {
                 int64_t latent_h = lq_latent->ne[1];
                 int64_t latent_w = lq_latent->ne[0];
-                lq_latent        = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, lq_latent, 2, 0, 1, 3));
+                lq_latent        = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, lq_latent, 2, 0, 1, 3));
                 lq_latent        = ggml_reshape_3d(ctx->ggml_ctx,
                                                    lq_latent,
                                                    lq_latent->ne[0],
                                                    lq_latent->ne[1] * lq_latent->ne[2],
                                                    lq_latent->ne[3]);
-                lq_latent        = DiT::unpatchify(ctx->ggml_ctx,
+                lq_latent        = DiT::unpatchify(ctx,
                                                    lq_latent,
                                                    latent_h,
                                                    latent_w,
@@ -658,12 +659,12 @@ namespace Pid {
             }
 
             if (config.lq_replicate_padding) {
-                lq_latent = replicate_pad_2d(ctx->ggml_ctx, lq_latent);
+                lq_latent = replicate_pad_2d(ctx, lq_latent);
             }
             auto feat = conv0->forward(ctx, lq_latent);
             feat      = ggml_silu_inplace(ctx->ggml_ctx, feat);
             if (config.lq_replicate_padding) {
-                feat = replicate_pad_2d(ctx->ggml_ctx, feat);
+                feat = replicate_pad_2d(ctx, feat);
             }
             feat = conv2->forward(ctx, feat);
             for (int i = 0; i < config.lq_num_res_blocks; ++i) {
@@ -674,7 +675,7 @@ namespace Pid {
             int64_t B   = feat->ne[3];
             int64_t C   = feat->ne[2];
             int64_t L   = target_pH * target_pW;
-            auto tokens = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, feat, 2, 0, 1, 3));
+            auto tokens = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, feat, 2, 0, 1, 3));
             tokens      = ggml_reshape_3d(ctx->ggml_ctx, tokens, C, L, B);
 
             int num_outputs = static_cast<int>((config.patch_depth + config.lq_interval - 1) / config.lq_interval);
@@ -754,15 +755,15 @@ namespace Pid {
             int64_t L      = Hs * Ws;
             int64_t P2     = config.patch_size * config.patch_size;
 
-            auto x_patches = DiT::patchify(ctx->ggml_ctx, x, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size), true);
+            auto x_patches = DiT::patchify(ctx, x, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size), true);
             auto t_emb     = t_embedder->forward(ctx, timesteps);
             auto condition = ggml_silu(ctx->ggml_ctx, t_emb);
 
             GGML_ASSERT(context != nullptr);
             int64_t Ltxt = std::min<int64_t>(context->ne[1], config.txt_max_length);
-            auto y       = ggml_ext_slice(ctx->ggml_ctx, context, 1, 0, Ltxt);
+            auto y       = ggml_ext_slice(ctx, context, 1, 0, Ltxt);
             auto y_emb   = y_embedder->forward(ctx, y);
-            auto y_pos   = ggml_ext_slice(ctx->ggml_ctx, params["y_pos_embedding"], 1, 0, Ltxt);
+            auto y_pos   = ggml_ext_slice(ctx, params["y_pos_embedding"], 1, 0, Ltxt);
             y_emb        = ggml_add(ctx->ggml_ctx, y_emb, y_pos);
 
             std::vector<ggml_tensor*> lq_features = lq_proj->forward(ctx, lq_latent, Hs, Ws);
@@ -809,15 +810,15 @@ namespace Pid {
 
             pixels   = final_layer->forward(ctx, pixels);
             pixels   = ggml_reshape_3d(ctx->ggml_ctx, pixels, config.in_channels * P2, L, B);
-            auto out = DiT::unpatchify(ctx->ggml_ctx,
+            auto out = DiT::unpatchify(ctx,
                                        pixels,
                                        Hs,
                                        Ws,
                                        static_cast<int>(config.patch_size),
                                        static_cast<int>(config.patch_size),
                                        false);
-            out      = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H_orig);
-            out      = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W_orig);
+            out      = ggml_ext_slice(ctx, out, 1, 0, H_orig);
+            out      = ggml_ext_slice(ctx, out, 0, 0, W_orig);
             return out;
         }
     };

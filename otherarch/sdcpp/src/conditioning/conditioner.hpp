@@ -3448,8 +3448,8 @@ struct LTXAVTextProjection : public GGMLBlock {
 
         auto video_projection = std::dynamic_pointer_cast<Linear>(blocks["video_aggregate_embed"]);
         auto audio_projection = std::dynamic_pointer_cast<Linear>(blocks["audio_aggregate_embed"]);
-        auto video_in         = ggml_ext_scale(ctx->ggml_ctx, x, std::sqrt(4096.f / static_cast<float>(kHiddenSize)));
-        auto audio_in         = ggml_ext_scale(ctx->ggml_ctx, x, std::sqrt(2048.f / static_cast<float>(kHiddenSize)));
+        auto video_in         = ggml_ext_scale(ctx, x, std::sqrt(4096.f / static_cast<float>(kHiddenSize)));
+        auto audio_in         = ggml_ext_scale(ctx, x, std::sqrt(2048.f / static_cast<float>(kHiddenSize)));
         auto video            = video_projection->forward(ctx, video_in);
         auto audio            = audio_projection->forward(ctx, audio_in);
         return ggml_concat(ctx->ggml_ctx, video, audio, 0);
