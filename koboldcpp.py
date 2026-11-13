@@ -41,6 +41,7 @@ from typing import Any, Dict, Optional, Tuple
 import shutil
 import subprocess
 import gzip
+import zlib
 import queue
 
 # constants
@@ -73,6 +74,45 @@ queue_concurrent_limit = 10
 swa_padding_default = 0
 default_reqtimeout = 600 # 10 min default
 default_maxctx = 16384
+
+
+class RequestBodyEncodingError(ValueError):
+    pass
+
+
+class RequestBodyTooLargeError(ValueError):
+    pass
+
+
+def decode_request_body(body, content_encoding, max_size):
+    """Decode HTTP Content-Encoding values while bounding expanded payload size."""
+    encodings = [encoding.strip().lower() for encoding in (content_encoding or "").split(",") if encoding.strip()]
+    decoded = body
+    for encoding in reversed(encodings):
+        if encoding == "identity":
+            continue
+        if encoding in ("gzip", "x-gzip"):
+            decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        elif encoding == "deflate":
+            decompressor = zlib.decompressobj()
+        else:
+            raise RequestBodyEncodingError(f"Unsupported Content-Encoding: {encoding}")
+
+        try:
+            decoded = decompressor.decompress(decoded, max_size + 1)
+            if len(decoded) > max_size:
+                raise RequestBodyTooLargeError(f"Decompressed request body exceeds {max_size} bytes")
+            decoded += decompressor.flush(max_size + 1 - len(decoded))
+        except RequestBodyTooLargeError:
+            raise
+        except zlib.error as e:
+            raise RequestBodyEncodingError(f"Invalid {encoding} request body: {e}") from e
+
+        if len(decoded) > max_size:
+            raise RequestBodyTooLargeError(f"Decompressed request body exceeds {max_size} bytes")
+        if not decompressor.eof or decompressor.unused_data:
+            raise RequestBodyEncodingError(f"Invalid {encoding} request body")
+    return decoded
 
 def parse_reqtimeout(value):
     try:
@@ -7954,10 +7994,11 @@ Change Mode<br>
         contlenstr = self.headers['content-length']
         content_length = 0
         body = None
+        max_pl = int(args.maxrequestsize) if args.maxrequestsize else 32
+        max_payload_size = 1024*1024*max_pl
         if contlenstr:
             content_length = int(contlenstr)
-            max_pl = int(args.maxrequestsize) if args.maxrequestsize else 32
-            if content_length > (1024*1024*max_pl): #payload size limit
+            if content_length > max_payload_size: #payload size limit
                 self.send_response(500)
                 self.end_headers(content_type='application/json')
                 self.wfile.write(json.dumps({"detail": {
@@ -7999,6 +8040,27 @@ Change Mode<br>
                 "type": "bad_input",
                 }}).encode())
                 return
+
+        try:
+            body = decode_request_body(body, self.headers.get('content-encoding', ''), max_payload_size)
+        except RequestBodyTooLargeError:
+            self.send_response(413)
+            self.end_headers(content_type='application/json')
+            self.wfile.write(json.dumps({"detail": {
+            "msg": f"Decompressed payload is too big. Max payload size is {max_pl}MB.",
+            "type": "bad_input",
+            }}).encode())
+            return
+        except RequestBodyEncodingError as e:
+            utfprint("Request Body Encoding Error: " + str(e))
+            response_code = 415 if str(e).startswith("Unsupported Content-Encoding:") else 400
+            self.send_response(response_code)
+            self.end_headers(content_type='application/json')
+            self.wfile.write(json.dumps({"detail": {
+            "msg": str(e),
+            "type": "bad_input",
+            }}).encode())
+            return
 
         self.path = self.path.rstrip('/')
         clean_path = self.path.split("?")[0] #for cases where we do not want query params
@@ -9301,7 +9363,7 @@ Change Mode<br>
         else:
             self.send_header('access-control-allow-origin', '*')
         self.send_header('access-control-allow-methods', '*')
-        self.send_header('access-control-allow-headers', '*, Accept, Content-Type, Content-Length, Cache-Control, Accept-Encoding, X-CSRF-Token, Client-Agent, X-Fields, Content-Type, Authorization, X-Requested-With, X-HTTP-Method-Override, apikey, genkey')
+        self.send_header('access-control-allow-headers', '*, Accept, Content-Type, Content-Length, Content-Encoding, Cache-Control, Accept-Encoding, X-CSRF-Token, Client-Agent, X-Fields, Content-Type, Authorization, X-Requested-With, X-HTTP-Method-Override, apikey, genkey')
         self.send_header('access-control-allow-private-network', 'true')
         self.send_header("cache-control", "no-store")
         if content_type is not None:
