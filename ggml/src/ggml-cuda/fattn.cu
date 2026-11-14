@@ -14,6 +14,7 @@
 #define GGML_CUDA_FA_Q5_1_F16 0
 #define GGML_CUDA_FA_Q8_0_F16 0
 #define GGML_CUDA_FA_BF16_F16 0
+#define GGML_CUDA_FA_F16_F8_E4M3 0
 
 #define GGML_CUDA_FA_F16_Q4_0 0
 #define GGML_CUDA_FA_Q4_0_Q4_0 1
@@ -22,6 +23,7 @@
 #define GGML_CUDA_FA_Q5_1_Q4_0 0
 #define GGML_CUDA_FA_Q8_0_Q4_0 0
 #define GGML_CUDA_FA_BF16_Q4_0 0
+#define GGML_CUDA_FA_Q4_0_F8_E4M3 0
 
 #define GGML_CUDA_FA_F16_Q4_1 0
 #define GGML_CUDA_FA_Q4_0_Q4_1 0
@@ -30,6 +32,7 @@
 #define GGML_CUDA_FA_Q5_1_Q4_1 0
 #define GGML_CUDA_FA_Q8_0_Q4_1 0
 #define GGML_CUDA_FA_BF16_Q4_1 0
+#define GGML_CUDA_FA_Q4_1_F8_E4M3 0
 
 #define GGML_CUDA_FA_F16_Q5_0 0
 #define GGML_CUDA_FA_Q4_0_Q5_0 0
@@ -38,6 +41,7 @@
 #define GGML_CUDA_FA_Q5_1_Q5_0 0
 #define GGML_CUDA_FA_Q8_0_Q5_0 0
 #define GGML_CUDA_FA_BF16_Q5_0 0
+#define GGML_CUDA_FA_Q5_0_F8_E4M3 0
 
 #define GGML_CUDA_FA_F16_Q5_1 0
 #define GGML_CUDA_FA_Q4_0_Q5_1 0
@@ -46,6 +50,7 @@
 #define GGML_CUDA_FA_Q5_1_Q5_1 1
 #define GGML_CUDA_FA_Q8_0_Q5_1 0
 #define GGML_CUDA_FA_BF16_Q5_1 0
+#define GGML_CUDA_FA_Q5_1_F8_E4M3 0
 
 #define GGML_CUDA_FA_F16_Q8_0 0
 #define GGML_CUDA_FA_Q4_0_Q8_0 0
@@ -54,6 +59,7 @@
 #define GGML_CUDA_FA_Q5_1_Q8_0 0
 #define GGML_CUDA_FA_Q8_0_Q8_0 1
 #define GGML_CUDA_FA_BF16_Q8_0 0
+#define GGML_CUDA_FA_Q8_0_F8_E4M3 0
 
 #define GGML_CUDA_FA_F16_BF16 0
 #define GGML_CUDA_FA_Q4_0_BF16 0
@@ -62,6 +68,16 @@
 #define GGML_CUDA_FA_Q5_1_BF16 0
 #define GGML_CUDA_FA_Q8_0_BF16 0
 #define GGML_CUDA_FA_BF16_BF16 1
+#define GGML_CUDA_FA_BF16_F8_E4M3 0
+
+#define GGML_CUDA_FA_F8_E4M3_F16 0
+#define GGML_CUDA_FA_F8_E4M3_Q4_0 0
+#define GGML_CUDA_FA_F8_E4M3_Q4_1 0
+#define GGML_CUDA_FA_F8_E4M3_Q5_0 0
+#define GGML_CUDA_FA_F8_E4M3_Q5_1 0
+#define GGML_CUDA_FA_F8_E4M3_Q8_0 0
+#define GGML_CUDA_FA_F8_E4M3_BF16 0
+#define GGML_CUDA_FA_F8_E4M3_F8_E4M3 0
 
 #if !defined(GGML_USE_MUSA)
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
