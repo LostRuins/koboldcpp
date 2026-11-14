@@ -1,4 +1,5 @@
 *.o
+*.d
 *.a
 *.bin
 *.tmp.yaml
