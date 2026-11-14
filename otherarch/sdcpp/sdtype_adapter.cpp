@@ -933,8 +933,20 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     bool is_mageflow = sd_version_is_mage_flow(tempver);
     bool is_minimaxh3 = sd_version_is_minimax_h3(tempver);
     bool is_fibo2 = (tempver == VERSION_FIBO2);
+    bool is_lingbot = sd_version_is_lingbot_video(tempver);
     bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_mosi || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_llada || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris || is_fibo2);
-    bool has_llm_vision = (is_qwenimg || is_longcat || is_boogu || is_fibo2);
+    // LLM text encoders with a vision tower (Qwen-VL family); these models
+    // can take a mmproj file (see the llm.visual handling in src/name_conversion.cpp)
+    bool has_llm_vision = (
+        // Qwen 2.5-VL
+        is_qwenimg ||  // Qwen Image 1.0/2.0 (2.1 uses Qwen 3-VL)
+        is_longcat ||
+        // Qwen 3-VL
+        is_fibo2 || is_flux3 || is_lingbot || is_ideogram || is_boogu ||
+        is_sefi || is_krea2 || is_minimaxh3 || is_mageflow || is_iris ||
+        // Qwen 3.5
+        is_mosi
+    );
     bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi || is_llada);
 
     std::string kcpp_main_tokenizer;
