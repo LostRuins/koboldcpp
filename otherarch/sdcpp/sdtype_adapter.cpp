@@ -16,6 +16,8 @@
 #include <cinttypes>
 #include <algorithm>
 #include <filesystem>
+#include <set>
+#include <tuple>
 
 #include "otherarch/utils.h"
 #include "otherarch/webp_image.h"
@@ -24,6 +26,7 @@
 
 #include "stable-diffusion.h"
 #include "src/kcpp_sd_extensions.h"
+#include "src/conditioning/prompt_input.h"
 #include "sdcpp_gguf_tokenizer.h"
 #include "src/core/util.h"
 #include "src/model.h"
@@ -281,6 +284,7 @@ struct SDParams {
     std::string stacked_id_embeddings_path;
     std::string tokenizer; // settled tokenizer config (was StableDiffusionGGML::kcpp_tokenizer_path)
     sd_type_t wtype = SD_TYPE_COUNT;
+    bool has_llm_vision = false; // LLM conditioner with a vision tower (set at load)
 
     std::string prompt;
     std::string negative_prompt;
@@ -321,6 +325,12 @@ static uint8_t * input_mask_buffer = NULL;
 static uint8_t * upscale_src_buffer = NULL;
 static std::vector<uint8_t *> input_extraimage_buffers;
 const int max_extra_images = 4;
+
+// per-request pool of reference images (original request order) served by
+// prompt_image_from_refs for <image:N> prompt tags; the callback itself is
+// registered once at model load
+static std::vector<sd_image_t> prompt_ref_image_pool;
+static bool prompt_refs_zero_based = false;
 
 static std::string sdmaingpuenv;
 static int cfg_tiled_vae_threshold = 0;
@@ -628,6 +638,149 @@ static model_info get_model_info(sd_ctx_t* ctx)
     res.is_video_model = model_def && model_def->traits.supports_video_generation;
 
     return res;
+}
+
+// image prompt spec:
+// tags are <image:N> or <image:+N>, with N indexing the extra images array
+// the '+' means the image is processed by the VLM _and_ provided in ref_images;
+// images mentioned only by tags without '+' are removed from ref_images
+// indexing is adaptive: zero-based if any tag uses 0, otherwise 1-based.
+
+struct image_tag_refs {
+    std::set<int> hidden;  // referenced, and all occurrences without '+'
+    bool zero_based = false;
+    bool has_tags = false;
+};
+
+static bool parse_image_tag_source(const std::string& source, int& idx_out, bool& plus_out)
+{
+    size_t b = source.find_first_not_of(" \t");
+    size_t e = source.find_last_not_of(" \t");
+    if (b == std::string::npos) {
+        return false;
+    }
+    size_t pos = (source[b] == '+') ? b + 1 : b;
+    if (pos == e + 1) {
+        return false;
+    }
+    int idx = 0;
+    for (; pos <= e; ++pos) {
+        char c = source[pos];
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        idx = idx * 10 + (c - '0');
+        if (idx > 1000000) {
+            return false;
+        }
+    }
+    idx_out = idx;
+    plus_out = (source[b] == '+');
+    return true;
+}
+
+// Collects the <image:N>/<image:+N> tags from both prompts into a single pool,
+// and extract the set of hidden images and the zero-based indicator
+static bool collect_image_tags(const std::string& prompt, const std::string& negative_prompt,
+                               size_t image_count, image_tag_refs& refs, std::string& err)
+{
+    refs = {};
+    std::vector<std::tuple<std::string, int, bool>> raw; // (source, idx, plus)
+    for (const std::string& text : {prompt, negative_prompt}) {
+        std::vector<sd::PromptPart> parts;
+        try {
+            parts = sd::parse_prompt_input(text);
+        } catch (const std::exception& e) {
+            err = std::string("invalid <image:...> prompt tag: ") + e.what();
+            return false;
+        }
+        for (const auto& part : parts) {
+            if (part.type != sd::PromptPart::Type::IMAGE) {
+                continue;
+            }
+            int idx;
+            bool plus;
+            if (!parse_image_tag_source(part.content, idx, plus)) {
+                err = "unsupported <image:" + part.content + "> tag, only <image:N> and <image:+N> are supported";
+                return false;
+            }
+            raw.emplace_back(part.content, idx, plus);
+        }
+    }
+    if (raw.empty()) {
+        return true;
+    }
+    refs.has_tags = true;
+    for (const auto& [source, idx, plus] : raw) {
+        refs.zero_based = refs.zero_based || (idx == 0);
+    }
+    std::set<int> mentioned, kept;
+    for (const auto& [source, idx, plus] : raw) {
+        int real = refs.zero_based ? idx : idx - 1;
+        if (real < 0 || real >= (int)image_count) {
+            err = "image tag <image:" + source + "> out of range, this request has "
+                + std::to_string(image_count) + " reference image(s)";
+            return false;
+        }
+        mentioned.insert(real);
+        if (plus) {
+            kept.insert(real);
+        }
+    }
+    for (int i : mentioned) {
+        if (!kept.count(i)) {
+            refs.hidden.insert(i);
+        }
+    }
+    return true;
+}
+
+// replaces each <image:N> tag with " imageK " (K the 1-based index of the
+// reference image), dropping the tag syntax but keeping the reference in text
+// this at least has a fair chance to be understood by an edit model
+static std::string strip_image_tags(const std::string& text, bool zero_based)
+{
+    // the caller has already validated the text with collect_image_tags
+    try {
+        std::string result;
+        for (const auto& part : sd::parse_prompt_input(text)) {
+            if (part.type != sd::PromptPart::Type::IMAGE) {
+                result += part.content;
+                continue;
+            }
+            int idx;
+            bool plus;
+            if (!parse_image_tag_source(part.content, idx, plus)) {
+                result += " " + part.content + " ";
+                continue;
+            }
+            result += " image" + std::to_string(idx + (zero_based ? 1 : 0)) + " ";
+        }
+        return result;
+    } catch (...) {
+        return text;
+    }
+}
+
+// callback registered at model load (sd_set_prompt_image_callback): resolves
+// <image:N> / <image:+N> prompt tags to the per-request reference image pool
+static bool prompt_image_from_refs(const char* source, void* /*data*/, sd_image_t* image_out)
+{
+    int idx;
+    bool plus;
+    if (!source || !parse_image_tag_source(source, idx, plus)) {
+        return false;
+    }
+    idx = prompt_refs_zero_based ? idx : idx - 1;
+    if (idx < 0 || idx >= (int)prompt_ref_image_pool.size()) {
+        return false;
+    }
+    const sd_image_t& image = prompt_ref_image_pool[idx];
+    if (!image.data) {
+        return false;
+    }
+    *image_out = image;
+    return true;
 }
 
 // this is a class only to access a protected member
@@ -947,6 +1100,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         // Qwen 3.5
         is_mosi
     );
+    sd_params.has_llm_vision = has_llm_vision;
     bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi || is_llada);
 
     std::string kcpp_main_tokenizer;
@@ -1566,6 +1720,8 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     sd_set_progress_callback(progress_callback, nullptr);
     sd_set_generation_progress_callback(sd_ctx, generation_progress_callback, nullptr);
+    // <image:N> prompt tag resolution; the per-request pool is set in sdtype_generate
+    sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, nullptr);
 
     return true;
 }
@@ -2086,6 +2242,33 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
     sd_params->prompt = inputs.prompt;
     sd_params->negative_prompt = inputs.negative_prompt;
+    // <image:N>/<image:+N> prompt tags reference extra_image_data by position
+    // and route the images to the VLM conditioner; images will be removed from
+    // the ref_images parameter unless a reference has a '+' tag
+    image_tag_refs image_tags;
+    bool vision_tags_active = false;
+    {
+        size_t ref_count = std::min(extra_image_data.size(), (size_t)max_extra_images);
+        std::string tag_err;
+        if (!collect_image_tags(sd_params->prompt, sd_params->negative_prompt, ref_count, image_tags, tag_err)) {
+            return sd_generation.error(("KCPP SD: " + tag_err).c_str());
+        }
+        if (image_tags.has_tags) {
+            if (sd_params->has_llm_vision) {
+                vision_tags_active = true;
+            } else {
+                // the conditioner can't see images: replace the tags with plain
+                // references (upstream would abort the generation)
+                if (!sd_is_quiet && sddebugmode == 1) {
+                    printf("\nKCPP SD: replacing <image:...> tags with plain references, the model has no vision encoder\n");
+                }
+                sd_params->prompt = strip_image_tags(sd_params->prompt, image_tags.zero_based);
+                sd_params->negative_prompt = strip_image_tags(sd_params->negative_prompt, image_tags.zero_based);
+            }
+        }
+    }
+    prompt_ref_image_pool.clear();
+    prompt_refs_zero_based = image_tags.zero_based;
     sd_params->cfg_scale = inputs.cfg_scale;
     sd_params->distilled_guidance = inputs.distilled_guidance;
     sd_params->sample_steps = inputs.sample_steps;
@@ -2166,10 +2349,17 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    //if a single extra image is provided, mask is NOT provided, and img2img image is NOT provided
-    //and it's a (SD1.5, SDXL) model that doesn't support extra images (see extra_image_data later)
-    //swap extra image data into img2img instead (graceful fallback)
-    if(!supports_reference_images(info) && !force_image_edit && extra_image_data.size()==1 && !is_img2img && img2img_mask=="")
+    bool redirect_single_reference_to_img2img = (
+            // we are not doing img2img already
+            !is_img2img
+            // a single extra image is provided, and mask is NOT provided
+            && extra_image_data.size()==1 && img2img_mask==""
+            // the model does not support references natively, or through an edit mode/LoRa
+            && !supports_reference_images(info) && !force_image_edit
+            // the model can't handle image tags, or the user didn't ask for them
+            && !vision_tags_active);
+
+    if(redirect_single_reference_to_img2img)
     {
         is_img2img = true;
         img2img_data = extra_image_data[0];
@@ -2291,13 +2481,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         return image;
     };
 
-    auto push_image_if_loaded = [](std::vector<sd_image_t>& images, sd_image_t image) {
-        if(image.data)
-        {
-            images.push_back(image);
-        }
-    };
-
     if (info.is_video_model)
     {
         video_start_image = load_extra_image(video_start_frame_data, true);
@@ -2306,19 +2489,22 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     if(extra_image_data.size()>0)
     {
+        if (vision_tags_active) {
+            prompt_ref_image_pool.resize(std::min(extra_image_data.size(), (size_t)max_extra_images));
+        }
         for(int i=0;i<extra_image_data.size() && i<max_extra_images;++i)
         {
-            int nx2, ny2, nc2;
-            int desiredchannels = 3;
-            if(supports_reference_images(info)||force_image_edit)
+            sd_image_t image = {0,0,0,nullptr};
+            if(supports_reference_images(info)||force_image_edit||vision_tags_active)
             {
+                int nx2, ny2, nc2;
+                int desiredchannels = 3;
                 if(info.is_video_model)
                 {
-                    if(info.is_minimaxh3 && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data))
+                    if(!(info.is_minimaxh3 && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data)))
                     {
-                        continue;
+                        image = load_extra_image(extra_image_data[i], !info.is_minimaxh3);
                     }
-                    push_image_if_loaded(info.is_minimaxh3 ? reference_imgs : legacy_video_imgs, load_extra_image(extra_image_data[i], !info.is_minimaxh3));
                 }
                 else if(info.supports_ref_image||force_image_edit)
                 {
@@ -2345,36 +2531,54 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         if(loaded)
                         {
                             input_extraimage_buffers.push_back(loaded);
-                            sd_image_t extraimage_reference;
-                            extraimage_reference.width = nx2;
-                            extraimage_reference.height = ny2;
-                            extraimage_reference.channel = desiredchannels;
-                            extraimage_reference.data = loaded;
-                            reference_imgs.push_back(extraimage_reference);
+                            image.width = nx2;
+                            image.height = ny2;
+                            image.channel = desiredchannels;
+                            image.data = loaded;
                         }
                     }
                 }
-                else if (info.is_kontext || photomaker_enabled)
+                else if (info.is_kontext || photomaker_enabled || vision_tags_active)
                 {
                     uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2);
                     if(loaded)
                     {
                         input_extraimage_buffers.push_back(loaded);
-                        sd_image_t extraimage_reference;
-                        extraimage_reference.width = nx2;
-                        extraimage_reference.height = ny2;
-                        extraimage_reference.channel = desiredchannels;
-                        extraimage_reference.data = loaded;
-                        if(info.is_kontext)
-                        {
-                            reference_imgs.push_back(extraimage_reference);
-                        }
-                        else
-                        {
-                            photomaker_imgs.push_back(extraimage_reference);
-                        }
+                        image.width = nx2;
+                        image.height = ny2;
+                        image.channel = desiredchannels;
+                        image.data = loaded;
                     }
                 }
+            }
+            if(!image.data)
+            {
+                continue;
+            }
+            if (vision_tags_active) {
+                prompt_ref_image_pool[i] = image;
+                if (image_tags.hidden.count(i)) {
+                    continue; // used only as VLM context, kept out of the ref list
+                }
+            }
+            if (!(supports_reference_images(info)||force_image_edit)) {
+                continue; // VLM-only model: tagged image is not a DiT reference
+            }
+            if (info.is_video_model) {
+                if (info.is_minimaxh3) {
+                    reference_imgs.push_back(image);
+                } else {
+                    legacy_video_imgs.push_back(image);
+                }
+            }
+            else if (info.is_kontext) {
+                reference_imgs.push_back(image);
+            }
+            else if (photomaker_enabled) {
+                photomaker_imgs.push_back(image);
+            }
+            else {
+                reference_imgs.push_back(image);
             }
         }
 
