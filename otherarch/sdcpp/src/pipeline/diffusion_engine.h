@@ -21,6 +21,7 @@
 #include "model/adapter/lora.hpp"
 #include "model_builders.h"
 #include "model_manager.h"
+#include "runtime/generation_progress.h"
 #include "stable-diffusion.h"
 
 class RNG;
@@ -36,6 +37,7 @@ namespace Wav2Vec2 {
 
 static inline bool sd_version_supports_ref_latent_img_cfg(SDVersion version) {
     return version == VERSION_FLUX ||
+           version == VERSION_CHROMA ||
            sd_version_is_flux2(version) ||
            (sd_version_is_qwen_image(version) && version != VERSION_QWEN_IMAGE_2_1) ||
            sd_version_is_mage_flow(version) ||
@@ -77,6 +79,8 @@ public:
     std::shared_ptr<ControlNet> control_net;
     std::shared_ptr<IPAdapter::IPAdapterRunner> ip_adapter;
     sd::Tensor<float> ip_adapter_tokens;
+    sd_prompt_image_cb_t prompt_image_callback = nullptr;
+    void* prompt_image_callback_data           = nullptr;
     sd::Tensor<float> ip_adapter_uncond_tokens;
     float ip_adapter_strength = 1.0f;
     std::vector<std::shared_ptr<GenerationExtension>> generation_extensions;
@@ -202,6 +206,7 @@ public:
     std::unique_ptr<ConditioningCache> conditioning_cache_;
     std::vector<ModelManager::LoraSpec> conditioning_loras_;
     bool executing_ = false;
+    sd::GenerationProgress generation_progress;
 
     std::shared_ptr<Denoiser> denoiser;
     std::vector<float> file_alphas_cumprod;
@@ -257,6 +262,9 @@ public:
 
         explicit ExecutionScope(StableDiffusionGGML& sd)
             : operation(sd) {
+            if (operation.acquired) {
+                sd.generation_progress.report("preparing");
+            }
             ready = operation.acquired && sd.refresh_model_sources();
         }
 
@@ -442,6 +450,10 @@ public:
                                 size_t total_steps,
                                 bool terminal_sigma_is_zero,
                                 int64_t* last_progress_us);
+
+    // set the kind of the control image of the next generations (ControlNet Union),
+    // false (after saying why) when the loaded ControlNet can't use it
+    bool set_control_type(sd_control_type_t type);
 
     void compute_sample_controls(const sd::Tensor<float>& control_image,
                                  const sd::Tensor<float>& noised_input,

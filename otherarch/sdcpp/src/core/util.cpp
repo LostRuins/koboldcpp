@@ -855,13 +855,11 @@ sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
                                                  static_cast<int64_t>(image.height),
                                                  static_cast<int64_t>(image.channel),
                                                  1});
-    for (uint32_t iw = 0; iw < image.width; ++iw) {
-        for (uint32_t ih = 0; ih < image.height; ++ih) {
-            for (uint32_t ic = 0; ic < image.channel; ++ic) {
-                tensor.index(iw, ih, ic, 0) = sd_image_get_f32(image, iw, ih, ic, scale);
-            }
-        }
-    }
+    const int64_t pixels     = int64_t(image.width) * image.height;
+    sd::tensor_for_each(tensor.numel(), [&](int64_t i) {
+        float value      = image.data[(i % pixels) * image.channel + i / pixels];
+        tensor.data()[i] = scale ? value / 255.f : value;
+    });
     if (target_width >= 0 && target_height >= 0 &&
         (tensor.shape()[0] != target_width || tensor.shape()[1] != target_height)) {
         tensor = sd::ops::interpolate(tensor,

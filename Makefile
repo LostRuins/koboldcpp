@@ -770,9 +770,9 @@ SDCPP_THIRDPARTY_BASENAMES := thirdparty/darts.h thirdparty/miniz.h thirdparty/o
 
 # sdcpp sources/headers are discovered at build time, so new files under
 # include/, src/ and examples/ are picked up without editing this Makefile.
-SDCPP_SRC_BASENAMES := $(sort $(shell cd otherarch/sdcpp && find include src -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.h' -o -name '*.hpp' \)))
-SDCPP_EXAMPLES_BASENAMES := $(sort $(shell cd otherarch/sdcpp && find examples/common examples/cli -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.h' -o -name '*.hpp' \)))
-SDCPP_VOCAB_BASENAMES := $(filter-out src/tokenizers/vocab/vocab.h,$(sort $(shell cd otherarch/sdcpp && find src/tokenizers/vocab -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.h' -o -name '*.hpp' \))))
+SDCPP_SRC_BASENAMES := $(sort $(shell cd otherarch/sdcpp && find include src -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \)))
+SDCPP_EXAMPLES_BASENAMES := $(sort $(shell cd otherarch/sdcpp && find examples/common examples/cli -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \)))
+SDCPP_VOCAB_BASENAMES := $(filter-out src/tokenizers/vocab/vocab.h,$(sort $(shell cd otherarch/sdcpp && find src/tokenizers/vocab -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \))))
 
 # The vocab tables (.hpp) and vocab.cpp, together with convert.cpp and
 # version.cpp, are only linked with sdmain
@@ -799,35 +799,80 @@ tinylibwebp-smoke: $(LIB_TINYLIBWEBP) vendor/tinylibwebp/tests/anim_smoke.c
 SOURCES_SDCOMMON := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
 HEADERS_SDCOMMON := $(filter %.h,$(SOURCES_SDCOMMON)) $(filter %.hpp, $(SOURCES_SDCOMMON))
 OBJS_SDCOMMON := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))) $(patsubst %.c,%.o,$(filter %.c,$(SOURCES_SDCOMMON)))
+SDCPP_COMMON_OBJS := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON)))
 
 SOURCES_SDMAIN := $(foreach f,$(SDCPP_MAIN_BASENAMES),otherarch/sdcpp/$(f))
 HEADERS_SDMAIN := $(filter %.h,$(SOURCES_SDMAIN)) $(filter %.hpp, $(SOURCES_SDMAIN))
 OBJS_SDMAIN := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDMAIN)))
 
-$(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))): $(HEADERS_SDCOMMON)
+# .d files (compiler-generated dependency lists, see the -MMD flags below and
+# the deps target below): exact per-object dependencies. Objects that don't
+# have a .d file yet fall back to the coarse all-headers rules.
+SDCPP_DEPS := $(OBJS_SDCOMMON:.o=.d) $(OBJS_SDMAIN:.o=.d) otherarch/sdcpp/sdtype_adapter.d
+-include $(SDCPP_DEPS)
 
-$(OBJS_SDMAIN): $(HEADERS_SDMAIN)
+# coarse fallback: only objects without a .d file depend on all sdcpp headers
+# (.c objects never had header dependencies)
+$(patsubst %.d,%.o,$(filter-out $(wildcard $(SDCPP_COMMON_OBJS:.o=.d)),$(SDCPP_COMMON_OBJS:.o=.d))): $(HEADERS_SDCOMMON)
+$(patsubst %.d,%.o,$(filter-out $(wildcard $(OBJS_SDMAIN:.o=.d)),$(OBJS_SDMAIN:.o=.d))): $(HEADERS_SDMAIN)
 
 otherarch/sdcpp/src/%.o: otherarch/sdcpp/src/%.cpp
-	$(CXX) -DUTF8PROC_STATIC -DSD_USE_UPSTREAM_GGML -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann -I./otherarch/sdcpp/thirdparty/oniguruma -I./otherarch/sdcpp/thirdparty/utf8proc $(CXXFLAGS) -c $< -o $@
+	$(CXX) -DUTF8PROC_STATIC -DSD_USE_UPSTREAM_GGML -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann -I./otherarch/sdcpp/thirdparty/oniguruma -I./otherarch/sdcpp/thirdparty/utf8proc $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 otherarch/sdcpp/thirdparty/oniguruma/%.o: otherarch/sdcpp/thirdparty/oniguruma/%.c
-	$(CC) $(CFLAGS) -I./otherarch/sdcpp/thirdparty/oniguruma -c $< -o $@
+	$(CC) $(CFLAGS) -I./otherarch/sdcpp/thirdparty/oniguruma -MMD -MP -c $< -o $@
 
 otherarch/sdcpp/thirdparty/utf8proc/%.o: otherarch/sdcpp/thirdparty/utf8proc/%.c
-	$(CC) -DUTF8PROC_STATIC $(CFLAGS) -I./otherarch/sdcpp/thirdparty/utf8proc -c $< -o $@
+	$(CC) -DUTF8PROC_STATIC $(CFLAGS) -I./otherarch/sdcpp/thirdparty/utf8proc -MMD -MP -c $< -o $@
 
 otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
-	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -c $< -o $@
+	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h kcpp_src/model_adapter.h otherarch/utils.h otherarch/webp_image.h vendor/tinylibwebp/src/webp/decode.h vendor/tinylibwebp/src/webp/encode.h vendor/tinylibwebp/src/webp/mux.h
-	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./vendor/tinylibwebp/src $(CXXFLAGS) -c $< -o $@
+# header fallback for sdtype_adapter.o when no .d file exists
+SDCPP_ADAPTER_HEADERS := otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h kcpp_src/model_adapter.h otherarch/utils.h otherarch/webp_image.h vendor/tinylibwebp/src/webp/decode.h vendor/tinylibwebp/src/webp/encode.h vendor/tinylibwebp/src/webp/mux.h
+otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp $(if $(wildcard otherarch/sdcpp/sdtype_adapter.d),,$(SDCPP_ADAPTER_HEADERS))
+	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./vendor/tinylibwebp/src $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+# `make deps`: generate/refresh the sdcpp .d files without compiling. A .d is
+# only rewritten if its content changed, so unchanged files keep their
+# timestamps. The .d rules are only defined when deps is an explicit goal, so
+# a regular build never creates .d files (objects then use the coarse fallback
+# rules, and .d files get refreshed as a side effect of compiling, via -MMD).
+.PHONY: deps
+deps: $(SDCPP_DEPS)
+ifneq (,$(filter deps,$(MAKECMDGOALS)))
+
+otherarch/sdcpp/src/%.d: otherarch/sdcpp/src/%.cpp
+	$(CXX) -DUTF8PROC_STATIC -DSD_USE_UPSTREAM_GGML -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann -I./otherarch/sdcpp/thirdparty/oniguruma -I./otherarch/sdcpp/thirdparty/utf8proc $(CXXFLAGS) -MM -MP -MT otherarch/sdcpp/src/$*.o -MF $@.tmp -c $<
+	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+otherarch/sdcpp/thirdparty/oniguruma/%.d: otherarch/sdcpp/thirdparty/oniguruma/%.c
+	$(CC) $(CFLAGS) -I./otherarch/sdcpp/thirdparty/oniguruma -MM -MP -MT otherarch/sdcpp/thirdparty/oniguruma/$*.o -MF $@.tmp -c $<
+	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+otherarch/sdcpp/thirdparty/utf8proc/%.d: otherarch/sdcpp/thirdparty/utf8proc/%.c
+	$(CC) -DUTF8PROC_STATIC $(CFLAGS) -I./otherarch/sdcpp/thirdparty/utf8proc -MM -MP -MT otherarch/sdcpp/thirdparty/utf8proc/$*.o -MF $@.tmp -c $<
+	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+otherarch/sdcpp/thirdparty/zip.d: otherarch/sdcpp/thirdparty/zip.c
+	$(CC) $(CFLAGS) -MM -MP -MT otherarch/sdcpp/thirdparty/zip.o -MF $@.tmp -c $<
+	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+otherarch/sdcpp/examples/%.d: otherarch/sdcpp/examples/%.cpp
+	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -MM -MP -MT otherarch/sdcpp/examples/$*.o -MF $@.tmp -c $<
+	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+otherarch/sdcpp/sdtype_adapter.d: otherarch/sdcpp/sdtype_adapter.cpp
+	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./vendor/tinylibwebp/src $(CXXFLAGS) -MM -MP -MT otherarch/sdcpp/sdtype_adapter.o -MF $@.tmp -c $<
+	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+endif
 
 kcpp_sdcpp_tokenizer.o: kcpp_src/sdcpp_gguf_tokenizer.cpp kcpp_src/sdcpp_gguf_tokenizer.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 OBJS_SDTYPE := otherarch/sdcpp/sdtype_adapter.o kcpp_sdcpp_tokenizer.o $(OBJS_SDCOMMON)
 LDFLAGS += -lm
@@ -898,7 +943,7 @@ clean:
 	rm -vrf ggml/src/ggml-cuda/*.o
 	rm -vrf ggml/src/ggml-cuda/template-instances/*.o
 	rm -vrf llguidance
-	rm -vf otherarch/sdcpp/*.o otherarch/sdcpp/*/*.o otherarch/sdcpp/*/*/*.o otherarch/sdcpp/*/*/*/*.o
+	rm -vf otherarch/sdcpp/*.o otherarch/sdcpp/*/*.o otherarch/sdcpp/*/*/*.o otherarch/sdcpp/*/*/*/*.o otherarch/sdcpp/*.d otherarch/sdcpp/*/*.d otherarch/sdcpp/*/*/*.d otherarch/sdcpp/*/*/*/*.d
 
 # useful tools
 main: tools/completion/main.cpp tools/completion/completion.cpp common/arg.cpp common/preset.cpp $(COMMON_DOWNLOAD_SRCS) build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o llama.o chat.o llama-model.o console.o $(MTMD_CORE_OBJS) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)

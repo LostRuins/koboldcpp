@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -50,10 +51,10 @@ namespace PixArt {
                 config.out_channels = w->ne[1] / (config.patch_size * config.patch_size);
             }
             if (auto w = find("y_embedder.y_proj.fc1.weight")) {
-                config.caption_channels = w->ne[0];
+                config.caption_channels = w->logical_ne0();
             }
             if (auto w = find("blocks.0.cross_attn.kv_linear.weight")) {
-                config.cross_attention_dim = w->ne[0];
+                config.cross_attention_dim = w->logical_ne0();
             }
             if (auto w = find("blocks.0.mlp.fc1.weight")) {
                 config.ffn_dim = w->ne[1];
@@ -139,11 +140,11 @@ namespace PixArt {
             std::vector<ggml_tensor*> qkv;
             if (self_attention) {
                 auto projected = std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x);
-                qkv            = ggml_ext_chunk(ctx->ggml_ctx, projected, 3, 0);
+                qkv            = ggml_ext_chunk(ctx, projected, 3, 0);
             } else {
                 auto q     = std::dynamic_pointer_cast<Linear>(blocks["q_linear"])->forward(ctx, x);
                 auto kv    = std::dynamic_pointer_cast<Linear>(blocks["kv_linear"])->forward(ctx, context);
-                auto parts = ggml_ext_chunk(ctx->ggml_ctx, kv, 2, 0);
+                auto parts = ggml_ext_chunk(ctx, kv, 2, 0);
                 qkv        = {q, parts[0], parts[1]};
             }
             auto out = ggml_ext_attention_ext(ctx, qkv[0], qkv[1], qkv[2], num_heads, mask, false, ctx->flash_attn_enabled);
@@ -185,7 +186,7 @@ namespace PixArt {
             }
             table   = ggml_reshape_3d(ctx->ggml_ctx, table, dim, 6, 1);
             auto m  = ggml_add(ctx->ggml_ctx, ggml_reshape_3d(ctx->ggml_ctx, mod, dim, 6, N), table);
-            auto mv = ggml_ext_chunk(ctx->ggml_ctx, ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, m), dim * 6, N), 6, 0);
+            auto mv = ggml_ext_chunk(ctx, ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx, m), dim * 6, N), 6, 0);
 
             auto attn1 = std::dynamic_pointer_cast<PixArtAttention>(blocks["attn"]);
             auto attn2 = std::dynamic_pointer_cast<PixArtAttention>(blocks["cross_attn"]);
@@ -197,13 +198,13 @@ namespace PixArt {
                 return ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, y, g));
             };
 
-            auto h = modulate(ctx->ggml_ctx, norm(ctx->ggml_ctx, x), mv[0], mv[1]);
+            auto h = modulate(ctx, norm(ctx->ggml_ctx, x), mv[0], mv[1]);
             x      = gate(attn1->forward(ctx, h, h), mv[2]);
             // ada_norm_single: no norm before cross-attention (PixArtMS.py)
             x = ggml_add(ctx->ggml_ctx, x, attn2->forward(ctx, x, context, context_mask));
-            h = modulate(ctx->ggml_ctx, norm(ctx->ggml_ctx, x), mv[3], mv[4]);
+            h = modulate(ctx, norm(ctx->ggml_ctx, x), mv[3], mv[4]);
             h = proj->forward(ctx, h);
-            h = ggml_ext_gelu(ctx->ggml_ctx, h, true);
+            h = ggml_ext_gelu(ctx, h, true);
             h = fc2->forward(ctx, h);
             return gate(h, mv[5]);
         }
@@ -255,18 +256,18 @@ namespace PixArt {
             int64_t hp = H / p;
 
             auto h = std::dynamic_pointer_cast<Conv2d>(blocks["x_embedder.proj"])->forward(ctx, x);  // [N, hidden, hp, wp]
-            h      = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h, 1, 2, 0, 3));       // [N, hp, wp, hidden] -> [N, hp*wp, hidden]
+            h      = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, h, 1, 2, 0, 3));                 // [N, hp, wp, hidden] -> [N, hp*wp, hidden]
             h      = ggml_reshape_3d(ctx->ggml_ctx, h, config.hidden_size, wp * hp, N);              // [N, hp*wp, hidden]
             h      = ggml_add(ctx->ggml_ctx, h, pos_embed);
 
-            auto t   = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, ADALN_EMBED_DIM, 10000);
+            auto t   = ggml_ext_timestep_embedding(ctx, timesteps, ADALN_EMBED_DIM, 10000);
             auto emb = std::dynamic_pointer_cast<PixArtTimestepEmbedding>(blocks["t_embedder"])->forward(ctx, t);
 
             auto mod = std::dynamic_pointer_cast<Linear>(blocks["t_block.1"])
                            ->forward(ctx, ggml_silu(ctx->ggml_ctx, emb));  // [N, 6 * hidden]
 
             auto ctx_emb = std::dynamic_pointer_cast<Linear>(blocks["y_embedder.y_proj.fc1"])->forward(ctx, context);
-            ctx_emb      = ggml_ext_gelu(ctx->ggml_ctx, ctx_emb, true);
+            ctx_emb      = ggml_ext_gelu(ctx, ctx_emb, true);
             ctx_emb      = std::dynamic_pointer_cast<Linear>(blocks["y_embedder.y_proj.fc2"])->forward(ctx, ctx_emb);
 
             for (int i = 0; i < config.num_layers; ++i) {
@@ -283,21 +284,21 @@ namespace PixArt {
             auto ss    = ggml_add(ctx->ggml_ctx,
                                   ggml_reshape_3d(ctx->ggml_ctx, tail_table, config.hidden_size, 2, 1),
                                   ggml_reshape_3d(ctx->ggml_ctx, emb, config.hidden_size, 1, N));  // [2, hidden, N]
-            auto parts = ggml_ext_chunk(ctx->ggml_ctx,
-                                        ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, ss), config.hidden_size * 2, N),
+            auto parts = ggml_ext_chunk(ctx,
+                                        ggml_reshape_2d(ctx->ggml_ctx, ggml_ext_cont(ctx, ss), config.hidden_size * 2, N),
                                         2, 0);
             h          = std::dynamic_pointer_cast<LayerNorm>(blocks["final_layer.norm_final"])->forward(ctx, h);
-            h          = modulate(ctx->ggml_ctx, h, parts[0], parts[1]);
+            h          = modulate(ctx, h, parts[0], parts[1]);
             h          = std::dynamic_pointer_cast<Linear>(blocks["final_layer.linear"])->forward(ctx, h);  // [N, hp*wp, p*p*out_ch]
-            h          = DiT::unpatchify(ctx->ggml_ctx, h, hp, wp, static_cast<int>(p), static_cast<int>(p), false);
+            h          = DiT::unpatchify(ctx, h, hp, wp, static_cast<int>(p), static_cast<int>(p), false);
             return h;  // [N, out_channels, H, W]
         }
     };
 
     struct PixArtRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         PixArtConfig config;
         PixArtModel model;
-        std::vector<float> pos_vec;
 
         PixArtRunner(ggml_backend_t backend,
                      const String2TensorStorage& tensor_storage_map      = {},
@@ -357,15 +358,18 @@ namespace PixArt {
             int64_t wp = W / config.patch_size;
             int64_t hp = H / config.patch_size;
 
-            pos_vec  = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
-                                               config.pos_embed_base_size, config.interpolation_scale);
-            auto pos = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.hidden_size, wp * hp, 1);
-            set_backend_tensor_data(pos, pos_vec.data());
+            sd::PECacheKey pos_key("pixart.pos");
+            pos_key.add(hp).add(wp).add(config.hidden_size).add(config.pos_embed_base_size).add(config.interpolation_scale);
+            auto pos = make_input(pe_cache_.get_or_create(pos_key, [&]() {
+                auto pos_vec = gen_2d_sincos_pos_embed(config.hidden_size, hp, wp,
+                                                       config.pos_embed_base_size, config.interpolation_scale);
+                return sd::Tensor<float>({config.hidden_size, wp * hp, 1}, std::move(pos_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = model.forward(&runner_ctx, x, timesteps, context, pos, context_mask);
             // learn_sigma: keep the noise prediction half of the output channels
-            out = ggml_ext_slice(compute_ctx, out, 2, 0, config.in_channels);
+            out = ggml_ext_slice(&runner_ctx, out, 2, 0, config.in_channels);
             ggml_build_forward_expand(gf, out);
             return gf;
         }

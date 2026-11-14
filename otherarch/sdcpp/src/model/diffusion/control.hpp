@@ -2,9 +2,46 @@
 #define __SD_MODEL_DIFFUSION_CONTROL_HPP__
 
 #include "model/common/block.hpp"
+#include "stable-diffusion.h"
 
 // Match main UNet's MAX_GRAPH_SIZE so SDXL ControlNet (transformer_depth={1,2,10}) fits.
 #define CONTROL_NET_GRAPH_SIZE MAX_GRAPH_SIZE
+
+/*
+    =============================== ControlNet Union ================================
+    Reference: https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/controlnets/controlnet_union.py
+
+*/
+struct ControlNetUnionConfig {
+    int num_control_types = 0;  // 0: not a union model
+    int num_fusion_layers = 0;
+
+    static constexpr int CONTROL_TYPE_EMBED_DIM = 256;
+    static constexpr int FUSION_HEADS           = 8;
+
+    static ControlNetUnionConfig detect_from_weights(const String2TensorStorage& tensor_storage_map,
+                                                     const std::string& prefix,
+                                                     SDVersion version = VERSION_SD1) {
+        ControlNetUnionConfig config;
+        if (!sd_version_is_sdxl(version)) {
+            return config;
+        }
+        const std::string p = prefix.empty() ? "" : prefix + ".";
+        auto embedding      = tensor_storage_map.find(p + "control_add_embedding.linear_1.weight");
+        if (embedding == tensor_storage_map.end()) {
+            return config;
+        }
+        // control_add_embedding takes CONTROL_TYPE_EMBED_DIM inputs per control type
+        config.num_control_types = static_cast<int>(embedding->second.logical_ne0() / CONTROL_TYPE_EMBED_DIM);
+        while (tensor_storage_map.find(p + "transformer_layes." + std::to_string(config.num_fusion_layers) + ".ln_1.weight") != tensor_storage_map.end()) {
+            config.num_fusion_layers++;
+        }
+        LOG_VERBOSE("controlnet union: num_control_types = %d, num_fusion_layers = %d",
+                    config.num_control_types,
+                    config.num_fusion_layers);
+        return config;
+    }
+};
 
 /*
     =================================== ControlNet ===================================
@@ -13,6 +50,8 @@
 */
 class ControlNetBlock : public GGMLBlock {
 protected:
+    ControlNetUnionConfig config;
+
     SDVersion version = VERSION_SD1;
     // network hparams
     int in_channels                        = 4;
@@ -28,12 +67,19 @@ protected:
     int context_dim                        = 768;  // 1024 for VERSION_SD2, 2048 for VERSION_SDXL
     bool use_linear_projection             = false;
 
+    void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map = {}, const std::string prefix = "") override {
+        if (is_union()) {
+            // [num_control_types, model_channels] in the checkpoint
+            params["task_embedding"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, model_channels, config.num_control_types);
+        }
+    }
+
 public:
     int model_channels  = 320;
     int adm_in_channels = 2816;  // only for VERSION_SDXL
 
-    ControlNetBlock(SDVersion version = VERSION_SD1)
-        : version(version) {
+    ControlNetBlock(SDVersion version = VERSION_SD1, ControlNetUnionConfig config = {})
+        : config(config), version(version) {
         if (sd_version_is_sd2(version)) {
             context_dim       = 1024;
             num_head_channels = 64;
@@ -162,6 +208,77 @@ public:
 
         // middle_block_out
         blocks["middle_block_out.0"] = std::shared_ptr<GGMLBlock>(make_zero_conv(ch));
+
+        if (is_union()) {
+            blocks["control_add_embedding.linear_1"] = std::shared_ptr<GGMLBlock>(new Linear(ControlNetUnionConfig::CONTROL_TYPE_EMBED_DIM * config.num_control_types, time_embed_dim));
+            // nn.SiLU()
+            blocks["control_add_embedding.linear_2"] = std::shared_ptr<GGMLBlock>(new Linear(time_embed_dim, time_embed_dim));
+            for (int i = 0; i < config.num_fusion_layers; i++) {
+                blocks["transformer_layes." + std::to_string(i)] = std::shared_ptr<GGMLBlock>(new ResidualAttentionBlock(model_channels, ControlNetUnionConfig::FUSION_HEADS));
+            }
+            blocks["spatial_ch_projs"] = std::shared_ptr<GGMLBlock>(new Linear(model_channels, model_channels));
+        }
+    }
+
+    bool is_union() const {
+        return config.num_control_types > 0;
+    }
+
+    // control_types: [N*num_control_types], 1 for the types in use and 0 for the others
+    ggml_tensor* control_type_embedding(GGMLRunnerContext* ctx, ggml_tensor* control_types, int64_t batch) {
+        auto linear_1 = std::dynamic_pointer_cast<Linear>(blocks["control_add_embedding.linear_1"]);
+        auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["control_add_embedding.linear_2"]);
+
+        // [N*num_control_types, CONTROL_TYPE_EMBED_DIM]
+        auto e = ggml_ext_timestep_embedding(ctx, control_types, ControlNetUnionConfig::CONTROL_TYPE_EMBED_DIM);
+        e      = ggml_reshape_2d(ctx->ggml_ctx, e, ControlNetUnionConfig::CONTROL_TYPE_EMBED_DIM * config.num_control_types, batch);
+        e      = linear_1->forward(ctx, e);
+        e      = ggml_silu_inplace(ctx->ggml_ctx, e);
+        return linear_2->forward(ctx, e);  // [N, time_embed_dim]
+    }
+
+    // [N, C, H, W] => [N, C]
+    static ggml_tensor* spatial_mean(GGMLRunnerContext* runner_ctx, ggml_tensor* x) {
+        auto ctx  = runner_ctx->ggml_ctx;
+        auto flat = ggml_reshape_3d(ctx, ggml_ext_cont(runner_ctx, x), x->ne[0] * x->ne[1], x->ne[2], x->ne[3]);
+        return ggml_reshape_2d(ctx, ggml_mean(ctx, flat), x->ne[2], x->ne[3]);
+    }
+
+    // sample: [N, C, H, W], hint: [N, C, H, W] or [1, C, H, W]
+    ggml_tensor* fuse_condition(GGMLRunnerContext* ctx,
+                                ggml_tensor* sample,
+                                ggml_tensor* hint,
+                                int control_type_index) {
+        auto c           = ctx->ggml_ctx;
+        int64_t channels = sample->ne[2];
+        int64_t batch    = sample->ne[3];
+
+        auto task_embedding = params["task_embedding"];  // [num_control_types, C]
+        auto task           = ggml_view_2d(c, task_embedding, channels, 1, task_embedding->nb[1], control_type_index * task_embedding->nb[1]);
+
+        auto hint_feat = ggml_add(c, spatial_mean(ctx, hint), task);  // [N, C]
+        if (hint_feat->ne[1] != batch) {
+            hint_feat = ggml_repeat(c, hint_feat, ggml_new_tensor_2d(c, GGML_TYPE_F32, channels, batch));
+        }
+        auto sample_feat = spatial_mean(ctx, sample);  // [N, C]
+
+        // as in the reference (nn.MultiheadAttention without batch_first) the attention is over
+        // the batch, and the 2 features (hint, sample) are its batch: [2, N, C]
+        auto x = ggml_concat(c,
+                             ggml_reshape_3d(c, hint_feat, channels, batch, 1),
+                             ggml_reshape_3d(c, sample_feat, channels, batch, 1),
+                             2);
+        for (int i = 0; i < config.num_fusion_layers; i++) {
+            auto layer = std::dynamic_pointer_cast<ResidualAttentionBlock>(blocks["transformer_layes." + std::to_string(i)]);
+            x          = layer->forward(ctx, x);
+        }
+
+        auto projection = std::dynamic_pointer_cast<Linear>(blocks["spatial_ch_projs"]);
+        auto alpha      = ggml_reshape_2d(c, ggml_ext_slice(ctx, x, 2, 0, 1), channels, batch);
+        alpha           = projection->forward(ctx, alpha);
+        alpha           = ggml_reshape_4d(c, alpha, 1, 1, channels, batch);
+
+        return ggml_add(c, ggml_add(c, sample, hint), alpha);
     }
 
     ggml_tensor* resblock_forward(std::string name,
@@ -204,7 +321,9 @@ public:
                                       ggml_tensor* guided_hint,
                                       ggml_tensor* timesteps,
                                       ggml_tensor* context,
-                                      ggml_tensor* y = nullptr) {
+                                      ggml_tensor* y             = nullptr,
+                                      ggml_tensor* control_types = nullptr,
+                                      int control_type_index     = 0) {
         // x: [N, in_channels, h, w] or [N, in_channels/2, h, w]
         // timesteps: [N,]
         // context: [N, max_position, hidden_size] or [1, max_position, hidden_size]. for example, [N, 77, 768]
@@ -228,7 +347,7 @@ public:
 
         auto middle_block_out = std::dynamic_pointer_cast<Conv2d>(blocks["middle_block_out.0"]);
 
-        auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, model_channels);  // [N, model_channels]
+        auto t_emb = ggml_ext_timestep_embedding(ctx, timesteps, model_channels);  // [N, model_channels]
 
         auto emb = time_embed_0->forward(ctx, t_emb);
         emb      = ggml_silu_inplace(ctx->ggml_ctx, emb);
@@ -246,6 +365,11 @@ public:
             emb = ggml_add(ctx->ggml_ctx, emb, label_emb);  // [N, time_embed_dim]
         }
 
+        if (is_union()) {
+            GGML_ASSERT(control_types != nullptr);
+            emb = ggml_add(ctx->ggml_ctx, emb, control_type_embedding(ctx, control_types, x->ne[3]));
+        }
+
         std::vector<ggml_tensor*> outs;
 
         if (guided_hint == nullptr) {
@@ -257,7 +381,11 @@ public:
 
         // input block 0
         auto h = input_blocks_0_0->forward(ctx, x);
-        h      = ggml_add(ctx->ggml_ctx, h, guided_hint);
+        if (is_union()) {
+            h = fuse_condition(ctx, h, guided_hint, control_type_index);
+        } else {
+            h = ggml_add(ctx->ggml_ctx, h, guided_hint);
+        }
         outs.push_back(zero_convs_0->forward(ctx, h));
 
         // input block 1-11
@@ -308,8 +436,14 @@ public:
 
 struct ControlNet : public GGMLRunner {
     SDVersion version = VERSION_SD1;
+    ControlNetUnionConfig config;
     ControlNetBlock control_net;
     std::string weight_prefix;
+
+    // ControlNet Union: index of the control type of the control image (-1: none yet)
+    // and the 0/1 vector of the types in use that the graph reads
+    int control_type_index = -1;
+    sd::Tensor<float> control_type_tensor;
 
     std::vector<ggml_tensor*> control_outputs_ggml;
     ggml_tensor* guided_hint_output_ggml = nullptr;
@@ -320,12 +454,46 @@ struct ControlNet : public GGMLRunner {
         return "controlnet.guided_hint";
     }
 
+    bool is_union() const {
+        return config.num_control_types > 0;
+    }
+
+    // set the kind of the control image of the next generations, false (after saying why) when it
+    // can't be used: a union model needs one of the types it was trained on
+    bool set_control_type(sd_control_type_t type) {
+        if (!is_union()) {
+            if (type != SD_CONTROL_TYPE_NONE) {
+                LOG_WARN("control type '%s' ignored: the ControlNet is not a union model", sd_control_type_name(type));
+            }
+            control_type_index = -1;
+            return true;
+        }
+        if (type == SD_CONTROL_TYPE_NONE) {
+            LOG_ERROR("this ControlNet is a union model and needs a control type (openpose, depth, scribble, canny, normal, segment%s)",
+                      config.num_control_types > 6 ? ", tile, repaint" : "");
+            return false;
+        }
+        // the types of a union model, in training order: the enum without NONE
+        const int index = static_cast<int>(type) - 1;
+        if (index < 0 || index >= config.num_control_types) {
+            LOG_ERROR("control type '%s' is not supported by this ControlNet Union (it has %d control types)",
+                      sd_control_type_name(type), config.num_control_types);
+            return false;
+        }
+        control_type_index = index;
+        return true;
+    }
+
     ControlNet(ggml_backend_t backend,
                const String2TensorStorage& tensor_storage_map      = {},
                SDVersion version                                   = VERSION_SD1,
                const std::string& prefix                           = "",
                std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
-        : GGMLRunner(backend, weight_manager), version(version), control_net(version), weight_prefix(prefix) {
+        : GGMLRunner(backend, weight_manager),
+          version(version),
+          config(ControlNetUnionConfig::detect_from_weights(tensor_storage_map, prefix, version)),
+          control_net(version, config),
+          weight_prefix(prefix) {
         control_net.init(params_ctx, tensor_storage_map, prefix);
     }
 
@@ -376,6 +544,16 @@ struct ControlNet : public GGMLRunner {
             hint = make_input(hint_tensor);
         }
 
+        ggml_tensor* control_types = nullptr;
+        if (is_union()) {
+            const int64_t batch = x_tensor.dim() >= 4 ? x_tensor.shape()[3] : 1;
+            control_type_tensor = sd::zeros<float>({config.num_control_types * batch});
+            for (int64_t i = 0; i < batch; i++) {
+                control_type_tensor[i * config.num_control_types + control_type_index] = 1.f;
+            }
+            control_types = make_input(control_type_tensor);
+        }
+
         auto runner_ctx = get_context(gf);
 
         auto outs = control_net.forward(&runner_ctx,
@@ -384,7 +562,9 @@ struct ControlNet : public GGMLRunner {
                                         guided_hint_input,
                                         timesteps,
                                         context,
-                                        y);
+                                        y,
+                                        control_types,
+                                        control_type_index);
 
         if (guided_hint_input == nullptr && !outs.empty()) {
             guided_hint_output_ggml = outs[0];
@@ -413,6 +593,10 @@ struct ControlNet : public GGMLRunner {
         // timesteps: [N, ]
         // context: [N, max_position, hidden_size]([N, 77, 768]) or [1, max_position, hidden_size]
         // y: [N, adm_in_channels] or [1, adm_in_channels]
+        if (is_union() && control_type_index < 0) {
+            LOG_ERROR("ControlNet Union: no control type set");
+            return std::nullopt;
+        }
         auto get_graph = [&]() -> ggml_cgraph* {
             return build_graph(x, hint, timesteps, context, y);
         };

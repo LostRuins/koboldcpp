@@ -1071,58 +1071,7 @@ namespace Rope {
                                               ggml_tensor* x,
                                               ggml_tensor* pe,
                                               bool rope_interleaved = true) {
-        auto ctx = runner_ctx->ggml_ctx;
-#ifndef SD_USE_UPSTREAM_GGML
-        auto backend = runner_ctx->backend;
-        if (backend != nullptr && x->type == GGML_TYPE_F32 && pe->type == GGML_TYPE_F32 &&
-            x->ne[0] % 2 == 0 && pe->ne[0] == 2 && pe->ne[1] == 2 &&
-            pe->ne[2] == x->ne[0] / 2 && pe->ne[3] == x->ne[2]) {
-            auto out = ggml_rope_apply(ctx, x, pe, rope_interleaved);
-            if (ggml_backend_supports_op(backend, out)) {
-                return out;
-            }
-        }
-#endif
-        // x: [N, L, n_head, d_head]
-        // pe: [L, d_head/2, 2, 2], [[cos, -sin], [sin, cos]]
-        int64_t d_head = x->ne[0];
-        int64_t n_head = x->ne[1];
-        int64_t L      = x->ne[2];
-        int64_t N      = x->ne[3];
-        x              = ggml_cont(ctx, ggml_permute(ctx, x, 0, 2, 1, 3));  // [N, n_head, L, d_head]
-        if (rope_interleaved) {
-            x = ggml_reshape_4d(ctx, x, 2, d_head / 2, L, n_head * N);  // [N * n_head, L, d_head/2, 2]
-            x = ggml_cont(ctx, ggml_permute(ctx, x, 3, 0, 1, 2));       // [2, N * n_head, L, d_head/2]
-        } else {
-            auto x_0 = ggml_view_3d(ctx, x, d_head / 2, L, n_head * N, x->nb[1], x->nb[2], 0);
-            auto x_1 = ggml_view_3d(ctx, x, d_head / 2, L, n_head * N, x->nb[1], x->nb[2], (d_head / 2) * x->nb[0]);
-
-            auto pe_2 = ggml_cont(ctx, ggml_permute(ctx, pe, 2, 3, 0, 1));
-            auto cos  = ggml_view_2d(ctx, pe_2, d_head / 2, L, pe_2->nb[1], 0);
-            auto sin  = ggml_view_2d(ctx, pe_2, d_head / 2, L, pe_2->nb[1], pe_2->nb[3]);
-
-            auto part_0 = ggml_sub(ctx, ggml_mul(ctx, x_0, cos), ggml_mul(ctx, x_1, sin));
-            auto part_1 = ggml_add(ctx, ggml_mul(ctx, x_0, sin), ggml_mul(ctx, x_1, cos));
-            return ggml_concat(ctx, part_0, part_1, 0);
-        }
-
-        int64_t offset = x->nb[2] * x->ne[2];
-        auto x_0       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 0);  // [N * n_head, L, d_head/2]
-        auto x_1       = ggml_view_3d(ctx, x, x->ne[0], x->ne[1], x->ne[2], x->nb[1], x->nb[2], offset * 1);  // [N * n_head, L, d_head/2]
-        x_0            = ggml_reshape_4d(ctx, x_0, 1, x_0->ne[0], x_0->ne[1], x_0->ne[2]);                    // [N * n_head, L, d_head/2, 1]
-        x_1            = ggml_reshape_4d(ctx, x_1, 1, x_1->ne[0], x_1->ne[1], x_1->ne[2]);                    // [N * n_head, L, d_head/2, 1]
-        auto temp_x    = ggml_new_tensor_4d(ctx, x_0->type, 2, x_0->ne[1], x_0->ne[2], x_0->ne[3]);
-        x_0            = ggml_repeat(ctx, x_0, temp_x);  // [N * n_head, L, d_head/2, 2]
-        x_1            = ggml_repeat(ctx, x_1, temp_x);  // [N * n_head, L, d_head/2, 2]
-
-        pe        = ggml_cont(ctx, ggml_permute(ctx, pe, 3, 0, 1, 2));  // [2, L, d_head/2, 2]
-        offset    = pe->nb[2] * pe->ne[2];
-        auto pe_0 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 0);  // [L, d_head/2, 2]
-        auto pe_1 = ggml_view_3d(ctx, pe, pe->ne[0], pe->ne[1], pe->ne[2], pe->nb[1], pe->nb[2], offset * 1);  // [L, d_head/2, 2]
-
-        auto x_out = ggml_add_inplace(ctx, ggml_mul(ctx, x_0, pe_0), ggml_mul(ctx, x_1, pe_1));  // [N * n_head, L, d_head/2, 2]
-        x_out      = ggml_reshape_3d(ctx, x_out, d_head, L, n_head * N);                         // [N*n_head, L, d_head]
-        return x_out;
+        return ggml_ext_rope_apply(runner_ctx, x, pe, rope_interleaved);
     }
 
     __STATIC_INLINE__ ggml_tensor* attention(GGMLRunnerContext* ctx,

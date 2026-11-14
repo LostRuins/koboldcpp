@@ -73,16 +73,16 @@ namespace MingImageTE {
             auto connector            = std::dynamic_pointer_cast<ConnectorModel>(blocks["connector"]);
             auto x                    = backbone->embed(ctx, ids);
             const int64_t query_start = prompt_length + 1;
-            auto before               = ggml_ext_slice(gctx, x, 1, 0, query_start);
-            auto after                = ggml_ext_slice(gctx, x, 1, query_start + config.num_queries, x->ne[1]);
+            auto before               = ggml_ext_slice(ctx, x, 1, 0, query_start);
+            auto after                = ggml_ext_slice(ctx, x, 1, query_start + config.num_queries, x->ne[1]);
             x                         = ggml_concat(gctx, ggml_concat(gctx, before, params["query_tokens_dict.16x16"], 1), after, 1);
             // HF hidden_states[20] includes final RMSNorm; sd.cpp selects it as num_layers + 1.
             x            = backbone->forward_embeds(ctx, x, nullptr, mask, {5, 12, 21}, {}, nullptr, false, image_mask, cos, sin);
-            auto direct  = ggml_ext_slice(gctx, x, 1, 0, prompt_length);
+            auto direct  = ggml_ext_slice(ctx, x, 1, 0, prompt_length);
             direct       = std::dynamic_pointer_cast<RMSNorm>(blocks["proj_directvlm.0"])->forward(ctx, direct);
             direct       = std::dynamic_pointer_cast<Linear>(blocks["proj_directvlm.1"])->forward(ctx, direct);
-            auto queries = ggml_ext_slice(gctx, x, 0, config.backbone.hidden_size * 2, config.backbone.hidden_size * 3);
-            queries      = ggml_ext_slice(gctx, queries, 1, query_start, query_start + config.num_queries);
+            auto queries = ggml_ext_slice(ctx, x, 0, config.backbone.hidden_size * 2, config.backbone.hidden_size * 3);
+            queries      = ggml_ext_slice(ctx, queries, 1, query_start, query_start + config.num_queries);
             queries      = std::dynamic_pointer_cast<Linear>(blocks["proj_in"])->forward(ctx, queries);
             queries      = connector->forward_embeds(ctx, queries, connector_positions, nullptr, {});
             queries      = std::dynamic_pointer_cast<Linear>(blocks["proj_out"])->forward(ctx, queries);

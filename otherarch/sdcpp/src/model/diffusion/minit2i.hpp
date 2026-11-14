@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -58,14 +59,14 @@ namespace MiniT2I {
                     config.pca_channels = tensor_storage.ne[2];
                     config.hidden_size  = tensor_storage.ne[3];
                 } else if (ends_with(name, "txt_embedder.weight") && tensor_storage.n_dims == 2) {
-                    config.txt_input_size  = tensor_storage.ne[0];
+                    config.txt_input_size  = tensor_storage.logical_ne0();
                     config.txt_hidden_size = tensor_storage.ne[1];
                 } else if (ends_with(name, "pooled_embedder.weight") && tensor_storage.n_dims == 2) {
                     config.cond_vec_size = tensor_storage.ne[1];
                 } else if (ends_with(name, "double_blocks.0.img_qkv.weight") && tensor_storage.n_dims == 2) {
                     int64_t inner3     = tensor_storage.ne[1];
                     int64_t inner      = inner3 / 3;
-                    config.hidden_size = tensor_storage.ne[0];
+                    config.hidden_size = tensor_storage.logical_ne0();
                     if (config.hidden_size == 768) {
                         config.num_heads = 12;
                         config.head_dim  = 64;
@@ -78,7 +79,7 @@ namespace MiniT2I {
                     }
                 } else if (ends_with(name, "final_layer.linear.weight") && tensor_storage.n_dims == 2) {
                     int64_t patch_area = config.patch_size * config.patch_size;
-                    config.hidden_size = tensor_storage.ne[0];
+                    config.hidden_size = tensor_storage.logical_ne0();
                     config.in_channels = patch_area > 0 ? tensor_storage.ne[1] / patch_area : config.in_channels;
                 } else if (ends_with(name, "mask_token") && tensor_storage.n_dims >= 2) {
                     config.prompt_length = tensor_storage.ne[1];
@@ -206,9 +207,9 @@ namespace MiniT2I {
             auto w1   = std::dynamic_pointer_cast<Linear>(blocks["w1"]);
             auto w3   = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
             auto w2   = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            auto gate = ggml_silu(ctx->ggml_ctx, w1->forward(ctx, x));
+            auto gate = w1->forward(ctx, x);
             auto up   = w3->forward(ctx, x);
-            return w2->forward(ctx, ggml_mul(ctx->ggml_ctx, gate, up));
+            return w2->forward(ctx, ggml_swiglu_split(ctx->ggml_ctx, gate, up));
         }
     };
 
@@ -256,14 +257,18 @@ namespace MiniT2I {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* t) {
             auto mlp_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto mlp_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
-            auto t_emb = ggml_ext_timestep_embedding(ctx->ggml_ctx, t, frequency_embedding_size, 10000, 1.0f);
+            auto t_emb = ggml_ext_timestep_embedding(ctx, t, frequency_embedding_size, 10000, 1.0f);
             t_emb      = mlp_0->forward(ctx, t_emb);
             t_emb      = ggml_silu_inplace(ctx->ggml_ctx, t_emb);
             return mlp_2->forward(ctx, t_emb);
         }
     };
 
-    inline std::vector<ggml_tensor*> split_qkv(ggml_context* ctx, ggml_tensor* qkv, int64_t num_heads, int64_t head_dim) {
+    inline std::vector<ggml_tensor*> split_qkv(GGMLRunnerContext* runner_ctx,
+                                               ggml_tensor* qkv,
+                                               int64_t num_heads,
+                                               int64_t head_dim) {
+        auto ctx  = runner_ctx->ggml_ctx;
         int64_t N = qkv->ne[2];
         int64_t L = qkv->ne[1];
         auto q    = ggml_view_4d(ctx, qkv, head_dim, num_heads, L, N,
@@ -300,7 +305,7 @@ namespace MiniT2I {
             auto q_norm    = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"]);
             auto k_norm    = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"]);
 
-            auto qkv = split_qkv(ctx->ggml_ctx, qkv_proj->forward(ctx, norm1->forward(ctx, txt)), num_heads, head_dim);
+            auto qkv = split_qkv(ctx, qkv_proj->forward(ctx, norm1->forward(ctx, txt)), num_heads, head_dim);
             auto q   = q_norm->forward(ctx, qkv[0]);
             auto k   = k_norm->forward(ctx, qkv[1]);
             auto v   = qkv[2];
@@ -352,16 +357,16 @@ namespace MiniT2I {
             int64_t li = img->ne[1];
             int64_t lt = txt->ne[1];
 
-            auto img_qkv = split_qkv(ctx->ggml_ctx, img_qkv_p->forward(ctx, img_norm1->forward(ctx, img)), num_heads, head_dim);
-            auto txt_qkv = split_qkv(ctx->ggml_ctx, txt_qkv_p->forward(ctx, txt_norm1->forward(ctx, txt)), num_heads, head_dim);
+            auto img_qkv = split_qkv(ctx, img_qkv_p->forward(ctx, img_norm1->forward(ctx, img)), num_heads, head_dim);
+            auto txt_qkv = split_qkv(ctx, txt_qkv_p->forward(ctx, txt_norm1->forward(ctx, txt)), num_heads, head_dim);
 
             auto q = ggml_concat(ctx->ggml_ctx, q_norm->forward(ctx, txt_qkv[0]), q_norm->forward(ctx, img_qkv[0]), 2);
             auto k = ggml_concat(ctx->ggml_ctx, k_norm->forward(ctx, txt_qkv[1]), k_norm->forward(ctx, img_qkv[1]), 2);
             auto v = ggml_concat(ctx->ggml_ctx, txt_qkv[2], img_qkv[2], 2);
 
             auto out     = Rope::attention(ctx, q, k, v, pe, nullptr, 1.0f, false);
-            auto out_txt = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, lt);
-            auto out_img = ggml_ext_slice(ctx->ggml_ctx, out, 1, lt, lt + li);
+            auto out_txt = ggml_ext_slice(ctx, out, 1, 0, lt);
+            auto out_img = ggml_ext_slice(ctx, out, 1, lt, lt + li);
 
             img = ggml_add(ctx->ggml_ctx, img, img_proj->forward(ctx, out_img));
             txt = ggml_add(ctx->ggml_ctx, txt, txt_proj->forward(ctx, out_txt));
@@ -415,7 +420,7 @@ namespace MiniT2I {
             mask            = ggml_reshape_3d(ctx->ggml_ctx, mask, 1, mask->ne[0], mask->ne[1]);
             mask            = ggml_repeat(ctx->ggml_ctx, mask, context);
             auto keep       = ggml_mul(ctx->ggml_ctx, context, mask);
-            auto inv        = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx->ggml_ctx, mask), mask);
+            auto inv        = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx, mask), mask);
             auto mask_token = ggml_repeat(ctx->ggml_ctx, params["mask_token"], context);
             return ggml_add(ctx->ggml_ctx, keep, ggml_mul(ctx->ggml_ctx, mask_token, inv));
         }
@@ -467,26 +472,15 @@ namespace MiniT2I {
             }
             auto combined = ggml_concat(ctx->ggml_ctx, txt, x, 1);
             auto out      = final_layer->forward(ctx, combined);
-            auto img_out  = ggml_ext_slice(ctx->ggml_ctx, out, 1, txt->ne[1], txt->ne[1] + x->ne[1]);
-            return DiT::unpatchify(ctx->ggml_ctx, img_out, hp, wp, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size), false);
+            auto img_out  = ggml_ext_slice(ctx, out, 1, txt->ne[1], txt->ne[1] + x->ne[1]);
+            return DiT::unpatchify(ctx, img_out, hp, wp, static_cast<int>(config.patch_size), static_cast<int>(config.patch_size), false);
         }
     };
 
     struct MiniT2IRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         MiniT2IConfig config;
         MMJiT model;
-        ggml_context* position_cache_ctx            = nullptr;
-        ggml_backend_buffer_t position_cache_buffer = nullptr;
-        ggml_tensor* cached_pos_embed               = nullptr;
-        ggml_tensor* cached_txt_pe                  = nullptr;
-        ggml_tensor* cached_joint_pe                = nullptr;
-        int64_t cached_img_side                     = -1;
-        int64_t cached_txt_len                      = -1;
-        int64_t cached_hidden_size                  = -1;
-        int64_t cached_head_dim                     = -1;
-        bool cached_circular_x                      = false;
-        bool cached_circular_y                      = false;
-
         MiniT2IRunner(ggml_backend_t backend,
                       const String2TensorStorage& tensor_storage_map      = {},
                       const std::string prefix                            = "",
@@ -497,85 +491,12 @@ namespace MiniT2I {
             model.init(params_ctx, tensor_storage_map, this->prefix);
         }
 
-        ~MiniT2IRunner() override {
-            free_position_cache();
-        }
-
         std::string get_desc() override {
             return "MiniT2I";
         }
 
         void get_param_tensors(std::map<std::string, ggml_tensor*>& tensors, const std::string& prefix) override {
             model.get_param_tensors(tensors, prefix);
-        }
-
-        void free_position_cache() {
-            if (position_cache_buffer != nullptr) {
-                ggml_backend_buffer_free(position_cache_buffer);
-                position_cache_buffer = nullptr;
-            }
-            if (position_cache_ctx != nullptr) {
-                ggml_free(position_cache_ctx);
-                position_cache_ctx = nullptr;
-            }
-            cached_pos_embed   = nullptr;
-            cached_txt_pe      = nullptr;
-            cached_joint_pe    = nullptr;
-            cached_img_side    = -1;
-            cached_txt_len     = -1;
-            cached_hidden_size = -1;
-            cached_head_dim    = -1;
-        }
-
-        void ensure_position_cache(int64_t img_side, int64_t txt_len) {
-            if (cached_img_side == img_side &&
-                cached_txt_len == txt_len &&
-                cached_hidden_size == config.hidden_size &&
-                cached_head_dim == config.head_dim &&
-                cached_circular_x == circular_x_enabled &&
-                cached_circular_y == circular_y_enabled &&
-                cached_pos_embed != nullptr &&
-                cached_txt_pe != nullptr &&
-                cached_joint_pe != nullptr) {
-                return;
-            }
-
-            free_position_cache();
-
-            auto pos_embed_vec = make_2d_sincos_pos_embed(static_cast<int>(img_side), static_cast<int>(config.hidden_size));
-            auto txt_pe_vec    = make_text_rope(static_cast<int>(txt_len), static_cast<int>(config.head_dim));
-            auto img_pe_vec    = finish_rope_pe(make_vision_rope(static_cast<int>(img_side), static_cast<int>(config.head_dim)));
-            auto joint_pe_vec  = txt_pe_vec;
-            joint_pe_vec.insert(joint_pe_vec.end(), img_pe_vec.begin(), img_pe_vec.end());
-
-            ggml_init_params params;
-            params.mem_size    = static_cast<size_t>(3 * ggml_tensor_overhead());
-            params.mem_buffer  = nullptr;
-            params.no_alloc    = true;
-            position_cache_ctx = ggml_init(params);
-            GGML_ASSERT(position_cache_ctx != nullptr);
-
-            cached_pos_embed = ggml_new_tensor_3d(position_cache_ctx, GGML_TYPE_F32, config.hidden_size, img_side * img_side, 1);
-            ggml_set_name(cached_pos_embed, "minit2i.pos_embed");
-            cached_txt_pe = ggml_new_tensor_4d(position_cache_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, txt_len);
-            ggml_set_name(cached_txt_pe, "minit2i.txt_pe");
-            cached_joint_pe = ggml_new_tensor_4d(position_cache_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, txt_len + img_side * img_side);
-            ggml_set_name(cached_joint_pe, "minit2i.joint_pe");
-
-            position_cache_buffer = ggml_backend_alloc_ctx_tensors(position_cache_ctx, runtime_backend);
-            GGML_ASSERT(position_cache_buffer != nullptr);
-            ggml_backend_buffer_set_usage(position_cache_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            ggml_backend_tensor_set(cached_pos_embed, pos_embed_vec.data(), 0, ggml_nbytes(cached_pos_embed));
-            ggml_backend_tensor_set(cached_txt_pe, txt_pe_vec.data(), 0, ggml_nbytes(cached_txt_pe));
-            ggml_backend_tensor_set(cached_joint_pe, joint_pe_vec.data(), 0, ggml_nbytes(cached_joint_pe));
-            ggml_backend_synchronize(runtime_backend);
-
-            cached_img_side    = img_side;
-            cached_txt_len     = txt_len;
-            cached_hidden_size = config.hidden_size;
-            cached_head_dim    = config.head_dim;
-            cached_circular_x  = circular_x_enabled;
-            cached_circular_y  = circular_y_enabled;
         }
 
         ggml_cgraph* build_graph(const sd::Tensor<float>& x_tensor,
@@ -592,10 +513,29 @@ namespace MiniT2I {
             int64_t H        = x->ne[1];
             int64_t img_side = H / config.patch_size;
             int64_t txt_len  = context->ne[1];
-            ensure_position_cache(img_side, txt_len);
+            sd::PECacheKey pos_key("minit2i.pos_embed");
+            pos_key.add(img_side).add(config.hidden_size);
+            auto pos_embed = make_input(pe_cache_.get_or_create(pos_key, [&]() {
+                return sd::Tensor<float>({config.hidden_size, img_side * img_side, 1},
+                                         make_2d_sincos_pos_embed(static_cast<int>(img_side), static_cast<int>(config.hidden_size)));
+            }));
+            sd::PECacheKey txt_key("minit2i.txt_pe");
+            txt_key.add(txt_len).add(config.head_dim);
+            auto txt_pe = make_input(pe_cache_.get_or_create(txt_key, [&]() {
+                return sd::Tensor<float>({2, 2, config.head_dim / 2, txt_len},
+                                         make_text_rope(static_cast<int>(txt_len), static_cast<int>(config.head_dim)));
+            }));
+            sd::PECacheKey joint_key("minit2i.joint_pe");
+            joint_key.add(img_side).add(txt_len).add(config.head_dim).add(circular_x_enabled).add(circular_y_enabled);
+            auto joint_pe = make_input(pe_cache_.get_or_create(joint_key, [&]() {
+                auto values = make_text_rope(static_cast<int>(txt_len), static_cast<int>(config.head_dim));
+                auto image  = finish_rope_pe(make_vision_rope(static_cast<int>(img_side), static_cast<int>(config.head_dim)));
+                values.insert(values.end(), image.begin(), image.end());
+                return sd::Tensor<float>({2, 2, config.head_dim / 2, txt_len + img_side * img_side}, std::move(values));
+            }));
 
             auto runner_ctx = get_context();
-            auto out        = model.forward(&runner_ctx, x, context, mask, cached_pos_embed, cached_txt_pe, cached_joint_pe);
+            auto out        = model.forward(&runner_ctx, x, context, mask, pos_embed, txt_pe, joint_pe);
             ggml_build_forward_expand(gf, out);
             return gf;
         }

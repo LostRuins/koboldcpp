@@ -3,9 +3,8 @@
 
 #include "core/ggml_extend_backend.h"
 #include "core/tensor.hpp"
-#include "model/upscaler/esrgan.hpp"
-#include "model/upscaler/mosr.hpp"
 #include "model_manager.h"
+#include "pipeline/image_upscale.h"
 #include "stable-diffusion.h"
 
 #include <memory>
@@ -15,9 +14,7 @@ struct UpscalerGGML {
     SDBackendManager backend_manager;
     std::shared_ptr<ModelManager> model_manager;
     ggml_type model_data_type = GGML_TYPE_F16;
-    std::shared_ptr<ESRGAN> esrgan_upscaler;
-    std::shared_ptr<MoSR> mosr_upscaler;
-    std::string esrgan_path;
+    std::unique_ptr<sd::pipeline::ImageUpscaleModel> model;
     int n_threads;
     sd::ParallelExecutor tensor_executor;
     bool direct                 = false;
@@ -36,9 +33,7 @@ struct UpscalerGGML {
     bool load_from_file(const std::string& esrgan_path,
                         int n_threads);
     void set_max_graph_vram_bytes(size_t max_vram_bytes);
-    GGMLRunner* runner();
     int get_scale();
-    sd::Tensor<float> compute(const sd::Tensor<float>& input_tensor);
     sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor);
     sd_image_t upscale(sd_image_t input_image, uint32_t upscale_factor);
 };

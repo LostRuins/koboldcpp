@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "conditioning/prompt_input.h"
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_runner.h"
@@ -110,6 +111,16 @@ namespace LLM {
     using ImageEmbeds          = std::vector<std::pair<int, sd::Tensor<float>>>;
     using DeepStackImageEmbeds = std::vector<ImageEmbeds>;
 
+    struct PromptTokens {
+        std::vector<int> tokens;
+        int expanded_length = 0;
+        std::vector<float> weights;
+        std::vector<float> mask;
+        ImageEmbeds image_embeds;
+        DeepStackImageEmbeds deepstack_image_embeds;
+        std::vector<ImageGrid> image_grids;
+    };
+
     struct LLMConfig {
         LLMArch arch                    = LLMArch::QWEN2_5_VL;
         int64_t num_layers              = 28;
@@ -176,18 +187,25 @@ namespace LLM {
                 config.qkv_bias     = false;
                 config.rms_norm_eps = 1e-5f;
             } else if (arch == LLMArch::QWEN3_5) {
-                config.hidden_size             = 4096;
-                config.intermediate_size       = 12288;
-                config.head_dim                = 256;
-                config.num_heads               = 16;
-                config.num_kv_heads            = 4;
-                config.qkv_bias                = false;
-                config.qk_norm                 = true;
-                config.rms_norm_add            = true;
-                config.partial_rotary          = 0.25f;
-                config.rope_thetas             = {10000000.f};
-                config.max_position_embeddings = 262144;
-                config.vocab_size              = 248320;
+                config.hidden_size                    = 4096;
+                config.intermediate_size              = 12288;
+                config.head_dim                       = 256;
+                config.num_heads                      = 16;
+                config.num_kv_heads                   = 4;
+                config.qkv_bias                       = false;
+                config.qk_norm                        = true;
+                config.rms_norm_add                   = true;
+                config.partial_rotary                 = 0.25f;
+                config.rope_thetas                    = {10000000.f};
+                config.max_position_embeddings        = 262144;
+                config.vocab_size                     = 248320;
+                config.vision.arch                    = LLMVisionArch::QWEN3_VL;
+                config.vision.num_layers              = 27;
+                config.vision.hidden_size             = 1152;
+                config.vision.intermediate_size       = 4304;
+                config.vision.out_hidden_size         = 4096;
+                config.vision.patch_size              = 16;
+                config.vision.num_position_embeddings = 2304;
             } else if (arch == LLMArch::QWEN3 || arch == LLMArch::QWEN3_VL) {
                 config.head_dim     = 128;
                 config.num_heads    = 32;
@@ -485,7 +503,7 @@ namespace LLM {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             ggml_tensor* w = params["weight"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+                w = ctx->weight_adapter->patch_weight(ctx, w, prefix + "weight");
             }
             x           = ggml_rms_norm(ctx->ggml_ctx, x, eps);
             auto scaled = ggml_mul(ctx->ggml_ctx, x, w);
@@ -517,13 +535,13 @@ namespace LLM {
             auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
             auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
 
-            auto h = gate_proj->forward(ctx, x);
+            auto h  = gate_proj->forward(ctx, x);
+            auto up = up_proj->forward(ctx, x);
             if (activation == MLPActivation::GELU_TANH) {
-                h = ggml_ext_gelu(ctx->ggml_ctx, h, true);
+                h = ggml_geglu_split(ctx->ggml_ctx, h, up);
             } else {
-                h = ggml_silu_inplace(ctx->ggml_ctx, h);
+                h = ggml_swiglu_split(ctx->ggml_ctx, h, up);
             }
-            h = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
             h = down_proj->forward(ctx, h);
             return h;
         }
@@ -941,7 +959,7 @@ namespace LLM {
             // An embed can sit flush against the previous one or at the very start/end of the
             // sequence, leaving no text tokens to splice around it.
             if (txt_token_end > txt_token_start) {
-                auto txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+                auto txt_embed = ggml_ext_slice(ctx, raw_x, 1, txt_token_start, txt_token_end);
                 if (input_embed == nullptr) {
                     input_embed = txt_embed;
                 } else {
@@ -960,7 +978,7 @@ namespace LLM {
         txt_token_end   = raw_x->ne[1];
 
         if (txt_token_end > txt_token_start) {
-            auto final_txt_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, txt_token_start, txt_token_end);
+            auto final_txt_embed = ggml_ext_slice(ctx, raw_x, 1, txt_token_start, txt_token_end);
             input_embed          = ggml_concat(ctx->ggml_ctx, input_embed, final_txt_embed, 1);
         }
         GGML_ASSERT(raw_x->ne[1] + removed_tokens == input_embed->ne[1]);
@@ -982,16 +1000,16 @@ namespace LLM {
             GGML_ASSERT(index >= token_start);
             GGML_ASSERT(index + image_embed->ne[1] <= raw_x->ne[1]);
             if (index > token_start) {
-                auto text_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, token_start, index);
+                auto text_embed = ggml_ext_slice(ctx, raw_x, 1, token_start, index);
                 output          = output == nullptr ? text_embed : ggml_concat(ctx->ggml_ctx, output, text_embed, 1);
             }
-            auto visual_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, index, index + image_embed->ne[1]);
+            auto visual_embed = ggml_ext_slice(ctx, raw_x, 1, index, index + image_embed->ne[1]);
             visual_embed      = ggml_add(ctx->ggml_ctx, visual_embed, image_embed);
             output            = output == nullptr ? visual_embed : ggml_concat(ctx->ggml_ctx, output, visual_embed, 1);
             token_start       = index + image_embed->ne[1];
         }
         if (token_start < raw_x->ne[1]) {
-            auto text_embed = ggml_ext_slice(ctx->ggml_ctx, raw_x, 1, token_start, raw_x->ne[1]);
+            auto text_embed = ggml_ext_slice(ctx, raw_x, 1, token_start, raw_x->ne[1]);
             output          = output == nullptr ? text_embed : ggml_concat(ctx->ggml_ctx, output, text_embed, 1);
         }
         GGML_ASSERT(output != nullptr && output->ne[1] == raw_x->ne[1]);
@@ -1020,15 +1038,14 @@ namespace LLM {
                 auto linear_fc1 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc1"]);
                 auto linear_fc2 = std::dynamic_pointer_cast<Linear>(blocks["linear_fc2"]);
                 x               = linear_fc1->forward(ctx, x);
-                x               = ggml_ext_gelu(ctx->ggml_ctx, x);
+                x               = ggml_ext_gelu(ctx, x);
                 x               = linear_fc2->forward(ctx, x);
             } else {
                 auto gate_proj = std::dynamic_pointer_cast<Linear>(blocks["gate_proj"]);
                 auto up_proj   = std::dynamic_pointer_cast<Linear>(blocks["up_proj"]);
                 auto down_proj = std::dynamic_pointer_cast<Linear>(blocks["down_proj"]);
                 auto h         = gate_proj->forward(ctx, x);
-                h              = ggml_silu_inplace(ctx->ggml_ctx, h);
-                h              = ggml_mul_inplace(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
+                h              = ggml_swiglu_split(ctx->ggml_ctx, h, up_proj->forward(ctx, x));
                 x              = down_proj->forward(ctx, h);
             }
             return x;
@@ -1106,11 +1123,11 @@ namespace LLM {
                 auto proj_0 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.0"]);
                 auto proj_1 = std::dynamic_pointer_cast<Conv2d>(blocks["proj.1"]);
 
-                auto x0 = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                auto x0 = ggml_ext_slice(ctx, x, 2, 0, 1);
                 x0      = ggml_reshape_4d(ctx->ggml_ctx, x0, x0->ne[0], x0->ne[1], in_channels, x0->ne[3] / in_channels);
                 x0      = proj_0->forward(ctx, x0);
 
-                auto x1 = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1, 2);
+                auto x1 = ggml_ext_slice(ctx, x, 2, 1, 2);
                 x1      = ggml_reshape_4d(ctx->ggml_ctx, x1, x1->ne[0], x1->ne[1], in_channels, x1->ne[3] / in_channels);
                 x1      = proj_1->forward(ctx, x1);
 
@@ -1174,7 +1191,7 @@ namespace LLM {
             x = ln_q->forward(ctx, x);
             x = ggml_reshape_2d(ctx->ggml_ctx, x, hidden_size, ggml_nelements(x) / hidden_size);
             x = mlp_0->forward(ctx, x);
-            x = ggml_ext_gelu(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx, x);
             x = mlp_2->forward(ctx, x);
             return x;
         }
@@ -1235,30 +1252,29 @@ namespace LLM {
                              ggml_tensor* pe,
                              ggml_tensor* mask = nullptr) {
             // x: [N, n_token, hidden_size]
-            int64_t n_token = x->ne[1];
-            int64_t N       = x->ne[2];
-            auto proj       = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
+            auto proj = std::dynamic_pointer_cast<Linear>(blocks["proj"]);
 
-            std::vector<ggml_tensor*> qkv_vec;
+            ggml_tensor *q, *k, *v;
             if (llama_cpp_style) {
                 auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
                 auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
                 auto v_proj = std::dynamic_pointer_cast<Linear>(blocks["v_proj"]);
 
-                auto q = q_proj->forward(ctx, x);
-                auto k = k_proj->forward(ctx, x);
-                auto v = v_proj->forward(ctx, x);
-
-                qkv_vec = {q, k, v};
+                q = ggml_reshape_4d(ctx->ggml_ctx, q_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
+                k = ggml_reshape_4d(ctx->ggml_ctx, k_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
+                v = ggml_reshape_4d(ctx->ggml_ctx, v_proj->forward(ctx, x), head_dim, num_heads, x->ne[1], x->ne[2]);
             } else {
-                auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
-                auto qkv      = qkv_proj->forward(ctx, x);
-                qkv_vec       = split_qkv(ctx->ggml_ctx, qkv);
+                auto qkv_proj  = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
+                auto qkv       = qkv_proj->forward(ctx, x);
+                auto qkv_dim   = qkv->ne[0] / 3;
+                auto split_qkv = [&](int i) {
+                    return ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                        head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+                };
+                q = split_qkv(0);
+                k = split_qkv(1);
+                v = split_qkv(2);
             }
-
-            auto q = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, qkv_vec[0]->ne[1], qkv_vec[0]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto k = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, qkv_vec[1]->ne[1], qkv_vec[1]->ne[2]);  // [N, n_token, n_head, d_head]
-            auto v = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, qkv_vec[2]->ne[1], qkv_vec[2]->ne[2]);  // [N, n_token, n_head, d_head]
 
             x = Rope::attention(ctx, q, k, v, pe, mask, 1.f, false);  // [N, n_token, hidden_size]
 
@@ -1488,12 +1504,12 @@ namespace LLM {
             for (int i = 0; i < kernel; ++i) {
                 auto w    = ggml_cont(c, ggml_view_2d(c, params["conv1d.weight"], 1, conv_dim, kernel * sizeof(float), i * sizeof(float)));
                 w         = ggml_reshape_1d(c, w, conv_dim);
-                auto part = ggml_mul(c, ggml_ext_slice(c, padded, 1, i, i + n), w);
+                auto part = ggml_mul(c, ggml_ext_slice(ctx, padded, 1, i, i + n), w);
                 mixed     = mixed ? ggml_add(c, mixed, part) : part;
             }
             mixed      = ggml_silu(c, mixed);
             auto heads = [&](int start, int count) {
-                auto h = ggml_ext_slice(c, mixed, 0, start, start + head_dim * count);
+                auto h = ggml_ext_slice(ctx, mixed, 0, start, start + head_dim * count);
                 return ggml_reshape_4d(c, h, head_dim, count, n, 1);
             };
             auto repeat_keys = [&](ggml_tensor* h) {
@@ -1515,12 +1531,12 @@ namespace LLM {
             auto a     = gguf_layout ? params["A"] : ggml_neg(c, ggml_exp(c, params["A_log"]));
             decay      = ggml_mul(c, decay, a);
             decay      = ggml_reshape_4d(c, decay, 1, value_heads, n, 1);
-            auto state = ggml_ext_zeros(c, head_dim, head_dim, value_heads, 1);
+            auto state = ggml_ext_zeros(ctx, head_dim, head_dim, value_heads, 1);
             auto out   = ggml_gated_delta_net(c, q, k, v, decay, beta, state, 1);
             out        = ggml_view_3d(c, out, head_dim, value_heads, n, head_dim * sizeof(float), head_dim * value_heads * sizeof(float), 0);
             out        = std::dynamic_pointer_cast<LLMRMSNorm>(blocks["norm"])->forward(ctx, out);
             auto z     = ggml_reshape_3d(c, linear("in_proj_z"), head_dim, value_heads, n);
-            out        = ggml_mul(c, out, ggml_silu(c, z));
+            out        = ggml_swiglu_split(c, z, out);
             out        = ggml_reshape_3d(c, out, head_dim * value_heads, n, 1);
             return std::dynamic_pointer_cast<Linear>(blocks["out_proj"])->forward(ctx, out);
         }
@@ -1595,13 +1611,14 @@ namespace LLM {
         // ggml applies theta_i / freq_factors[i], so a huge factor collapses the angle to zero and
         // leaves that pair unrotated. This reproduces transformers' "proportional" RoPE, whose
         // inv_freq is zero-padded past `rope_pairs`, without reordering the head.
-        ggml_tensor* rope_freq_factors(ggml_context* ctx) const {
+        ggml_tensor* rope_freq_factors(GGMLRunnerContext* runner_ctx) const {
+            auto ctx  = runner_ctx->ggml_ctx;
             int pairs = head_dim / 2;
             if (rope_pairs >= pairs) {
                 return nullptr;
             }
-            auto rotated   = ggml_ext_ones(ctx, rope_pairs, 1, 1, 1);
-            auto unrotated = ggml_ext_full(ctx, 1e30f, pairs - rope_pairs, 1, 1, 1);
+            auto rotated   = ggml_ext_ones(runner_ctx, rope_pairs, 1, 1, 1);
+            auto unrotated = ggml_ext_full(runner_ctx, 1e30f, pairs - rope_pairs, 1, 1, 1);
             return ggml_concat(ctx, rotated, unrotated, 0);
         }
 
@@ -1625,9 +1642,9 @@ namespace LLM {
                 auto qkv      = qkv_proj->forward(ctx, x);  // [N, n_token, (num_heads + num_kv_heads*2)*head_dim]
                 int64_t q_len = num_heads * head_dim;
                 int64_t k_len = num_kv_heads * head_dim;
-                q             = ggml_ext_slice(ctx->ggml_ctx, qkv, 0, 0, q_len);
-                k             = ggml_ext_slice(ctx->ggml_ctx, qkv, 0, q_len, q_len + k_len);
-                v             = ggml_ext_slice(ctx->ggml_ctx, qkv, 0, q_len + k_len, q_len + k_len * 2);
+                q             = ggml_ext_slice(ctx, qkv, 0, 0, q_len);
+                k             = ggml_ext_slice(ctx, qkv, 0, q_len, q_len + k_len);
+                v             = ggml_ext_slice(ctx, qkv, 0, q_len + k_len, q_len + k_len * 2);
             } else {
                 auto q_proj = std::dynamic_pointer_cast<Linear>(blocks["q_proj"]);
                 auto k_proj = std::dynamic_pointer_cast<Linear>(blocks["k_proj"]);
@@ -1641,9 +1658,9 @@ namespace LLM {
             ggml_tensor* output_gate = nullptr;
             if (arch == LLMArch::QWEN3_5) {
                 q           = ggml_reshape_4d(ctx->ggml_ctx, q, head_dim * 2, num_heads, n_token, N);
-                output_gate = ggml_ext_slice(ctx->ggml_ctx, q, 0, head_dim, head_dim * 2);
+                output_gate = ggml_ext_slice(ctx, q, 0, head_dim, head_dim * 2);
                 output_gate = ggml_reshape_3d(ctx->ggml_ctx, output_gate, head_dim * num_heads, n_token, N);
-                q           = ggml_ext_slice(ctx->ggml_ctx, q, 0, 0, head_dim);
+                q           = ggml_ext_slice(ctx, q, 0, 0, head_dim);
             }
             q = ggml_reshape_4d(ctx->ggml_ctx, q, head_dim, num_heads, n_token, N);     // [N, n_token, num_heads, head_dim]
             k = ggml_reshape_4d(ctx->ggml_ctx, k, head_dim, num_kv_heads, n_token, N);  // [N, n_token, num_kv_heads, head_dim]
@@ -1667,12 +1684,12 @@ namespace LLM {
                 auto rotate = [&](ggml_tensor* input) {
                     auto gctx    = ctx->ggml_ctx;
                     int64_t half = rope_cos->ne[0];
-                    auto first   = ggml_ext_slice(gctx, input, 0, 0, half);
-                    auto second  = ggml_ext_slice(gctx, input, 0, half, 2 * half);
+                    auto first   = ggml_ext_slice(ctx, input, 0, 0, half);
+                    auto second  = ggml_ext_slice(ctx, input, 0, half, 2 * half);
                     auto left    = ggml_sub(gctx, ggml_mul(gctx, first, rope_cos), ggml_mul(gctx, second, rope_sin));
                     auto right   = ggml_add(gctx, ggml_mul(gctx, second, rope_cos), ggml_mul(gctx, first, rope_sin));
                     auto rotated = ggml_concat(gctx, left, right, 0);
-                    return ggml_concat(gctx, rotated, ggml_ext_slice(gctx, input, 0, 2 * half, input->ne[0]), 0);
+                    return ggml_concat(gctx, rotated, ggml_ext_slice(ctx, input, 0, 2 * half, input->ne[0]), 0);
                 };
                 q = rotate(q);
                 k = rotate(k);
@@ -1747,7 +1764,7 @@ namespace LLM {
                                                  1.f);
             } else if (arch == LLMArch::GEMMA4_12B) {
                 float rope_theta  = (rope_index == 1 ? 10000.0f : 1000000.0f);
-                auto freq_factors = rope_freq_factors(ctx->ggml_ctx);
+                auto freq_factors = rope_freq_factors(ctx);
                 q                 = ggml_rope_ext(ctx->ggml_ctx,
                                                   q,
                                                   input_pos,
@@ -1801,6 +1818,11 @@ namespace LLM {
                                   1.f,
                                   32.f,
                                   1.f);
+            } else if (arch == LLMArch::QWEN3_5 && input_pos->ne[0] == n_token * 4) {
+                int sections[4] = {11, 11, 10, 0};
+                int rotary_dim  = rope_pairs * 2;
+                q               = ggml_rope_multi(ctx->ggml_ctx, q, input_pos, nullptr, rotary_dim, sections, GGML_ROPE_TYPE_IMROPE, static_cast<int>(max_position_embeddings), rope_thetas[0], 1.f, 0.f, 1.f, 32.f, 1.f);
+                k               = ggml_rope_multi(ctx->ggml_ctx, k, input_pos, nullptr, rotary_dim, sections, GGML_ROPE_TYPE_IMROPE, static_cast<int>(max_position_embeddings), rope_thetas[0], 1.f, 0.f, 1.f, 32.f, 1.f);
             } else if (arch == LLMArch::LLADA2_MOE || arch == LLMArch::QWEN3_5) {
                 // LLaDA2 slices the head (query[..., :rotary_dim]) instead of zero-padding
                 // inv_freq like gemma does, so rotate_half pairs i with i + rotary_dim/2 and the
@@ -1845,18 +1867,18 @@ namespace LLM {
 
             if (unscaled_attention) {
                 // Gemma 4 attends with scaling=1.0; undo the helper's own 1/sqrt(head_dim).
-                q = ggml_ext_scale(ctx->ggml_ctx, q, std::sqrt(static_cast<float>(head_dim)));
+                q = ggml_ext_scale(ctx, q, std::sqrt(static_cast<float>(head_dim)));
             }
 
-            q = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, q, 0, 2, 1, 3));  // [N, num_heads, n_token, head_dim]
-            q = ggml_reshape_3d(ctx->ggml_ctx, q, q->ne[0], q->ne[1], q->ne[2] * q->ne[3]);      // [N*num_heads, n_token, head_dim]
+            q = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, q, 0, 2, 1, 3));        // [N, num_heads, n_token, head_dim]
+            q = ggml_reshape_3d(ctx->ggml_ctx, q, q->ne[0], q->ne[1], q->ne[2] * q->ne[3]);  // [N*num_heads, n_token, head_dim]
 
-            k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 0, 2, 1, 3));  // [N, num_kv_heads, n_token, head_dim]
-            k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);      // [N*num_kv_heads, n_token, head_dim]
+            k = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, k, 0, 2, 1, 3));        // [N, num_kv_heads, n_token, head_dim]
+            k = ggml_reshape_3d(ctx->ggml_ctx, k, k->ne[0], k->ne[1], k->ne[2] * k->ne[3]);  // [N*num_kv_heads, n_token, head_dim]
 
             if (arch == LLMArch::GPT_OSS_20B) {
                 GGML_ASSERT(N == 1);
-                auto v_attn = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, v, 1, 2, 0, 3));  // [N, kv_heads, head_dim, tokens]
+                auto v_attn = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, v, 1, 2, 0, 3));  // [N, kv_heads, head_dim, tokens]
                 v_attn      = ggml_reshape_3d(ctx->ggml_ctx, v_attn, n_token, head_dim, num_kv_heads * N);
 
                 auto kq = ggml_mul_mat(ctx->ggml_ctx, k, q);
@@ -1871,7 +1893,7 @@ namespace LLM {
                 auto kqv = ggml_mul_mat(ctx->ggml_ctx, v_attn, kq);
                 kqv      = ggml_reshape_4d(ctx->ggml_ctx, kqv, head_dim, n_token, num_heads, N);
                 kqv      = ggml_permute(ctx->ggml_ctx, kqv, 0, 2, 1, 3);
-                x        = ggml_ext_cont(ctx->ggml_ctx, kqv);
+                x        = ggml_ext_cont(ctx, kqv);
                 x        = ggml_reshape_3d(ctx->ggml_ctx, x, head_dim * num_heads, n_token, N);
             } else {
                 x = ggml_ext_attention_ext(ctx, q, k, v, num_heads, attention_mask, true, ctx->flash_attn_enabled);  // [N, n_token, hidden_size]
@@ -2060,7 +2082,7 @@ namespace LLM {
             std::vector<ggml_tensor*> intermediate_outputs;
 
             if (config.normalize_input) {
-                x = ggml_ext_scale(ctx->ggml_ctx, x, std::sqrt(static_cast<float>(config.hidden_size)), true);
+                x = ggml_ext_scale(ctx, x, std::sqrt(static_cast<float>(config.hidden_size)), true);
             }
             if (return_all_hidden_states) {
                 intermediate_outputs.push_back(x);
@@ -2208,9 +2230,20 @@ namespace LLM {
         std::array<std::vector<int32_t>, 4> pos_embed_idx_data_;
         std::array<std::vector<float>, 4> pos_embed_weight_data_;
 
-        static ggml_tensor* process_image_common(ggml_context* ctx,
+        static bool check_window_mask_size(int64_t grid_h, int64_t grid_w) {
+            // The dense float mask must fit within 256 MiB, including rectangular grids.
+            constexpr int64_t max_patches = 8192;
+            if (grid_h <= 0 || grid_w <= 0 || grid_h > max_patches || grid_w > max_patches / grid_h) {
+                LOG_ERROR("Qwen2.5-VL images support at most %" PRId64 " patches (256 MiB window mask)", max_patches);
+                return false;
+            }
+            return true;
+        }
+
+        static ggml_tensor* process_image_common(GGMLRunnerContext* runner_ctx,
                                                  ggml_tensor* image,
                                                  const LLMVisionConfig& vision_params) {
+            auto ctx = runner_ctx->ggml_ctx;
             // image: [C, H, W]
             // return: [grid_t*(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw], grid_t == 1
             int64_t C  = image->ne[2];
@@ -2223,16 +2256,16 @@ namespace LLM {
             int64_t pw = vision_params.patch_size;
 
             image = ggml_reshape_4d(ctx, image, pw, mw, (W / mw / pw), H * C);                               // [C*H, (W/mw/pw), mw, pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 3, 1));                          // [mw, C*H, (W/mw/pw), pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(runner_ctx, image, 0, 2, 3, 1));                   // [mw, C*H, (W/mw/pw), pw]
             image = ggml_reshape_4d(ctx, image, pw * (W / mw / pw), H, C, mw);                               // [mw, C, H, (W/mw/pw)*pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 3, 1));                          // [H, mw, C, (W/mw/pw)*pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(runner_ctx, image, 0, 2, 3, 1));                   // [H, mw, C, (W/mw/pw)*pw]
             image = ggml_reshape_4d(ctx, image, pw, (W / mw / pw) * C * mw, ph, mh * (H / mh / ph));         // [(H/mh/ph)*mh, ph, mw*C*(W/mw/pw), pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph)*mh, mw*C*(W/mw/pw), ph, pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(runner_ctx, image, 0, 2, 1, 3));                   // [(H/mh/ph)*mh, mw*C*(W/mw/pw), ph, pw]
             image = ggml_reshape_4d(ctx, image, pw * ph, (W / mw / pw), C, mw * mh * (H / mh / ph));         // [(H/mh/ph)*mh*mw, C, (W/mw/pw), ph*pw]
             image = ggml_concat(ctx, image, image, 0);                                                       // [(H/mh/ph)*mh*mw, C, (W/mw/pw), pt*ph*pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph)*mh*mw, (W/mw/pw), C, pt*ph*pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(runner_ctx, image, 0, 2, 1, 3));                   // [(H/mh/ph)*mh*mw, (W/mw/pw), C, pt*ph*pw]
             image = ggml_reshape_4d(ctx, image, pw * ph * pt * C, (W / mw / pw), mw * mh, (H / mh / ph));    // [(H/mh/ph), mh*mw, (W/mw/pw), C*pt*ph*pw]
-            image = ggml_cont(ctx, ggml_ext_torch_permute(ctx, image, 0, 2, 1, 3));                          // [(H/mh/ph), (W/mw/pw), mh*mw, C*pt*ph*pw]
+            image = ggml_cont(ctx, ggml_ext_torch_permute(runner_ctx, image, 0, 2, 1, 3));                   // [(H/mh/ph), (W/mw/pw), mh*mw, C*pt*ph*pw]
             image = ggml_reshape_2d(ctx, image, pw * ph * pt * C, mw * mh * (W / mw / pw) * (H / mh / ph));  // [(H/mh/ph)*(W/mw/pw)*mh*mw, C*pt*ph*pw]
             return image;
         }
@@ -2302,7 +2335,6 @@ namespace LLM {
         }
 
         static ggml_tensor* encode_image_common(GGMLRunner* runner,
-                                                ggml_context* compute_ctx,
                                                 GGMLRunnerContext* runner_ctx,
                                                 ggml_tensor* image,
                                                 const LLMVisionConfig& vision_params,
@@ -2314,13 +2346,18 @@ namespace LLM {
                                                 std::array<std::vector<int32_t>, 4>& pos_embed_idx_data,
                                                 std::array<std::vector<float>, 4>& pos_embed_weight_data,
                                                 std::vector<ggml_tensor*>* output_tensors = nullptr) {
+            auto compute_ctx = runner_ctx->ggml_ctx;
             GGML_ASSERT(image->ne[1] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
             GGML_ASSERT(image->ne[0] % (vision_params.patch_size * vision_params.spatial_merge_size) == 0);
 
-            int grid_h = static_cast<int>(image->ne[1]) / vision_params.patch_size;
-            int grid_w = static_cast<int>(image->ne[0]) / vision_params.patch_size;
+            if (vision_params.arch == LLMVisionArch::QWEN2_5_VL &&
+                !check_window_mask_size(image->ne[1] / vision_params.patch_size, image->ne[0] / vision_params.patch_size)) {
+                throw std::invalid_argument("Qwen2.5-VL window mask exceeds its memory limit");
+            }
+            int grid_h = static_cast<int>(image->ne[1] / vision_params.patch_size);
+            int grid_w = static_cast<int>(image->ne[0] / vision_params.patch_size);
 
-            auto pixel_values = process_image_common(compute_ctx, image, vision_params);
+            auto pixel_values = process_image_common(runner_ctx, image, vision_params);
             int head_dim      = static_cast<int>(vision_params.hidden_size / vision_params.num_heads);
 
             if (vision_params.arch == LLMVisionArch::QWEN3_VL) {
@@ -2380,7 +2417,8 @@ namespace LLM {
             runner->set_backend_tensor_data(window_index, window_index_vec.data());
             runner->set_backend_tensor_data(window_inverse_index, window_inverse_index_vec.data());
 
-            window_mask_vec.resize((grid_h * grid_w) * (grid_h * grid_w));
+            const size_t n_patches = static_cast<size_t>(grid_h) * grid_w;
+            window_mask_vec.resize(n_patches * n_patches);
             int window_start_index = 0;
             for (int seq_index = 0; seq_index < seqlens.size(); seq_index++) {
                 int window_end_index = window_start_index + seqlens[seq_index];
@@ -2391,8 +2429,9 @@ namespace LLM {
                         if (j >= window_start_index && j < window_end_index) {
                             mask_value = 0;
                         }
-                        GGML_ASSERT((i * (grid_h * grid_w) + j) < window_mask_vec.size());
-                        window_mask_vec[i * (grid_h * grid_w) + j] = mask_value;
+                        const size_t index = static_cast<size_t>(i) * n_patches + j;
+                        GGML_ASSERT(index < window_mask_vec.size());
+                        window_mask_vec[index] = mask_value;
                     }
                 }
                 window_start_index = window_end_index;
@@ -2486,6 +2525,60 @@ namespace LLM {
             return hidden_states;
         }
 
+        static std::vector<int> build_position_ids(const LLMConfig& config,
+                                                   int64_t n_tokens,
+                                                   const std::vector<ImageGrid>& image_grids) {
+            std::vector<int> input_pos_vec;
+            if (config.arch == LLMArch::MISTRAL_SMALL_3_2 ||
+                config.arch == LLMArch::MINISTRAL_3_3B ||
+                config.arch == LLMArch::QWEN3 ||
+                (config.arch == LLMArch::QWEN3_5 && image_grids.empty()) ||
+                config.arch == LLMArch::GEMMA3_12B ||
+                config.arch == LLMArch::GEMMA4_12B ||
+                config.arch == LLMArch::GEMMA2_2B ||
+                config.arch == LLMArch::GPT_OSS_20B ||
+                config.arch == LLMArch::LLADA2_MOE) {
+                input_pos_vec.resize(n_tokens);
+                for (int i = 0; i < n_tokens; ++i) {
+                    input_pos_vec[i] = i;
+                }
+            } else {
+                input_pos_vec.resize(n_tokens * 4);
+                for (int i = 0; i < n_tokens; ++i) {
+                    input_pos_vec[i]                = i;
+                    input_pos_vec[n_tokens + i]     = i;
+                    input_pos_vec[2 * n_tokens + i] = i;
+                    input_pos_vec[3 * n_tokens + i] = 0;
+                }
+                if ((config.arch == LLMArch::QWEN2_5_VL || config.arch == LLMArch::QWEN3_VL || config.arch == LLMArch::QWEN3_5) && !image_grids.empty()) {
+                    int offset = 0;
+                    for (const auto& grid : image_grids) {
+                        int end      = grid.index + grid.size;
+                        int grid_h   = grid.grid_h / config.vision.spatial_merge_size;
+                        int grid_w   = grid.grid_w / config.vision.spatial_merge_size;
+                        int len_max  = std::max(grid_h, grid_w);
+                        int next_pos = grid.index + len_max + offset;
+                        GGML_ASSERT(grid.index >= 0 && end <= n_tokens);
+                        GGML_ASSERT(grid_h > 0 && grid_w > 0 && grid.size == grid_h * grid_w);
+                        for (int token = end; token < n_tokens; ++token) {
+                            int pos                             = next_pos + token - end;
+                            input_pos_vec[token]                = pos;
+                            input_pos_vec[n_tokens + token]     = pos;
+                            input_pos_vec[2 * n_tokens + token] = pos;
+                        }
+                        for (int token = 0; token < grid.size; ++token) {
+                            input_pos_vec[grid.index + token]                = grid.index + offset;
+                            input_pos_vec[n_tokens + grid.index + token]     = grid.index + offset + token / grid_w;
+                            input_pos_vec[2 * n_tokens + grid.index + token] = grid.index + offset + token % grid_w;
+                        }
+                        offset += len_max - grid.size;
+                    }
+                }
+            }
+
+            return input_pos_vec;
+        }
+
         ggml_cgraph* build_graph(const sd::Tensor<int32_t>& input_ids_tensor,
                                  const sd::Tensor<float>& attention_mask_tensor,
                                  const ImageEmbeds& image_embeds_tensor,
@@ -2514,52 +2607,7 @@ namespace LLM {
             for (const auto& image_embed : image_embeds) {
                 n_tokens += image_embed.second->ne[1] - 1;
             }
-            if (config.arch == LLMArch::MISTRAL_SMALL_3_2 ||
-                config.arch == LLMArch::MINISTRAL_3_3B ||
-                config.arch == LLMArch::QWEN3 ||
-                config.arch == LLMArch::QWEN3_5 ||
-                config.arch == LLMArch::GEMMA3_12B ||
-                config.arch == LLMArch::GEMMA4_12B ||
-                config.arch == LLMArch::GEMMA2_2B ||
-                config.arch == LLMArch::GPT_OSS_20B ||
-                config.arch == LLMArch::LLADA2_MOE) {
-                input_pos_vec.resize(n_tokens);
-                for (int i = 0; i < n_tokens; ++i) {
-                    input_pos_vec[i] = i;
-                }
-            } else {
-                input_pos_vec.resize(n_tokens * 4);
-                for (int i = 0; i < n_tokens; ++i) {
-                    input_pos_vec[i]                = i;
-                    input_pos_vec[n_tokens + i]     = i;
-                    input_pos_vec[2 * n_tokens + i] = i;
-                    input_pos_vec[3 * n_tokens + i] = 0;
-                }
-                if (config.arch == LLMArch::QWEN3_VL && !image_grids.empty()) {
-                    int offset = 0;
-                    for (const auto& grid : image_grids) {
-                        int end      = grid.index + grid.size;
-                        int grid_h   = grid.grid_h / config.vision.spatial_merge_size;
-                        int grid_w   = grid.grid_w / config.vision.spatial_merge_size;
-                        int len_max  = std::max(grid_h, grid_w);
-                        int next_pos = grid.index + len_max + offset;
-                        GGML_ASSERT(grid.index >= 0 && end <= n_tokens);
-                        GGML_ASSERT(grid_h > 0 && grid_w > 0 && grid.size == grid_h * grid_w);
-                        for (int token = end; token < n_tokens; ++token) {
-                            int pos                             = next_pos + token - end;
-                            input_pos_vec[token]                = pos;
-                            input_pos_vec[n_tokens + token]     = pos;
-                            input_pos_vec[2 * n_tokens + token] = pos;
-                        }
-                        for (int token = 0; token < grid.size; ++token) {
-                            input_pos_vec[grid.index + token]                = grid.index + offset;
-                            input_pos_vec[n_tokens + grid.index + token]     = grid.index + offset + token / grid_w;
-                            input_pos_vec[2 * n_tokens + grid.index + token] = grid.index + offset + token % grid_w;
-                        }
-                        offset += len_max - grid.size;
-                    }
-                }
-            }
+            input_pos_vec = build_position_ids(config, n_tokens, image_grids);
 
             if (!position_ids.empty()) {
                 GGML_ASSERT(position_ids.numel() == static_cast<int64_t>(input_pos_vec.size()));
@@ -2679,8 +2727,8 @@ namespace LLM {
             return grid_t * grid_h * grid_w;
         }
 
-        ggml_tensor* process_image(ggml_context* ctx, ggml_tensor* image) {
-            return process_image_common(ctx, image, config.vision);
+        ggml_tensor* process_image(GGMLRunnerContext* runner_ctx, ggml_tensor* image) {
+            return process_image_common(runner_ctx, image, config.vision);
         }
 
         ggml_tensor* build_patch_pos_embeds(GGMLRunnerContext* runner_ctx,
@@ -2699,7 +2747,6 @@ namespace LLM {
 
         ggml_tensor* encode_image(GGMLRunnerContext* runner_ctx, ggml_tensor* image) {
             return encode_image_common(this,
-                                       compute_ctx,
                                        runner_ctx,
                                        image,
                                        config.vision,
@@ -2715,7 +2762,6 @@ namespace LLM {
         std::vector<ggml_tensor*> encode_image_outputs(GGMLRunnerContext* runner_ctx, ggml_tensor* image) {
             std::vector<ggml_tensor*> outputs;
             encode_image_common(this,
-                                compute_ctx,
                                 runner_ctx,
                                 image,
                                 config.vision,
@@ -2877,6 +2923,149 @@ namespace LLM {
                                                  static_cast<int64_t>(i + 1) * config.hidden_size));
             }
             return outputs;
+        }
+
+        bool supports_prompt_images() const {
+            return enable_vision && (config.arch == LLMArch::QWEN2_5_VL || config.arch == LLMArch::QWEN3_5 || config.arch == LLMArch::QWEN3_VL);
+        }
+
+        bool prepare_prompt(int n_threads,
+                            Tokenizer& tokenizer,
+                            const sd::PromptInput& input,
+                            int max_length,
+                            PromptTokens& result,
+                            const ImageEmbeds& reference_embeds             = {},
+                            const DeepStackImageEmbeds& reference_deepstack = {},
+                            const std::vector<ImageGrid>& reference_grids   = {}) {
+            result = {};
+            if (!supports_prompt_images()) {
+                LOG_ERROR("%s requires compatible vision weights for inline prompt images", get_desc().c_str());
+                return false;
+            }
+            std::vector<int> image_token, vision_start, vision_end;
+            if (!tokenizer.encode("<|image_pad|>", image_token) || image_token.size() != 1 ||
+                !tokenizer.encode("<|vision_start|>", vision_start) || vision_start.size() != 1 ||
+                !tokenizer.encode("<|vision_end|>", vision_end) || vision_end.size() != 1) {
+                LOG_ERROR("The LLM tokenizer must encode vision markers as single special tokens");
+                return false;
+            }
+            size_t reference_index = 0;
+            result.deepstack_image_embeds.resize(reference_deepstack.size());
+            auto append_tokens = [&](const std::vector<int>& tokens, float weight) {
+                for (int token : tokens) {
+                    const bool reference = reference_index < reference_embeds.size() &&
+                                           reference_embeds[reference_index].first == result.expanded_length;
+                    const int count      = reference ? static_cast<int>(reference_embeds[reference_index].second.shape()[1]) : 1;
+                    if (count > max_length - result.expanded_length) {
+                        LOG_ERROR("Multimodal prompt exceeds the %d-token context", max_length);
+                        return false;
+                    }
+                    if (reference) {
+                        const auto& embed = reference_embeds[reference_index++];
+                        result.image_embeds.push_back(embed);
+                        for (size_t layer = 0; layer < reference_deepstack.size(); ++layer) {
+                            for (const auto& extra : reference_deepstack[layer]) {
+                                if (extra.first == embed.first) {
+                                    result.deepstack_image_embeds[layer].push_back(extra);
+                                }
+                            }
+                        }
+                        for (const auto& grid : reference_grids) {
+                            if (grid.index == embed.first) {
+                                result.image_grids.push_back(grid);
+                            }
+                        }
+                    }
+                    result.tokens.push_back(token);
+                    result.weights.insert(result.weights.end(), count, reference ? 1.f : weight);
+                    result.expanded_length += count;
+                }
+                return true;
+            };
+            for (const auto& part : input) {
+                if (part.type == sd::PromptPart::Type::TEXT) {
+                    std::vector<int> tokens;
+                    if (!tokenizer.encode(part.content, tokens) || !append_tokens(tokens, part.weight)) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!append_tokens(vision_start, 1.f)) {
+                    return false;
+                }
+                if (!part.image || part.image->empty() || part.image->dim() != 4 || part.image->shape()[2] != 3 || part.image->shape()[3] != 1) {
+                    LOG_ERROR("Prompt images must be RGB tensors with one frame");
+                    return false;
+                }
+                const auto& source  = *part.image;
+                const int factor    = config.vision.patch_size * config.vision.spatial_merge_size;
+                const double height = static_cast<double>(source.shape()[1]);
+                const double width  = static_cast<double>(source.shape()[0]);
+                if (std::max(height, width) / std::min(height, width) > 200.0) {
+                    LOG_ERROR("Prompt image aspect ratio exceeds 200");
+                    return false;
+                }
+                int h                   = std::max(factor, static_cast<int>(std::round(height / factor)) * factor);
+                int w                   = std::max(factor, static_cast<int>(std::round(width / factor)) * factor);
+                const bool qwen25       = config.arch == LLMArch::QWEN2_5_VL;
+                const double min_pixels = qwen25 ? 3136.0 : 65536.0;
+                const double max_pixels = qwen25 ? 12845056.0 : 16777216.0;
+                if (static_cast<double>(h) * w > max_pixels) {
+                    const double scale = std::sqrt(height * width / max_pixels);
+                    h                  = std::max(factor, static_cast<int>(std::floor(height / scale / factor)) * factor);
+                    w                  = std::max(factor, static_cast<int>(std::floor(width / scale / factor)) * factor);
+                } else if (static_cast<double>(h) * w < min_pixels) {
+                    const double scale = std::sqrt(min_pixels / (height * width));
+                    h                  = static_cast<int>(std::ceil(height * scale / factor)) * factor;
+                    w                  = static_cast<int>(std::ceil(width * scale / factor)) * factor;
+                }
+                const int count = (h / factor) * (w / factor);
+                if (count > max_length - result.expanded_length) {
+                    LOG_ERROR("Prompt images exceed the %d-token context", max_length);
+                    return false;
+                }
+                if (qwen25 && !check_window_mask_size(h / config.vision.patch_size, w / config.vision.patch_size)) {
+                    return false;
+                }
+                auto image          = sd::ops::interpolate(source, {w, h, 3, 1}, sd::ops::InterpolateMode::Bicubic, false, true);
+                const float means[] = {0.48145466f, 0.4578275f, 0.40821073f};
+                const float stds[]  = {0.26862954f, 0.26130258f, 0.27577711f};
+                for (int channel = 0; channel < 3; ++channel) {
+                    for (int64_t pixel = 0; pixel < int64_t(w) * h; ++pixel) {
+                        float& value = image[pixel + int64_t(channel) * w * h];
+                        value        = (std::clamp(value, 0.f, 1.f) - (qwen25 ? means[channel] : 0.5f)) /
+                                       (qwen25 ? stds[channel] : 0.5f);
+                    }
+                }
+                auto outputs = encode_image_outputs(n_threads, image, false);
+                if (outputs.empty() || outputs[0].shape()[0] != config.hidden_size || outputs[0].shape()[1] != count) {
+                    LOG_ERROR("Prompt image encoder returned an invalid embedding shape");
+                    return false;
+                }
+                const int index = result.expanded_length;
+                result.tokens.push_back(image_token[0]);
+                result.weights.insert(result.weights.end(), count, 1.f);
+                result.expanded_length += count;
+                result.image_embeds.emplace_back(index, std::move(outputs[0]));
+                if (result.deepstack_image_embeds.empty()) {
+                    result.deepstack_image_embeds.resize(outputs.size() - 1);
+                }
+                if (result.deepstack_image_embeds.size() != outputs.size() - 1) {
+                    return false;
+                }
+                for (size_t layer = 1; layer < outputs.size(); ++layer) {
+                    result.deepstack_image_embeds[layer - 1].emplace_back(index, std::move(outputs[layer]));
+                }
+                result.image_grids.push_back({index, count, h / config.vision.patch_size, w / config.vision.patch_size});
+                if (!append_tokens(vision_end, 1.f)) {
+                    return false;
+                }
+            }
+            if (reference_index != reference_embeds.size()) {
+                LOG_ERROR("Reference images do not match the tokenized prompt");
+                return false;
+            }
+            return true;
         }
 
         std::vector<sd::Tensor<float>> encode_video_block_outputs(const int n_threads,

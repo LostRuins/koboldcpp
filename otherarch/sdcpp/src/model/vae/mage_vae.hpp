@@ -32,23 +32,24 @@ namespace MageVAE {
             ggml_tensor* weight = affine ? params["weight"] : nullptr;
             ggml_tensor* bias   = affine ? params["bias"] : nullptr;
             if (affine && ctx->weight_adapter) {
-                weight = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, weight, prefix + "weight");
-                bias   = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, bias, prefix + "bias");
+                weight = ctx->weight_adapter->patch_weight(ctx, weight, prefix + "weight");
+                bias   = ctx->weight_adapter->patch_weight(ctx, bias, prefix + "bias");
             }
             // [N, C, H, W] -> [N, H, W, C] so layer norm reduces over channels.
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));
-            x = ggml_ext_layer_norm(ctx->ggml_ctx, x, weight, bias, 1e-6f);
-            return ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));
+            x = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));
+            x = ggml_ext_layer_norm(ctx, x, weight, bias, 1e-6f);
+            return ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));
         }
     };
 
-    inline ggml_tensor* modulate_2d(ggml_context* ctx,
+    inline ggml_tensor* modulate_2d(GGMLRunnerContext* runner_ctx,
                                     ggml_tensor* x,
                                     ggml_tensor* shift,
                                     ggml_tensor* scale) {
-        shift = ggml_reshape_4d(ctx, shift, 1, 1, shift->ne[0], shift->ne[1]);
-        scale = ggml_reshape_4d(ctx, scale, 1, 1, scale->ne[0], scale->ne[1]);
-        return ggml_add(ctx, ggml_mul(ctx, x, ggml_add(ctx, scale, ggml_ext_ones(ctx, 1, 1, 1, 1))), shift);
+        auto ctx = runner_ctx->ggml_ctx;
+        shift    = ggml_reshape_4d(ctx, shift, 1, 1, shift->ne[0], shift->ne[1]);
+        scale    = ggml_reshape_4d(ctx, scale, 1, 1, scale->ne[0], scale->ne[1]);
+        return ggml_add(ctx, ggml_mul(ctx, x, ggml_add(ctx, scale, ggml_ext_ones(runner_ctx, 1, 1, 1, 1))), shift);
     }
 
     inline ggml_tensor* channel_attention(GGMLRunnerContext* ctx,
@@ -70,7 +71,7 @@ namespace MageVAE {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* timestep) {
             auto linear_0 = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"]);
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"]);
-            auto x        = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, 256, 10000, 1.f);
+            auto x        = ggml_ext_timestep_embedding(ctx, timestep, 256, 10000, 1.f);
             x             = linear_0->forward(ctx, x);
             x             = ggml_silu_inplace(ctx->ggml_ctx, x);
             return linear_2->forward(ctx, x);
@@ -139,9 +140,9 @@ namespace MageVAE {
             auto ada   = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"]);
 
             auto params = ada->forward(ctx, ggml_silu(ctx->ggml_ctx, condition));
-            auto chunks = ggml_ext_chunk(ctx->ggml_ctx, params, 6, 0);
+            auto chunks = ggml_ext_chunk(ctx, params, 6, 0);
             auto x      = norm1->forward(ctx, input);
-            x           = modulate_2d(ctx->ggml_ctx, x, chunks[0], chunks[1]);
+            x           = modulate_2d(ctx, x, chunks[0], chunks[1]);
             x           = conv1->forward(ctx, x);
             x           = conv2->forward(ctx, x);
             x           = ggml_gelu(ctx->ggml_ctx, x);
@@ -151,7 +152,7 @@ namespace MageVAE {
             x           = ggml_add(ctx->ggml_ctx, input, ggml_mul(ctx->ggml_ctx, x, gate_1));
 
             auto h      = norm2->forward(ctx, x);
-            h           = modulate_2d(ctx->ggml_ctx, h, chunks[3], chunks[4]);
+            h           = modulate_2d(ctx, h, chunks[3], chunks[4]);
             h           = conv4->forward(ctx, h);
             h           = ggml_gelu(ctx->ggml_ctx, h);
             h           = conv5->forward(ctx, h);
@@ -179,17 +180,18 @@ namespace MageVAE {
         }
     };
 
-    inline ggml_tensor* replicate_pad_right_bottom(ggml_context* ctx,
+    inline ggml_tensor* replicate_pad_right_bottom(GGMLRunnerContext* runner_ctx,
                                                    ggml_tensor* x,
                                                    int pad_w,
                                                    int pad_h) {
+        auto ctx = runner_ctx->ggml_ctx;
         if (pad_w > 0) {
-            auto edge = ggml_ext_slice(ctx, x, 0, x->ne[0] - 1, x->ne[0]);
+            auto edge = ggml_ext_slice(runner_ctx, x, 0, x->ne[0] - 1, x->ne[0]);
             edge      = ggml_repeat_4d(ctx, edge, pad_w, x->ne[1], x->ne[2], x->ne[3]);
             x         = ggml_concat(ctx, x, edge, 0);
         }
         if (pad_h > 0) {
-            auto edge = ggml_ext_slice(ctx, x, 1, x->ne[1] - 1, x->ne[1]);
+            auto edge = ggml_ext_slice(runner_ctx, x, 1, x->ne[1] - 1, x->ne[1]);
             edge      = ggml_repeat_4d(ctx, edge, x->ne[0], pad_h, x->ne[2], x->ne[3]);
             x         = ggml_concat(ctx, x, edge, 1);
         }
@@ -209,25 +211,27 @@ namespace MageVAE {
             blocks["proj_out"] = std::make_shared<Conv2d>(channels, channels, std::pair{1, 1});
         }
 
-        ggml_tensor* to_patches(ggml_context* ctx, ggml_tensor* x) {
-            x = DiT::patchify(ctx, x, patch_size, patch_size);
-            x = ggml_reshape_4d(ctx, x, patch_size * patch_size, channels, x->ne[1], x->ne[2]);
+        ggml_tensor* to_patches(GGMLRunnerContext* runner_ctx, ggml_tensor* x) {
+            auto ctx = runner_ctx->ggml_ctx;
+            x        = DiT::patchify(runner_ctx, x, patch_size, patch_size);
+            x        = ggml_reshape_4d(ctx, x, patch_size * patch_size, channels, x->ne[1], x->ne[2]);
             // [N, np, C, P] -> [N, np, P, C] for attention over P pixels.
-            x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+            x = ggml_ext_cont(runner_ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
             return ggml_reshape_3d(ctx, x, channels, patch_size * patch_size, x->ne[2] * x->ne[3]);
         }
 
-        ggml_tensor* from_patches(ggml_context* ctx,
+        ggml_tensor* from_patches(GGMLRunnerContext* runner_ctx,
                                   ggml_tensor* x,
                                   int64_t patch_count,
                                   int64_t batch_size,
                                   int64_t h_patches,
                                   int64_t w_patches) {
-            x = ggml_reshape_4d(ctx, x, channels, patch_size * patch_size, patch_count, batch_size);
+            auto ctx = runner_ctx->ggml_ctx;
+            x        = ggml_reshape_4d(ctx, x, channels, patch_size * patch_size, patch_count, batch_size);
             // [N, np, P, C] -> [N, np, C, P] before spatial unpatchify.
-            x = ggml_ext_cont(ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
+            x = ggml_ext_cont(runner_ctx, ggml_permute(ctx, x, 1, 0, 2, 3));
             x = ggml_reshape_3d(ctx, x, patch_size * patch_size * channels, patch_count, batch_size);
-            return DiT::unpatchify(ctx, x, h_patches, w_patches, patch_size, patch_size);
+            return DiT::unpatchify(runner_ctx, x, h_patches, w_patches, patch_size, patch_size);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* input) override {
@@ -247,19 +251,19 @@ namespace MageVAE {
             int64_t np     = wp * hp;
 
             auto h = norm->forward(ctx, input);
-            auto q = replicate_pad_right_bottom(ctx->ggml_ctx, q_proj->forward(ctx, h), pad_w, pad_h);
-            auto k = replicate_pad_right_bottom(ctx->ggml_ctx, k_proj->forward(ctx, h), pad_w, pad_h);
-            auto v = replicate_pad_right_bottom(ctx->ggml_ctx, v_proj->forward(ctx, h), pad_w, pad_h);
-            q      = to_patches(ctx->ggml_ctx, q);
-            k      = to_patches(ctx->ggml_ctx, k);
-            v      = to_patches(ctx->ggml_ctx, v);
+            auto q = replicate_pad_right_bottom(ctx, q_proj->forward(ctx, h), pad_w, pad_h);
+            auto k = replicate_pad_right_bottom(ctx, k_proj->forward(ctx, h), pad_w, pad_h);
+            auto v = replicate_pad_right_bottom(ctx, v_proj->forward(ctx, h), pad_w, pad_h);
+            q      = to_patches(ctx, q);
+            k      = to_patches(ctx, k);
+            v      = to_patches(ctx, v);
             h      = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);
-            h      = from_patches(ctx->ggml_ctx, h, np, batch, hp, wp);
+            h      = from_patches(ctx, h, np, batch, hp, wp);
             if (pad_h > 0) {
-                h = ggml_ext_slice(ctx->ggml_ctx, h, 1, 0, height);
+                h = ggml_ext_slice(ctx, h, 1, 0, height);
             }
             if (pad_w > 0) {
-                h = ggml_ext_slice(ctx->ggml_ctx, h, 0, 0, width);
+                h = ggml_ext_slice(ctx, h, 0, 0, width);
             }
             return ggml_add(ctx->ggml_ctx, input, proj_out->forward(ctx, h));
         }
@@ -311,11 +315,11 @@ namespace MageVAE {
                 cond = std::dynamic_pointer_cast<EncoderDiCoBlock>(blocks["head_blocks." + std::to_string(i)])->forward(ctx, cond);
             }
             cond   = std::dynamic_pointer_cast<Conv2d>(blocks["proj_down"])->forward(ctx, cond);
-            auto z = ggml_ext_zeros(ctx->ggml_ctx, cond->ne[0], cond->ne[1], LATENT_CHANNELS, cond->ne[3]);
+            auto z = ggml_ext_zeros(ctx, cond->ne[0], cond->ne[1], LATENT_CHANNELS, cond->ne[3]);
             z      = std::dynamic_pointer_cast<Conv2d>(blocks["z_proj"])->forward(ctx, z);
             z      = ggml_concat(ctx->ggml_ctx, cond, z, 2);
             z      = std::dynamic_pointer_cast<Conv2d>(blocks["fuse_proj"])->forward(ctx, z);
-            auto t = ggml_ext_zeros(ctx->ggml_ctx, image->ne[3], 1, 1, 1);
+            auto t = ggml_ext_zeros(ctx, image->ne[3], 1, 1, 1);
             t      = ggml_reshape_1d(ctx->ggml_ctx, t, image->ne[3]);
             auto c = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"])->forward(ctx, t);
             for (int i = 0; i < 21; ++i) {
@@ -336,9 +340,9 @@ namespace MageVAE {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* condition) {
             auto params = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.1"])->forward(ctx, ggml_silu(ctx->ggml_ctx, condition));
-            auto chunks = ggml_ext_chunk(ctx->ggml_ctx, params, 3, 0);
+            auto chunks = ggml_ext_chunk(ctx, params, 3, 0);
             auto h      = std::dynamic_pointer_cast<LayerNorm>(blocks["in_ln"])->forward(ctx, x);
-            h           = ggml_add(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, h, ggml_add(ctx->ggml_ctx, chunks[1], ggml_ext_ones(ctx->ggml_ctx, 1, 1, 1, 1))), chunks[0]);
+            h           = ggml_add(ctx->ggml_ctx, ggml_mul(ctx->ggml_ctx, h, ggml_add(ctx->ggml_ctx, chunks[1], ggml_ext_ones(ctx, 1, 1, 1, 1))), chunks[0]);
             h           = std::dynamic_pointer_cast<Linear>(blocks["mlp.0"])->forward(ctx, h);
             h           = ggml_silu(ctx->ggml_ctx, h);
             h           = std::dynamic_pointer_cast<Linear>(blocks["mlp.2"])->forward(ctx, h);
@@ -373,8 +377,8 @@ namespace MageVAE {
             int64_t n      = cond->ne[3];
             int64_t length = w * h;
 
-            auto image = ggml_ext_zeros(ctx->ggml_ctx, w * PATCH_SIZE, h * PATCH_SIZE, 3, n);
-            auto t     = ggml_ext_zeros(ctx->ggml_ctx, n, 1, 1, 1);
+            auto image = ggml_ext_zeros(ctx, w * PATCH_SIZE, h * PATCH_SIZE, 3, n);
+            auto t     = ggml_ext_zeros(ctx, n, 1, 1, 1);
             t          = ggml_reshape_1d(ctx->ggml_ctx, t, n);
             auto c     = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"])->forward(ctx, t);
 
@@ -385,15 +389,15 @@ namespace MageVAE {
                 s = std::dynamic_pointer_cast<DiCoBlock>(blocks["blocks." + std::to_string(i)])->forward(ctx, s, c);
             }
             // [N, C, H, W] -> [N*H*W, C].
-            s = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, s, 1, 2, 0, 3));
+            s = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, s, 1, 2, 0, 3));
             s = ggml_reshape_2d(ctx->ggml_ctx, s, HIDDEN_SIZE, length * n);
 
             auto y = std::dynamic_pointer_cast<Conv2d>(blocks["y_embedder_x"])->forward(ctx, cond);
             // Split 32*P channels as [32, P], then produce [N*L, P, 32].
             y          = ggml_reshape_4d(ctx->ggml_ctx, y, length, PATCH_SIZE * PATCH_SIZE, 32, n);
-            y          = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, y, 2, 1, 0, 3));
+            y          = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, y, 2, 1, 0, 3));
             y          = ggml_reshape_3d(ctx->ggml_ctx, y, 32, PATCH_SIZE * PATCH_SIZE, length * n);
-            auto zeros = ggml_ext_zeros(ctx->ggml_ctx, 3, PATCH_SIZE * PATCH_SIZE, length * n, 1);
+            auto zeros = ggml_ext_zeros(ctx, 3, PATCH_SIZE * PATCH_SIZE, length * n, 1);
             dct        = ggml_repeat_4d(ctx->ggml_ctx, dct, 64, PATCH_SIZE * PATCH_SIZE, length * n, 1);
             auto x     = ggml_concat(ctx->ggml_ctx, zeros, y, 0);
             x          = ggml_concat(ctx->ggml_ctx, x, dct, 0);
@@ -409,9 +413,9 @@ namespace MageVAE {
             x = std::dynamic_pointer_cast<Linear>(blocks["final_layer.linear"])->forward(ctx, x);
             // [N*L, P, 3] -> [N, L, 3*P] for fold/unpatchify.
             x = ggml_reshape_4d(ctx->ggml_ctx, x, 3, PATCH_SIZE * PATCH_SIZE, length, n);
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+            x = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
             x = ggml_reshape_3d(ctx->ggml_ctx, x, 3 * PATCH_SIZE * PATCH_SIZE, length, n);
-            return DiT::unpatchify(ctx->ggml_ctx, x, h, w, PATCH_SIZE, PATCH_SIZE);
+            return DiT::unpatchify(ctx, x, h, w, PATCH_SIZE, PATCH_SIZE);
         }
     };
 

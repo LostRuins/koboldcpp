@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_FIBO2_HPP__
 #define __SD_MODEL_DIFFUSION_FIBO2_HPP__
 
+#include "core/pe_cache.h"
 #include "model/diffusion/z_image.hpp"
 
 // https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/transformers/transformer_bria_fibo2.py
@@ -30,12 +31,12 @@ namespace Fibo2 {
                 }
                 auto key = name.substr(prefix.size() + 1);
                 if (key == "x_embedder.weight") {
-                    config.channels = tensor.ne[0];
+                    config.channels = tensor.logical_ne0();
                     config.dim      = tensor.ne[1];
                 } else if (key == "perceiver.latent_queries") {
                     config.max_gist = tensor.ne[1];
                 } else if (key == "perceiver.layers.0.cross_attention.to_k.weight" || key == "perceiver.layers.0.cross_attention.to_kv.weight") {
-                    config.text_dim = tensor.ne[0];
+                    config.text_dim = tensor.logical_ne0();
                     config.fused_kv = key == "perceiver.layers.0.cross_attention.to_kv.weight";
                 } else if (key == "layers.0.attention.norm_q.weight") {
                     config.head_dim = tensor.ne[0];
@@ -105,29 +106,33 @@ namespace Fibo2 {
             auto project = [&](const char* name, ggml_tensor* h) {
                 return std::dynamic_pointer_cast<Linear>(blocks[name])->forward(ctx, h);
             };
-            ggml_tensor *q, *k, *v;
-            if (fused_qkv) {
-                auto parts = ggml_ext_chunk(c, project("qkv", x), 3, 0);
-                q          = parts[0];
-                k          = parts[1];
-                v          = parts[2];
-            } else {
-                q = project("to_q", x);
-                if (fused_kv) {
-                    auto parts = ggml_ext_chunk(c, project("to_kv", kv), 2, 0);
-                    k          = parts[0];
-                    v          = parts[1];
-                } else {
-                    k = project("to_k", kv);
-                    v = project("to_v", kv);
-                }
-            }
+            auto split_views = [&](ggml_tensor* qkv, int n, int i) {
+                int64_t slice = qkv->ne[0] / n;
+                return ggml_view_4d(c, qkv, head_dim, slice / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * slice * qkv->nb[0]);
+            };
             auto reshape = [&](ggml_tensor* h) {
                 return ggml_reshape_4d(c, h, head_dim, heads, h->ne[1], h->ne[2]);
             };
-            q            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, reshape(q));
-            k            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, reshape(k));
-            v            = reshape(v);
+            ggml_tensor *q, *k, *v;
+            if (fused_qkv) {
+                auto qkv = project("qkv", x);
+                q        = split_views(qkv, 3, 0);
+                k        = split_views(qkv, 3, 1);
+                v        = split_views(qkv, 3, 2);
+            } else {
+                q = reshape(project("to_q", x));
+                if (fused_kv) {
+                    auto kv_out = project("to_kv", kv);
+                    k           = split_views(kv_out, 2, 0);
+                    v           = split_views(kv_out, 2, 1);
+                } else {
+                    k = reshape(project("to_k", kv));
+                    v = reshape(project("to_v", kv));
+                }
+            }
+            q            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"])->forward(ctx, q);
+            k            = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"])->forward(ctx, k);
             auto prepare = [&](ggml_tensor* h) {
                 if (pe) {
                     return Rope::apply_rope(ctx, h, pe);
@@ -157,9 +162,7 @@ namespace Fibo2 {
                 return ZImage::FeedForward::forward(ctx, x);
             }
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                w2->set_force_prec_f32(true);
-            }
+            w2->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
             x = std::dynamic_pointer_cast<Linear>(blocks["w13"])->forward(ctx, x);
             return w2->forward(ctx, ggml_swiglu(ctx->ggml_ctx, x));
         }
@@ -205,7 +208,7 @@ namespace Fibo2 {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* text, int gist_count) {
-            auto x = ggml_ext_slice(ctx->ggml_ctx, params["latent_queries"], 1, 0, gist_count);
+            auto x = ggml_ext_slice(ctx, params["latent_queries"], 1, 0, gist_count);
             for (int i = 0; i < config.perceiver_depth; ++i) {
                 x = std::dynamic_pointer_cast<PerceiverLayer>(blocks["layers." + std::to_string(i)])->forward(ctx, x, text);
             }
@@ -243,8 +246,8 @@ namespace Fibo2 {
                 return std::dynamic_pointer_cast<RMSNorm>(blocks[name])->forward(ctx, h);
             };
             auto modulation = std::dynamic_pointer_cast<Linear>(blocks["adaLN_modulation.0"]);
-            auto mn         = ggml_ext_chunk(c, modulation->forward(ctx, noisy), 4, 0);
-            auto mc         = ggml_ext_chunk(c, modulation->forward(ctx, clean), 4, 0);
+            auto mn         = ggml_ext_chunk(ctx, modulation->forward(ctx, noisy), 4, 0);
+            auto mc         = ggml_ext_chunk(ctx, modulation->forward(ctx, clean), 4, 0);
             auto select     = [&](int index, bool gate) {
                 auto n      = gate ? ggml_tanh(c, mn[index]) : mn[index];
                 auto k      = gate ? ggml_tanh(c, mc[index]) : mc[index];
@@ -261,7 +264,7 @@ namespace Fibo2 {
                 }
                 return m;
             };
-            auto h = ZImage::modulate(c, norm("attention_norm1", x), select(0, false));
+            auto h = ZImage::modulate(ctx, norm("attention_norm1", x), select(0, false));
             h      = std::dynamic_pointer_cast<Attention>(blocks["attention"])->forward(ctx, h, h, pe);
             x      = ggml_add(c, x, ggml_mul(c, norm("attention_norm2", h), select(1, true)));
             if (injection) {
@@ -269,7 +272,7 @@ namespace Fibo2 {
                 h = ggml_mul(c, norm("cross_attn_norm2", h), ggml_tanh(c, params["cross_attn_gate"]));
                 x = ggml_add(c, x, h);
             }
-            h = ZImage::modulate(c, norm("ffn_norm1", x), select(2, false));
+            h = ZImage::modulate(ctx, norm("ffn_norm1", x), select(2, false));
             h = std::dynamic_pointer_cast<FeedForward>(blocks["feed_forward"])->forward(ctx, h);
             return ggml_add(c, x, ggml_mul(c, norm("ffn_norm2", h), select(3, true)));
         }
@@ -310,12 +313,12 @@ namespace Fibo2 {
             auto embedder = std::dynamic_pointer_cast<TimestepEmbedder>(blocks["t_embedder"]);
             auto noisy    = embedder->forward(ctx, t);
             auto clean    = embedder->forward(ctx, ggml_scale(c, t, 0.f));
-            auto image_pe = ggml_ext_slice(c, pe, 3, gist_count, pe->ne[3]);
+            auto image_pe = ggml_ext_slice(ctx, pe, 3, gist_count, pe->ne[3]);
             for (int i = 0; i < config.refiner_depth; ++i) {
                 x = std::dynamic_pointer_cast<TransformerBlock>(blocks["noise_refiner." + std::to_string(i)])->forward(ctx, x, image_pe, noisy, clean, 0, image_count);
                 sd::ggml_graph_cut::mark_graph_cut(x, "fibo2.noise_refiner." + std::to_string(i), "x");
             }
-            auto bundle      = [&](int i) { return ggml_ext_slice(c, text, 0, i * config.text_dim, (i + 1) * config.text_dim); };
+            auto bundle      = [&](int i) { return ggml_ext_slice(ctx, text, 0, i * config.text_dim, (i + 1) * config.text_dim); };
             auto gist        = std::dynamic_pointer_cast<Perceiver>(blocks["perceiver"])->forward(ctx, bundle(0), gist_count);
             x                = ggml_concat(c, gist, x, 1);
             int bundle_index = 1;
@@ -325,7 +328,7 @@ namespace Fibo2 {
                 x            = block->forward(ctx, x, pe, noisy, clean, gist_count, image_count, context);
                 sd::ggml_graph_cut::mark_graph_cut(x, "fibo2.layers." + std::to_string(i), "x");
             }
-            x = ggml_ext_slice(c, x, 1, gist_count, gist_count + image_count);
+            x = ggml_ext_slice(ctx, x, 1, gist_count, gist_count + image_count);
             x = std::dynamic_pointer_cast<ZImage::FinalLayer>(blocks["final_layer"])->forward(ctx, x, noisy);
             x = ggml_cont(c, ggml_permute(c, x, 1, 0, 2, 3));
             return ggml_reshape_4d(c, x, width, height, config.channels, 1);
@@ -333,9 +336,9 @@ namespace Fibo2 {
     };
 
     struct Fibo2Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         Fibo2Config config;
         Fibo2Model model;
-        std::vector<float> pe_values;
 
         Fibo2Runner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
             : DiffusionModelRunner(backend, prefix, weight_manager),
@@ -360,28 +363,35 @@ namespace Fibo2 {
                 auto x     = make_input(*p.x);
                 GGML_ASSERT(x->ne[3] == 1 && x->ne[2] == config.channels);
                 int count = config.gist_count(static_cast<int>(p.context->shape()[1]));
-                Rope::Embedding embedding;
-                for (int i = 0; i < count; ++i) {
-                    embedding.ids.push_back({static_cast<float>(i + 1), 0.f, 0.f});
-                }
-                embedding.positions.append_tokens(count);
-                auto append_image = [&](ggml_tensor* image, int plane) {
-                    auto ids = Rope::gen_flux_img_ids(static_cast<int>(image->ne[1]), static_cast<int>(image->ne[0]),
-                                                      1, 1, 3, plane, 0, 0, false, &embedding.positions);
-                    embedding.ids.insert(embedding.ids.end(), ids.begin(), ids.end());
-                };
-                append_image(x, static_cast<int>(config.max_gist + 1));
                 std::vector<ggml_tensor*> refs;
                 if (p.ref_latents && p.ref_image_params.pass_to_dit) {
                     for (const auto& ref : *p.ref_latents) {
                         refs.push_back(make_input(ref));
-                        append_image(refs.back(), static_cast<int>(config.max_gist + 1 + refs.size()));
                     }
                 }
-                embedding.values = Rope::embed_nd(embedding.ids, 1, 256.f, {32, 48, 48}, embedding.layout, &embedding.frequencies);
-                pe_values        = finish_rope_pe(std::move(embedding));
-                auto pe          = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, 64, static_cast<int64_t>(pe_values.size() / 256));
-                set_backend_tensor_data(pe, pe_values.data());
+                sd::PECacheKey pe_key("fibo2.pe");
+                pe_key.add_shape(x).add(count).add(config.max_gist).add_shapes(refs).add(circular_x_enabled);
+                pe_key.add(circular_y_enabled);
+                auto pe  = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                    Rope::Embedding embedding;
+                    for (int i = 0; i < count; ++i) {
+                        embedding.ids.push_back({static_cast<float>(i + 1), 0.f, 0.f});
+                    }
+                    embedding.positions.append_tokens(count);
+                    auto append_image = [&](ggml_tensor* image, int plane) {
+                        auto ids = Rope::gen_flux_img_ids(static_cast<int>(image->ne[1]), static_cast<int>(image->ne[0]),
+                                                          1, 1, 3, plane, 0, 0, false, &embedding.positions);
+                        embedding.ids.insert(embedding.ids.end(), ids.begin(), ids.end());
+                    };
+                    append_image(x, static_cast<int>(config.max_gist + 1));
+                    for (size_t i = 0; i < refs.size(); ++i) {
+                        append_image(refs[i], static_cast<int>(config.max_gist + 2 + i));
+                    }
+                    embedding.values     = Rope::embed_nd(embedding.ids, 1, 256.f, {32, 48, 48}, embedding.layout, &embedding.frequencies);
+                    auto values          = finish_rope_pe(std::move(embedding));
+                    const int64_t tokens = static_cast<int64_t>(values.size() / 256);
+                    return sd::Tensor<float>({2, 2, 64, tokens}, std::move(values));
+                }));
                 auto ctx = get_context();
                 auto out = model.forward(&ctx, x, make_input(*p.timesteps), make_input(*p.context), pe, count, refs);
                 ggml_build_forward_expand(graph, out);

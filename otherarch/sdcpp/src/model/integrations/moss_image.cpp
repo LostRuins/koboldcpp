@@ -8,7 +8,7 @@ static bool build_moss_image(const sd::model_builders::Context& ctx,
                              const TokenizerConfig& tokenizers,
                              sd::model_builders::CoreRunners& runners) {
     runners.conditioner = std::make_shared<LLMEmbedder>(ctx.backends.runtime_backend(SDBackendModule::TE),
-                                                        ctx.tensor_storage_map, ctx.version, "", false,
+                                                        ctx.tensor_storage_map, ctx.version, "", true,
                                                         ctx.weight_manager, tokenizers);
     runners.diffusion   = std::make_shared<MOSSImage::MOSSImageRunner>(ctx.backends.runtime_backend(SDBackendModule::DIFFUSION),
                                                                        ctx.tensor_storage_map, "model.diffusion_model", ctx.weight_manager);

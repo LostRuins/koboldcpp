@@ -11,7 +11,7 @@ static bool same_tensor_source(const TensorStorage& a, const TensorStorage& b) {
            a.n_dims == b.n_dims && std::equal(a.ne, a.ne + SD_MAX_DIMS, b.ne) &&
            a.is_f8_e4m3 == b.is_f8_e4m3 && a.is_f8_e5m2 == b.is_f8_e5m2 &&
            a.is_f64 == b.is_f64 && a.is_i64 == b.is_i64 &&
-           a.is_int8_tensorwise == b.is_int8_tensorwise && a.int8_convrot == b.int8_convrot &&
+           a.is_int8_tensorwise == b.is_int8_tensorwise && a.w4_convrot_kind == b.w4_convrot_kind && a.int8_convrot == b.int8_convrot &&
            a.int8_convrot_group_size == b.int8_convrot_group_size;
 }
 
@@ -74,7 +74,7 @@ void ModelManager::invalidate_sources(const std::unordered_set<TensorState*>& st
 }
 
 bool ModelManager::set_loader(ModelLoader loader) {
-    if (!workspace_reclaimers_.empty() || std::any_of(tensor_states_.begin(), tensor_states_.end(), [](const auto& state) {
+    if (!runtime_owners_.empty() || std::any_of(tensor_states_.begin(), tensor_states_.end(), [](const auto& state) {
             return state->pin_count != 0;
         })) {
         LOG_ERROR("cannot update model sources during execution");
@@ -87,7 +87,10 @@ bool ModelManager::set_loader(ModelLoader loader) {
         auto key   = std::make_pair(state.source_file, state.source_version);
         auto found = scoped.find(key);
         if (found == scoped.end())
-            found = scoped.emplace(key, loader.file_tensors(key.first, key.second)).first;
+            found = scoped.emplace(key, model_sources_.count(key.first) != 0
+                                            ? source_loader(key.first).file_tensors(key.first, key.second)
+                                            : loader.file_tensors(key.first, key.second))
+                        .first;
         return found->second;
     };
     bool lora_changed = false;
@@ -147,7 +150,9 @@ ModelLoader::FileVersions ModelManager::source_versions(const std::set<ModelComp
             continue;
         }
         if (state->source_file != 0) {
-            versions[state->source_file] = loader.file_revision(state->source_file);
+            versions[state->source_file] = model_sources_.count(state->source_file) != 0
+                                               ? source_loader(state->source_file).file_revision(state->source_file)
+                                               : loader.file_revision(state->source_file);
             continue;
         }
         for (const auto& source : find_tensor_sources(*state, sources)) {
@@ -166,4 +171,35 @@ size_t ModelManager::registered_params_size(const std::set<ModelComponent>& comp
         }
     }
     return bytes;
+}
+
+const ModelLoader& ModelManager::source_loader(ModelLoader::FileId file) const {
+    auto found = model_sources_.find(file);
+    return found == model_sources_.end() ? model_loader_ : found->second;
+}
+
+ModelLoader::FileId ModelManager::register_model_source(ModelLoader loader) {
+    const auto versions = loader.file_versions();
+    if (versions.size() != 1) {
+        LOG_ERROR("a model source must contain exactly one root model file");
+        return 0;
+    }
+    const auto file = versions.begin()->first;
+    if (model_loader_.file_revision(file) != 0 || model_sources_.count(file) != 0) {
+        LOG_ERROR("model source is already registered");
+        return 0;
+    }
+    loader.set_n_threads(n_threads_);
+    model_sources_.emplace(file, std::move(loader));
+    return file;
+}
+
+bool ModelManager::unregister_model_source(ModelLoader::FileId file) {
+    if (std::any_of(tensor_states_.begin(), tensor_states_.end(), [file](const auto& state) {
+            return state->source_file == file;
+        })) {
+        LOG_ERROR("cannot unregister a model source while its weights are registered");
+        return false;
+    }
+    return model_sources_.erase(file) != 0;
 }

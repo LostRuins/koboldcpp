@@ -121,13 +121,13 @@ namespace AnimateDiff {
             auto residual = x;
             auto h        = norm->forward(ctx, x);
 
-            h = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h, 2, 3, 0, 1));
+            h = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, h, 2, 3, 0, 1));
             h = ggml_reshape_3d(ctx->ggml_ctx, h, C, num_frames, W * H);
             h = proj_in->forward(ctx, h);
             h = tb0->forward(ctx, h);
             h = proj_out->forward(ctx, h);
             h = ggml_reshape_4d(ctx->ggml_ctx, h, C, num_frames, W, H);
-            h = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, h, 2, 3, 0, 1));
+            h = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, h, 2, 3, 0, 1));
 
             return ggml_add(ctx->ggml_ctx, h, residual);
         }

@@ -31,7 +31,7 @@ namespace SefiImage {
                     continue;
                 }
                 if (ends_with(name, "dual_time_embed.semantic_embedder.linear_1.weight") && tensor_storage.n_dims == 2) {
-                    config.timestep_guidance_in_dim = tensor_storage.ne[0];
+                    config.timestep_guidance_in_dim = tensor_storage.logical_ne0();
                     config.hidden_size              = tensor_storage.ne[1] * 2;
                 }
             }
@@ -77,8 +77,8 @@ namespace SefiImage {
             auto semantic_embedder = std::dynamic_pointer_cast<SefiTimestepEmbedding>(blocks["semantic_embedder"]);
             auto texture_embedder  = std::dynamic_pointer_cast<SefiTimestepEmbedding>(blocks["texture_embedder"]);
 
-            auto sem_proj = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_sem, (int)timestep_guidance_in_dim, 10000, 1.f);
-            auto tex_proj = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep_tex, (int)timestep_guidance_in_dim, 10000, 1.f);
+            auto sem_proj = ggml_ext_timestep_embedding(ctx, timestep_sem, (int)timestep_guidance_in_dim, 10000, 1.f);
+            auto tex_proj = ggml_ext_timestep_embedding(ctx, timestep_tex, (int)timestep_guidance_in_dim, 10000, 1.f);
             auto sem_emb  = semantic_embedder->forward(ctx, sem_proj);
             auto tex_emb  = texture_embedder->forward(ctx, tex_proj);
             return ggml_concat(ctx->ggml_ctx, sem_emb, tex_emb, 0);

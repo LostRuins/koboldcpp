@@ -267,6 +267,57 @@ enum sd_hires_upscaler_t str_to_sd_hires_upscaler(const char* str) {
     return SD_HIRES_UPSCALER_COUNT;
 }
 
+const char* control_type_to_str[] = {
+    "none",
+    "openpose",
+    "depth",
+    "scribble",
+    "canny",
+    "normal",
+    "segment",
+    "tile",
+    "repaint",
+};
+
+static_assert(SD_CONTROL_TYPE_COUNT == sizeof(control_type_to_str) / sizeof(control_type_to_str[0]),
+              "\nnumber of elements in control_type_to_str[] != SD_CONTROL_TYPE_COUNT");
+
+const char* sd_control_type_name(enum sd_control_type_t control_type) {
+    if (control_type >= SD_CONTROL_TYPE_NONE && control_type < SD_CONTROL_TYPE_COUNT) {
+        return control_type_to_str[control_type];
+    }
+    return NONE_STR;
+}
+
+enum sd_control_type_t str_to_sd_control_type(const char* str) {
+    for (int i = 0; i < SD_CONTROL_TYPE_COUNT; i++) {
+        if (!strcmp(str, control_type_to_str[i])) {
+            return (enum sd_control_type_t)i;
+        }
+    }
+    static const struct {
+        const char* alias;
+        enum sd_control_type_t type;
+    } aliases[] = {
+        {"hed", SD_CONTROL_TYPE_SCRIBBLE},
+        {"softedge", SD_CONTROL_TYPE_SCRIBBLE},
+        {"pidi", SD_CONTROL_TYPE_SCRIBBLE},
+        {"ted", SD_CONTROL_TYPE_SCRIBBLE},
+        {"lineart", SD_CONTROL_TYPE_CANNY},
+        {"anime_lineart", SD_CONTROL_TYPE_CANNY},
+        {"mlsd", SD_CONTROL_TYPE_CANNY},
+        {"seg", SD_CONTROL_TYPE_SEGMENT},
+        {"inpaint", SD_CONTROL_TYPE_REPAINT},
+        {"outpaint", SD_CONTROL_TYPE_REPAINT},
+    };
+    for (const auto& entry : aliases) {
+        if (!strcmp(str, entry.alias)) {
+            return entry.type;
+        }
+    }
+    return SD_CONTROL_TYPE_COUNT;
+}
+
 const char* sd_vae_format_name(enum sd_vae_format_t format) {
     switch (format) {
         case SD_VAE_FORMAT_AUTO:
@@ -561,6 +612,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              "ref_images_count: %d\n"
              "ref_image_args: %s\n"
              "control_strength: %.2f\n"
+             "control_type: %s\n"
              "photo maker: {style_strength = %.2f, id_images_count = %d, id_embed_path = %s}\n"
              "VAE tiling: %s (temporal=%s, extra_tiling_args=%s)\n"
              "circular_x: %s\n"
@@ -579,6 +631,7 @@ char* sd_img_gen_params_to_str(const sd_img_gen_params_t* sd_img_gen_params) {
              sd_img_gen_params->ref_images_count,
              SAFE_STR(sd_img_gen_params->ref_image_args),
              sd_img_gen_params->control_strength,
+             sd_control_type_name(sd_img_gen_params->control_type),
              sd_img_gen_params->pm_params.style_strength,
              sd_img_gen_params->pm_params.id_images_count,
              SAFE_STR(sd_img_gen_params->pm_params.id_embed_path),
@@ -645,6 +698,27 @@ void sd_vid_gen_params_init(sd_vid_gen_params_t* sd_vid_gen_params) {
 struct sd_ctx_t {
     StableDiffusionGGML* sd = nullptr;
 };
+
+void sd_set_prompt_image_callback(sd_ctx_t* ctx, sd_prompt_image_cb_t cb, void* data) {
+    if (ctx == nullptr || ctx->sd == nullptr) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(ctx->sd->execution_mutex);
+    if (!ctx->sd->executing_) {
+        ctx->sd->prompt_image_callback      = cb;
+        ctx->sd->prompt_image_callback_data = data;
+    }
+}
+
+void sd_set_generation_progress_callback(sd_ctx_t* ctx, sd_generation_progress_cb_t cb, void* data) {
+    if (ctx == nullptr || ctx->sd == nullptr) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(ctx->sd->execution_mutex);
+    if (!ctx->sd->executing_) {
+        ctx->sd->generation_progress.set_callback(cb, data);
+    }
+}
 
 sd_ctx_t* new_sd_ctx(const sd_ctx_params_t* sd_ctx_params) {
     sd_ctx_t* sd_ctx = (sd_ctx_t*)malloc(sizeof(sd_ctx_t));
@@ -832,21 +906,10 @@ SD_API void free_sd_images(sd_image_t* result_images, int num_images) {
 
 namespace kcpp_sd {
 
-    bool loaded_model_is_chroma(sd_ctx_t* ctx) {
-        if (ctx != nullptr && ctx->sd != nullptr) {
-            auto maybe_flux = std::dynamic_pointer_cast<Flux::FluxRunner>(ctx->sd->diffusion_model);
-            if (maybe_flux != nullptr) {
-                return maybe_flux->config.is_chroma;
-            }
-        }
-        return false;
-    }
-
     sd_model_info sd_get_model_info(sd_ctx_t* ctx)
     {
         sd_model_info res = {};
         res.version = ctx->sd->version;
-        res.is_chroma = loaded_model_is_chroma(ctx);
         res.vae_scale_factor = ctx->sd->get_vae_scale_factor();
         int diffusion_model_down_factor = ctx->sd->get_diffusion_model_down_factor();
         res.spatial_multiple = res.vae_scale_factor * diffusion_model_down_factor;

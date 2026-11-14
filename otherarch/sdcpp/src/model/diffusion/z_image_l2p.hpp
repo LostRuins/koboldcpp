@@ -2,6 +2,7 @@
 #define __SD_MODEL_DIFFUSION_Z_IMAGE_L2P_HPP__
 
 #include <cmath>
+#include "core/pe_cache.h"
 
 #include "z_image.hpp"
 
@@ -17,7 +18,7 @@ namespace ZImageL2P {
             config.patch_size                          = 16;
             auto x_embedder                            = tensors.find(prefix + ".x_embedder.weight");
             if (x_embedder != tensors.end()) {
-                config.patch_size = static_cast<int>(std::lround(std::sqrt(static_cast<double>(x_embedder->second.ne[0] / config.in_channels))));
+                config.patch_size = static_cast<int>(std::lround(std::sqrt(static_cast<double>(x_embedder->second.logical_ne0() / config.in_channels))));
             }
             // L2P ships split to_q/to_k/to_v, which name conversion maps to qkv.weight plus
             // .1/.2 parts; the base detection only sees the q part and undercounts kv heads.
@@ -133,7 +134,7 @@ namespace ZImageL2P {
             const int64_t n_img = w * h;
             const int64_t n_txt = context->ne[1];
 
-            auto img = DiT::patchify(gctx, x, config.patch_size, config.patch_size, false);
+            auto img = DiT::patchify(ctx, x, config.patch_size, config.patch_size, false);
             img      = std::dynamic_pointer_cast<Linear>(blocks["x_embedder"])->forward(ctx, img);
             auto txt = std::dynamic_pointer_cast<RMSNorm>(blocks["cap_embedder.0"])->forward(ctx, context);
             txt      = std::dynamic_pointer_cast<Linear>(blocks["cap_embedder.1"])->forward(ctx, txt);
@@ -154,8 +155,8 @@ namespace ZImageL2P {
             }
             GGML_ASSERT(txt->ne[1] + img->ne[1] == pe->ne[3]);
 
-            auto txt_pe = ggml_ext_slice(gctx, pe, 3, 0, txt->ne[1]);
-            auto img_pe = ggml_ext_slice(gctx, pe, 3, txt->ne[1], pe->ne[3]);
+            auto txt_pe = ggml_ext_slice(ctx, pe, 3, 0, txt->ne[1]);
+            auto img_pe = ggml_ext_slice(ctx, pe, 3, txt->ne[1], pe->ne[3]);
             for (int64_t i = 0; i < config.num_refiner_layers; ++i) {
                 txt = std::dynamic_pointer_cast<ZImage::JointTransformerBlock>(blocks["context_refiner." + std::to_string(i)])->forward(ctx, txt, txt_pe);
                 sd::ggml_graph_cut::mark_graph_cut(txt, "z_image_l2p.context_refiner." + std::to_string(i), "txt");
@@ -174,18 +175,18 @@ namespace ZImageL2P {
             // The local decoder consumes the raw last-layer hidden states: there is no final
             // norm or adaLN modulation in front of it, unlike Z-Image's final_layer.
             const int64_t img_start = n_txt + n_txt_pad;
-            auto feat               = ggml_ext_slice(gctx, txt_img, 1, img_start, img_start + n_img);                           // [N, h*w, hidden_size]
+            auto feat               = ggml_ext_slice(ctx, txt_img, 1, img_start, img_start + n_img);                            // [N, h*w, hidden_size]
             feat                    = ggml_reshape_4d(gctx, feat, config.hidden_size, w, h, N);                                 // [N, h, w, hidden_size]
             feat                    = ggml_cont(gctx, ggml_permute(gctx, feat, 2, 0, 1, 3));                                    // [N, hidden_size, h, w]
             auto out                = std::dynamic_pointer_cast<LocalDecoder>(blocks["local_decoder"])->forward(ctx, x, feat);  // [N, C, H, W]
-            return ggml_ext_scale(gctx, out, -1.f);
+            return ggml_ext_scale(ctx, out, -1.f);
         }
     };
 
     struct ZImageL2PRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         ZImageL2PConfig config;
         ZImageL2PModel model;
-        std::vector<float> pe_vec;
 
         ZImageL2PRunner(ggml_backend_t backend,
                         const String2TensorStorage& tensors,
@@ -221,19 +222,23 @@ namespace ZImageL2P {
                 auto context = make_input(*inputs.context);
                 GGML_ASSERT(x->ne[3] == 1);
                 GGML_ASSERT(x->ne[0] % config.patch_size == 0 && x->ne[1] % config.patch_size == 0);
-                pe_vec      = finish_rope_pe(Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
-                                                                  static_cast<int>(x->ne[0]),
-                                                                  config.patch_size,
-                                                                  static_cast<int>(x->ne[3]),
-                                                                  static_cast<int>(context->ne[1]),
-                                                                  ZImage::SEQ_MULTI_OF,
-                                                                  {},
-                                                                  Rope::RefIndexMode::FIXED,
-                                                                  config.theta,
-                                                                  config.axes_dim));
-                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-                auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-                set_backend_tensor_data(pe, pe_vec.data());
+                sd::PECacheKey pe_key("z_image_l2p.pe");
+                pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+                pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size);
+                auto pe  = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                    auto pe_vec = finish_rope_pe(Rope::gen_z_image_pe(static_cast<int>(x->ne[1]),
+                                                                      static_cast<int>(x->ne[0]),
+                                                                      config.patch_size,
+                                                                      static_cast<int>(x->ne[3]),
+                                                                      static_cast<int>(context->ne[1]),
+                                                                      ZImage::SEQ_MULTI_OF,
+                                                                      {},
+                                                                      Rope::RefIndexMode::FIXED,
+                                                                      config.theta,
+                                                                      config.axes_dim));
+                    int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                    return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+                }));
                 auto ctx = get_context();
                 auto out = model.forward(&ctx, x, t, context, pe);
                 ggml_build_forward_expand(gf, out);

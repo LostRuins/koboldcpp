@@ -4,6 +4,7 @@
 #include <memory>
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_tensor_utils.h"
+#include "core/pe_cache.h"
 
 #include "core/util.h"
 #include "model/common/block.hpp"
@@ -112,7 +113,7 @@ namespace Qwen {
             // return: [N, embedding_dim]
             auto timestep_embedder = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["timestep_embedder"]);
 
-            auto timesteps_proj = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 256, 10000, 1.f);
+            auto timesteps_proj = ggml_ext_timestep_embedding(ctx, timesteps, 256, 10000, 1.f);
             auto timesteps_emb  = timestep_embedder->forward(ctx, timesteps_proj);
             if (use_additional_t_cond) {
                 GGML_ASSERT(addition_t_cond != nullptr);
@@ -185,9 +186,7 @@ namespace Qwen {
             auto to_v     = std::dynamic_pointer_cast<Linear>(blocks["to_v"]);
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                to_out_0->set_force_prec_f32(true);
-            }
+            to_out_0->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
             auto norm_added_q = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_q"]);
             auto norm_added_k = std::dynamic_pointer_cast<UnaryBlock>(blocks["norm_added_k"]);
@@ -288,14 +287,17 @@ namespace Qwen {
                                                                                eps));
         }
 
-        std::vector<ggml_tensor*> get_mod_params_vec(ggml_context* ctx, ggml_tensor* mod_params, ggml_tensor* index = nullptr) {
+        std::vector<ggml_tensor*> get_mod_params_vec(GGMLRunnerContext* runner_ctx,
+                                                     ggml_tensor* mod_params,
+                                                     ggml_tensor* index = nullptr) {
+            auto ctx = runner_ctx->ggml_ctx;
             // index: [N, n_img_token]
             // mod_params: [N, hidden_size * 12]
             if (index == nullptr) {
-                return ggml_ext_chunk(ctx, mod_params, 6, 0);
+                return ggml_ext_chunk(runner_ctx, mod_params, 6, 0);
             }
             mod_params          = ggml_reshape_1d(ctx, mod_params, ggml_nelements(mod_params));
-            auto mod_params_vec = ggml_ext_chunk(ctx, mod_params, 12, 0);
+            auto mod_params_vec = ggml_ext_chunk(runner_ctx, mod_params, 12, 0);
             index               = ggml_reshape_3d(ctx, index, 1, index->ne[0], index->ne[1]);                                      // [N, n_img_token, 1]
             index               = ggml_repeat_4d(ctx, index, mod_params_vec[0]->ne[0], index->ne[1], index->ne[2], index->ne[3]);  // [N, n_img_token, hidden_size]
             std::vector<ggml_tensor*> mod_results;
@@ -338,22 +340,22 @@ namespace Qwen {
 
             auto img_mod_params    = ggml_silu(ctx->ggml_ctx, t_emb);
             img_mod_params         = img_mod_1->forward(ctx, img_mod_params);
-            auto img_mod_param_vec = get_mod_params_vec(ctx->ggml_ctx, img_mod_params, modulate_index);
+            auto img_mod_param_vec = get_mod_params_vec(ctx, img_mod_params, modulate_index);
 
             if (zero_cond_t) {
-                t_emb = ggml_ext_chunk(ctx->ggml_ctx, t_emb, 2, 1)[0];
+                t_emb = ggml_ext_chunk(ctx, t_emb, 2, 1)[0];
             }
 
             auto txt_mod_params    = ggml_silu(ctx->ggml_ctx, t_emb);
             txt_mod_params         = txt_mod_1->forward(ctx, txt_mod_params);
-            auto txt_mod_param_vec = get_mod_params_vec(ctx->ggml_ctx, txt_mod_params);
+            auto txt_mod_param_vec = get_mod_params_vec(ctx, txt_mod_params);
 
             auto img_normed    = img_norm1->forward(ctx, img);
-            auto img_modulated = Flux::modulate(ctx->ggml_ctx, img_normed, img_mod_param_vec[0], img_mod_param_vec[1], modulate_index != nullptr);
+            auto img_modulated = Flux::modulate(ctx, img_normed, img_mod_param_vec[0], img_mod_param_vec[1], modulate_index != nullptr);
             auto img_gate1     = img_mod_param_vec[2];
 
             auto txt_normed    = txt_norm1->forward(ctx, txt);
-            auto txt_modulated = Flux::modulate(ctx->ggml_ctx, txt_normed, txt_mod_param_vec[0], txt_mod_param_vec[1]);
+            auto txt_modulated = Flux::modulate(ctx, txt_normed, txt_mod_param_vec[0], txt_mod_param_vec[1]);
             auto txt_gate1     = txt_mod_param_vec[2];
 
             auto [img_attn_output, txt_attn_output] = attn->forward(ctx, img_modulated, txt_modulated, pe);
@@ -362,11 +364,11 @@ namespace Qwen {
             txt = ggml_add(ctx->ggml_ctx, txt, ggml_mul(ctx->ggml_ctx, txt_attn_output, txt_gate1));
 
             auto img_normed2    = img_norm2->forward(ctx, img);
-            auto img_modulated2 = Flux::modulate(ctx->ggml_ctx, img_normed2, img_mod_param_vec[3], img_mod_param_vec[4], modulate_index != nullptr);
+            auto img_modulated2 = Flux::modulate(ctx, img_normed2, img_mod_param_vec[3], img_mod_param_vec[4], modulate_index != nullptr);
             auto img_gate2      = img_mod_param_vec[5];
 
             auto txt_normed2    = txt_norm2->forward(ctx, txt);
-            auto txt_modulated2 = Flux::modulate(ctx->ggml_ctx, txt_normed2, txt_mod_param_vec[3], txt_mod_param_vec[4]);
+            auto txt_modulated2 = Flux::modulate(ctx, txt_normed2, txt_mod_param_vec[3], txt_mod_param_vec[4]);
             auto txt_gate2      = txt_mod_param_vec[5];
 
             auto img_mlp_out = img_mlp->forward(ctx, img_modulated2);
@@ -401,12 +403,12 @@ namespace Qwen {
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
 
             auto emb   = linear->forward(ctx, ggml_silu(ctx->ggml_ctx, c));
-            auto mods  = ggml_ext_chunk(ctx->ggml_ctx, emb, 2, 0);
+            auto mods  = ggml_ext_chunk(ctx, emb, 2, 0);
             auto scale = mods[0];
             auto shift = mods[1];
 
             x = norm->forward(ctx, x);
-            x = Flux::modulate(ctx->ggml_ctx, x, shift, scale);
+            x = Flux::modulate(ctx, x, shift, scale);
 
             return x;
         }
@@ -460,7 +462,7 @@ namespace Qwen {
 
             auto t_emb = time_text_embed->forward(ctx, timestep, addition_t_cond);
             if (config.zero_cond_t) {
-                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros_like(ctx->ggml_ctx, timestep), addition_t_cond);
+                auto t_emb_0 = time_text_embed->forward(ctx, ggml_ext_zeros_like(ctx, timestep), addition_t_cond);
                 t_emb        = ggml_concat(ctx->ggml_ctx, t_emb, t_emb_0, 1);
             }
             auto img = img_in->forward(ctx, x);
@@ -481,7 +483,7 @@ namespace Qwen {
             }
 
             if (config.zero_cond_t) {
-                t_emb = ggml_ext_chunk(ctx->ggml_ctx, t_emb, 2, 1)[0];
+                t_emb = ggml_ext_chunk(ctx, t_emb, 2, 1)[0];
             }
 
             img = norm_out->forward(ctx, img, t_emb);
@@ -518,12 +520,12 @@ namespace Qwen {
             auto patchify_input = [&](ggml_tensor* input) -> ggml_tensor* {
                 input = DiT::pad_to_patch_size(ctx, input, config.patch_size, config.patch_size);
                 if (!has_time_axis) {
-                    return DiT::patchify(ctx->ggml_ctx, input, config.patch_size, config.patch_size);
+                    return DiT::patchify(ctx, input, config.patch_size, config.patch_size);
                 }
                 if (input->ne[3] == 1) {
                     input = ggml_reshape_4d(ctx->ggml_ctx, input, input->ne[0], input->ne[1], 1, input->ne[2]);
                 }
-                return DiT::patchify_3d(ctx->ggml_ctx, input, 1, config.patch_size, config.patch_size, N);
+                return DiT::patchify_3d(ctx, input, 1, config.patch_size, config.patch_size, N);
             };
 
             auto img           = patchify_input(x);
@@ -549,11 +551,11 @@ namespace Qwen {
                 int pad_w = (config.patch_size - W % config.patch_size) % config.patch_size;
                 int h_len = static_cast<int>((H + pad_h) / config.patch_size);
                 int w_len = static_cast<int>((W + pad_w) / config.patch_size);
-                out       = DiT::unpatchify_3d(ctx->ggml_ctx, out, T, h_len, w_len, 1, config.patch_size, config.patch_size);
-                out       = ggml_ext_slice(ctx->ggml_ctx, out, 1, 0, H);  // [N*C, T, H, W + pad_w]
-                out       = ggml_ext_slice(ctx->ggml_ctx, out, 0, 0, W);  // [N*C, T, H, W]
+                out       = DiT::unpatchify_3d(ctx, out, T, h_len, w_len, 1, config.patch_size, config.patch_size);
+                out       = ggml_ext_slice(ctx, out, 1, 0, H);  // [N*C, T, H, W + pad_w]
+                out       = ggml_ext_slice(ctx, out, 0, 0, W);  // [N*C, T, H, W]
             } else {
-                out = DiT::unpatchify_and_crop(ctx->ggml_ctx, out, H, W, config.patch_size, config.patch_size);  // [N, C, H, W]
+                out = DiT::unpatchify_and_crop(ctx, out, H, W, config.patch_size, config.patch_size);  // [N, C, H, W]
             }
 
             return out;
@@ -561,10 +563,11 @@ namespace Qwen {
     };
 
     struct QwenImageRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     public:
         QwenImageConfig config;
         QwenImageModel qwen_image;
-        std::vector<float> pe_vec;
         std::vector<float> modulate_index_vec;
         std::vector<int32_t> additional_t_cond_vec;
         SDVersion version;
@@ -635,23 +638,24 @@ namespace Qwen {
                 ref_index_mode = Rope::RefIndexMode::DECREASE;
             }
 
-            pe_vec      = finish_rope_pe(Rope::gen_qwen_image_pe(time_len,
-                                                                 static_cast<int>(x->ne[1]),
-                                                                 static_cast<int>(x->ne[0]),
-                                                                 config.patch_size,
-                                                                 batch_size,
-                                                                 static_cast<int>(context->ne[1]),
-                                                                 ref_latents,
-                                                                 ref_index_mode,
-                                                                 config.theta,
-                                                                 config.axes_dim));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            // LOG_VERBOSE("pos_len %d", pos_len);
-            auto pe = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            // pe->data = pe_vec.data();
-            // print_ggml_tensor(pe, true, "pe");
-            // pe->data = nullptr;
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("qwen_image.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(time_len).add(batch_size).add(config.patch_size);
+            pe_key.add_shapes(ref_latents).add(ref_index_mode);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(Rope::gen_qwen_image_pe(time_len,
+                                                                     static_cast<int>(x->ne[1]),
+                                                                     static_cast<int>(x->ne[0]),
+                                                                     config.patch_size,
+                                                                     batch_size,
+                                                                     static_cast<int>(context->ne[1]),
+                                                                     ref_latents,
+                                                                     ref_index_mode,
+                                                                     config.theta,
+                                                                     config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             ggml_tensor* modulate_index = nullptr;
             if (config.zero_cond_t) {

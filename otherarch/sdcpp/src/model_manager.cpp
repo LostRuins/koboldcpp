@@ -148,7 +148,7 @@ bool ModelManager::set_loras(std::vector<LoraSpec> loras, SDVersion version) {
     }
     if (lora_version_ == version && lora_specs_equal(loras_, loras))
         return true;
-    if (!workspace_reclaimers_.empty() || std::any_of(tensor_states_.begin(), tensor_states_.end(), [](const auto& state) {
+    if (!runtime_owners_.empty() || std::any_of(tensor_states_.begin(), tensor_states_.end(), [](const auto& state) {
             return state->pin_count != 0;
         })) {
         LOG_ERROR("cannot change LoRA configuration during execution");
@@ -164,7 +164,7 @@ bool ModelManager::set_loras(std::vector<LoraSpec> loras, SDVersion version) {
 std::set<std::string> ModelManager::tensor_names() const {
     std::set<std::string> names;
     for (const auto& state : tensor_states_) {
-        if (state != nullptr && state->component != ModelComponent::LoRA) {
+        if (state != nullptr && state->component != ModelComponent::LoRA && model_sources_.count(state->source_file) == 0) {
             names.insert(state->name);
         }
     }
@@ -232,7 +232,7 @@ bool ModelManager::register_param_tensors(ModelComponent component,
         *registered_tensor_size += estimate_tensors_size(tensors);
     }
 
-    const auto scoped_sources = source_file != 0 ? model_loader_.file_tensors(source_file, source_version) : String2TensorStorage{};
+    const auto scoped_sources = source_file != 0 ? source_loader(source_file).file_tensors(source_file, source_version) : String2TensorStorage{};
     const auto& sources       = source_file != 0 ? scoped_sources : model_loader_.get_tensor_storage_map();
     std::unordered_set<ggml_tensor*> new_tensors;
     std::vector<std::unique_ptr<TensorState>> new_states;
@@ -422,6 +422,20 @@ bool ModelManager::validate_registered_tensors() {
     return ok;
 }
 
+bool ModelManager::validate_param_tensors(const std::vector<ggml_tensor*>& tensors) {
+    std::vector<TensorState*> states;
+    if (!resolve_required_tensor_states(tensors, states)) {
+        return false;
+    }
+    for (auto* state : states) {
+        if (!validate_tensor(*state)) {
+            return false;
+        }
+        state->metadata_validated = true;
+    }
+    return true;
+}
+
 bool ModelManager::load_tensors_to_params_backend(const std::vector<TensorState*>& states) {
     std::vector<TensorState*> need_load;
     need_load.reserve(states.size());
@@ -498,7 +512,7 @@ bool ModelManager::load_tensors_to_params_backend(const std::vector<TensorState*
 }
 
 bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorState*>& states) {
-    std::map<std::pair<ggml_backend_t, ggml_backend_buffer_type_t>, std::vector<TensorState*>> states_by_staging_target;
+    std::map<std::tuple<ggml_backend_t, ggml_backend_buffer_type_t, ModelLoader::FileId>, std::vector<TensorState*>> states_by_staging_target;
     for (TensorState* state : states) {
         if (state == nullptr || should_ignore(*state) || is_optional_missing_tensor(state->name)) {
             continue;
@@ -524,12 +538,12 @@ bool ModelManager::stage_tensors_to_compute_backend(const std::vector<TensorStat
         if (staging_buft == nullptr) {
             staging_buft = ggml_backend_get_default_buffer_type(state->compute_backend);
         }
-        states_by_staging_target[{state->compute_backend, staging_buft}].push_back(state);
+        states_by_staging_target[{state->compute_backend, staging_buft, state->source_file}].push_back(state);
     }
 
     for (const auto& pair : states_by_staging_target) {
-        ggml_backend_t compute_backend                 = pair.first.first;
-        ggml_backend_buffer_type_t staging_buft        = pair.first.second;
+        ggml_backend_t compute_backend                 = std::get<0>(pair.first);
+        ggml_backend_buffer_type_t staging_buft        = std::get<1>(pair.first);
         const std::vector<TensorState*>& target_states = pair.second;
         if (target_states.empty()) {
             continue;
@@ -644,7 +658,7 @@ bool ModelManager::apply_loras_to_params(const std::vector<TensorState*>& states
     std::map<ApplyTarget, LoraApplyGroup> groups;
     for (TensorState* state : states) {
         if (state == nullptr || state->tensor == nullptr || state->component == ModelComponent::LoRA ||
-            state->component == ModelComponent::LatentUpsampler || should_ignore(*state) || is_optional_missing_tensor(state->name)) {
+            state->component == ModelComponent::LatentUpsampler || model_sources_.count(state->source_file) != 0 || should_ignore(*state) || is_optional_missing_tensor(state->name)) {
             continue;
         }
         if (state->applied_lora_epoch == current_lora_epoch_) {
@@ -741,6 +755,9 @@ void ModelManager::reset_lora_applied_params() {
 }
 
 bool ModelManager::should_ignore(const TensorState& state) const {
+    if (model_sources_.count(state.source_file) != 0) {
+        return false;
+    }
     for (const auto& ignore_prefix : common_ignore_tensors_) {
         if (starts_with(state.name, ignore_prefix)) {
             return true;
@@ -867,7 +884,7 @@ bool ModelManager::can_mmap_storage(const TensorState& state) const {
 
 bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
                                         std::vector<ParamsStorageBlock*>& created_storage_blocks) {
-    std::map<std::pair<ggml_backend_buffer_type_t, int>, std::vector<TensorState*>> states_by_buffer_type;
+    std::map<std::tuple<ggml_backend_buffer_type_t, int, ModelLoader::FileId>, std::vector<TensorState*>> states_by_buffer_type;
     for (TensorState* state : states) {
         if (state == nullptr || state->tensor == nullptr) {
             continue;
@@ -876,11 +893,11 @@ bool ModelManager::alloc_params_buffers(const std::vector<TensorState*>& states,
         if (params_buft == nullptr) {
             return false;
         }
-        states_by_buffer_type[{params_buft, static_cast<int>(state->residency_mode)}].push_back(state);
+        states_by_buffer_type[{params_buft, static_cast<int>(state->residency_mode), state->source_file}].push_back(state);
     }
 
     for (const auto& pair : states_by_buffer_type) {
-        ggml_backend_buffer_type_t params_buft  = pair.first.first;
+        ggml_backend_buffer_type_t params_buft  = std::get<0>(pair.first);
         const std::vector<TensorState*>& states = pair.second;
         size_t alignment                        = ggml_backend_buft_get_alignment(params_buft);
         size_t max_size                         = ggml_backend_buft_get_max_size(params_buft);
@@ -1008,7 +1025,7 @@ bool ModelManager::load_tensor_parts(TensorState& state) {
     };
     const bool success = state.source_file == 0
                              ? model_loader_.load_tensors(callback, enable_mmap_, &names, false)
-                             : model_loader_.load_file_tensors(state.source_file, state.source_version, callback, names, enable_mmap_);
+                             : source_loader(state.source_file).load_file_tensors(state.source_file, state.source_version, callback, names, enable_mmap_);
     if (!success || loaded != names) {
         return false;
     }
@@ -1096,7 +1113,7 @@ bool ModelManager::load_tensors(const std::vector<TensorState*>& states) {
             };
             const auto file = group.first.first;
             bool success    = file == 0 ? model_loader_.load_tensors(callback, enable_mmap_, &names)
-                                        : model_loader_.load_file_tensors(file, group.first.second, callback, names, enable_mmap_);
+                                        : source_loader(file).load_file_tensors(file, group.first.second, callback, names, enable_mmap_);
             if (!success || loaded != names)
                 return false;
             for (auto& entry : batch) {
@@ -1314,7 +1331,7 @@ void ModelManager::erase_params_storage_block(ParamsStorageBlock* block) {
 void ModelManager::release_all() {
     clear_all_prefetched_params();
     runtime_residencies_.clear();
-    workspace_reclaimers_.clear();
+    runtime_owners_.clear();
     for (auto& state : tensor_states_) {
         state->pin_count          = 0;
         state->applied_lora_epoch = UINT64_MAX;
@@ -1641,11 +1658,17 @@ void ModelManager::evict_compute_backend_params(const std::vector<ggml_tensor*>&
     if (tensors.empty()) {
         return;
     }
-    std::vector<TensorState*> required_states;
-    if (!resolve_required_tensor_states(tensors, required_states)) {
+    std::unordered_set<TensorState*> target_states;
+    // Session cleanup may follow unregistration, after tensor metadata has been freed.
+    for (auto* tensor : tensors) {
+        const auto found = tensor_states_by_tensor_.find(tensor);
+        if (found != tensor_states_by_tensor_.end()) {
+            target_states.insert(found->second);
+        }
+    }
+    if (target_states.empty()) {
         return;
     }
-    std::unordered_set<TensorState*> target_states(required_states.begin(), required_states.end());
 
     for (const auto& block : compute_staging_blocks_) {
         const bool intersects = std::any_of(
@@ -1741,12 +1764,12 @@ WeightResidencyInfo ModelManager::inspect_compute_backend_params(
     return info;
 }
 
-void ModelManager::set_workspace_reclaimer(uintptr_t owner_id, std::function<bool()> reclaim) {
-    workspace_reclaimers_[owner_id] = std::move(reclaim);
+void ModelManager::register_runtime_owner(uintptr_t owner_id) {
+    runtime_owners_.insert(owner_id);
 }
 
 void ModelManager::remove_runtime_owner(uintptr_t owner_id) {
-    workspace_reclaimers_.erase(owner_id);
+    runtime_owners_.erase(owner_id);
     for (auto it = runtime_residencies_.begin(); it != runtime_residencies_.end();) {
         if (it->first.first == owner_id) {
             it = runtime_residencies_.erase(it);
@@ -1767,10 +1790,16 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
     auto add             = [](size_t a, size_t b) { return b > SIZE_MAX - a ? SIZE_MAX : a + b; };
     const size_t missing = compute_backend_alloc_size(states, true);
     // Backend scratch buffers and pipelines are not included in graph measurements.
-    constexpr size_t safety_margin = 512ULL * 1024ULL * 1024ULL;
-    result.required_device_bytes   = add(add(request.pending_allocation_bytes, missing), safety_margin);
-    result.required_budget_bytes   = add(request.runtime_peak_bytes(), missing);
-    auto available_device_bytes    = [&](ggml_backend_t backend) {
+    size_t safety_margin = 512ULL * 1024ULL * 1024ULL;
+#ifdef _WIN32
+    if (sd_backend_is(request.compute_backend, "CUDA")) {
+        // Avoid WDDM allocation churn when transient buffers compete with reusable staging buffers.
+        safety_margin = 1024ULL * 1024ULL * 1024ULL;
+    }
+#endif
+    result.required_device_bytes = add(add(request.pending_allocation_bytes, missing), safety_margin);
+    result.required_budget_bytes = add(request.runtime_peak_bytes(), missing);
+    auto available_device_bytes  = [&](ggml_backend_t backend) {
         auto device = ggml_backend_get_device(backend);
         if (device == nullptr) {
             return SIZE_MAX;
@@ -1798,8 +1827,8 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
             // A wrapped report may reflect real pressure; reclaim before accepting the tracked estimate.
             LOG_VERBOSE("ignoring impossible free memory report on %s (%.2f MB free / %.2f MB total), using tracked residency",
                         ggml_backend_name(backend), free_bytes / (1024.0 * 1024.0), total_bytes / (1024.0 * 1024.0));
-            free_bytes                  = total_bytes;
-            result.requires_reclamation = true;
+            free_bytes                   = total_bytes;
+            result.wrapped_device_report = true;
         }
         if (total_bytes > 0) {
             free_bytes = std::min(free_bytes, resident < total_bytes ? total_bytes - resident : 0);
@@ -1810,6 +1839,7 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
     if (request.max_backend_bytes > 0) {
         const size_t resident         = add(compute_backend_resident_bytes(request.compute_backend),
                                             other_runtime_resident_bytes(request.owner_id, request.compute_backend));
+        result.requires_reclamation   = result.requires_reclamation || resident > request.max_backend_bytes;
         result.available_budget_bytes = resident < request.max_backend_bytes
                                             ? request.max_backend_bytes - resident
                                             : 0;
@@ -1834,11 +1864,145 @@ ModelManager::CapacityCheck ModelManager::check_capacity(
         if (entry.second > 0) {
             const size_t resident         = add(compute_backend_resident_bytes(entry.first),
                                                 other_runtime_resident_bytes(request.owner_id, entry.first));
+            result.requires_reclamation   = result.requires_reclamation || resident > entry.second;
             const size_t available        = resident < entry.second ? entry.second - resident : 0;
             result.available_budget_bytes = std::min(result.available_budget_bytes, available);
         }
     }
     return result;
+}
+
+DeviceMemoryCapacity ModelManager::inspect_compute_backend_capacity(
+    const DeviceMemoryRequest& request,
+    const std::vector<ggml_tensor*>& params,
+    bool log_details) const {
+    std::vector<TensorState*> states;
+    if (request.compute_backend == nullptr || !resolve_required_tensor_states(params, states, request.compute_backend)) {
+        DeviceMemoryCapacity result;
+        result.valid = false;
+        return result;
+    }
+    return check_capacity(request, states, log_details);
+}
+
+std::vector<WeightResidencyBlock> ModelManager::evictable_compute_backend_blocks(
+    ggml_backend_t backend,
+    const std::vector<ggml_tensor*>& protected_params) const {
+    std::vector<WeightResidencyBlock> result;
+    if (backend == nullptr) {
+        return result;
+    }
+    std::vector<TensorState*> protected_list;
+    if (!resolve_required_tensor_states(protected_params, protected_list)) {
+        return result;
+    }
+    std::unordered_set<TensorState*> protected_states(protected_list.begin(), protected_list.end());
+    for (const auto& entry : prefetch_blocks_) {
+        protected_states.insert(entry.second->states.begin(), entry.second->states.end());
+    }
+    const auto device = ggml_backend_get_device(backend);
+    const bool cpu    = sd_backend_is_cpu(backend);
+    auto on_device    = [&](ggml_backend_buffer_t buffer) {
+        if (buffer == nullptr) {
+            return false;
+        }
+        if (cpu) {
+            return ggml_backend_buffer_is_host(buffer);
+        }
+        if (ggml_backend_buffer_is_host(buffer)) {
+            return false;
+        }
+        const auto type  = ggml_backend_buffer_get_type(buffer);
+        const auto split = split_buffer_devices_.find(type);
+        if (split != split_buffer_devices_.end()) {
+            return std::any_of(split->second.begin(), split->second.end(), [&](const auto& entry) {
+                return ggml_backend_get_device(entry.first) == device;
+            });
+        }
+        return ggml_backend_buft_get_device(type) == device;
+    };
+    auto append = [&](ggml_backend_buffer_t buffer, const std::vector<TensorState*>& states, bool storage) {
+        if (!on_device(buffer) || states.empty()) {
+            return;
+        }
+        WeightResidencyBlock candidate;
+        candidate.buffer  = buffer;
+        candidate.backend = backend;
+        candidate.bytes   = ggml_backend_buffer_get_size(buffer);
+        for (auto* state : states) {
+            if (state == nullptr) {
+                continue;
+            }
+            if (state->pin_count != 0 || protected_states.count(state) != 0) {
+                return;
+            }
+            if (storage) {
+                if (state->staged_to_compute_backend) {
+                    return;
+                }
+                if (state->residency_mode != ResidencyMode::Disk) {
+                    if (cpu || state->params_backend == nullptr || sd_backend_is_cpu(state->params_backend) ||
+                        state->compute_backend != state->params_backend ||
+                        state->sources.empty() || state->applied_lora_epoch != UINT64_MAX ||
+                        state->split_buffer_type != nullptr || state->tensor->view_src != nullptr) {
+                        return;
+                    }
+                    candidate.requires_demotion = true;
+                }
+            }
+            candidate.tensors.push_back(state->tensor);
+            candidate.last_use_epoch = std::max(candidate.last_use_epoch, state->last_use_epoch);
+        }
+        result.push_back(std::move(candidate));
+    };
+    for (const auto& block : compute_staging_blocks_) {
+        std::vector<TensorState*> states;
+        states.reserve(block->staged_tensors.size());
+        for (const auto& entry : block->staged_tensors) {
+            states.push_back(entry.first);
+        }
+        append(block->buffer, states, false);
+    }
+    for (const auto& block : params_storage_blocks_) {
+        // Loader-retained mappings cannot be reclaimed by freeing a storage block.
+        if (block->mmap_tensor_stores.empty()) {
+            append(block->buffer, block->states, true);
+        }
+    }
+    return result;
+}
+
+bool ModelManager::evict_compute_backend_block(const WeightResidencyBlock& block) {
+    const auto candidates = evictable_compute_backend_blocks(block.backend, {});
+    const auto found      = std::find_if(candidates.begin(), candidates.end(), [&](const auto& candidate) {
+        return candidate.buffer == block.buffer && candidate.tensors == block.tensors &&
+               candidate.requires_demotion == block.requires_demotion;
+    });
+    if (found == candidates.end()) {
+        return false;
+    }
+    for (auto it = compute_staging_blocks_.begin(); it != compute_staging_blocks_.end(); ++it) {
+        if ((*it)->buffer == block.buffer) {
+            free_compute_staging_block(**it);
+            compute_staging_blocks_.erase(it);
+            return true;
+        }
+    }
+    for (auto it = params_storage_blocks_.begin(); it != params_storage_blocks_.end(); ++it) {
+        if ((*it)->buffer == block.buffer) {
+            if (block.requires_demotion) {
+                for (auto* state : (*it)->states) {
+                    if (state != nullptr) {
+                        state->residency_mode = ResidencyMode::Disk;
+                    }
+                }
+            }
+            free_params_storage_block(**it);
+            params_storage_blocks_.erase(it);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ModelManager::fits_compute_backend_capacity(
@@ -1857,164 +2021,5 @@ bool ModelManager::ensure_compute_backend_capacity(
     const std::vector<ggml_tensor*>& required_params,
     const std::vector<std::vector<ggml_tensor*>>& preferred_eviction_order,
     const std::vector<ggml_tensor*>& protected_params) {
-    std::vector<TensorState*> required_states;
-    if (!resolve_required_tensor_states(required_params, required_states, request.compute_backend)) {
-        return false;
-    }
-
-    ggml_backend_t compute_backend = request.compute_backend;
-    if (compute_backend == nullptr) {
-        LOG_ERROR("model manager cannot reclaim memory for a null compute backend");
-        return false;
-    }
-    if (sd_backend_is_cpu(compute_backend)) {
-        return true;
-    }
-
-    auto fits = [&]() {
-        const auto capacity = check_capacity(request, required_states);
-        return !capacity.requires_reclamation && capacity.fits();
-    };
-    if (fits()) {
-        return true;
-    }
-    for (const auto& entry : workspace_reclaimers_) {
-        if (entry.first != request.owner_id) {
-            entry.second();
-            if (fits()) {
-                return true;
-            }
-        }
-    }
-
-    std::unordered_set<TensorState*> protected_states;
-    std::vector<TensorState*> resolved_protected;
-    if (!resolve_required_tensor_states(protected_params, resolved_protected)) {
-        return false;
-    }
-    protected_states.insert(resolved_protected.begin(), resolved_protected.end());
-    for (const auto& entry : prefetch_blocks_) {
-        if (entry.second != nullptr) {
-            protected_states.insert(entry.second->states.begin(), entry.second->states.end());
-        }
-    }
-
-    std::unordered_set<TensorState*> eviction_states;
-    auto add_evictable_state = [&](TensorState* state) {
-        if (state == nullptr || state->compute_backend != compute_backend ||
-            state->pin_count > 0 || protected_states.find(state) != protected_states.end()) {
-            return;
-        }
-        const bool reloadable = state->residency_mode == ResidencyMode::Disk ||
-                                state->compute_backend != state->params_backend;
-        const bool resident   = state->compute_backend == state->params_backend
-                                    ? state->loaded_to_params_backend
-                                    : state->staged_to_compute_backend;
-        if (reloadable && resident) {
-            eviction_states.insert(state);
-        }
-    };
-    size_t last_eviction_count   = 0;
-    auto release_eviction_states = [&]() {
-        if (eviction_states.size() != last_eviction_count) {
-            last_eviction_count = eviction_states.size();
-            release_compute_staging_blocks(false, &eviction_states);
-            release_params_storage_blocks(false, &eviction_states);
-        }
-        // Device memory reports can lag behind releases even when no new candidates are added.
-        return fits();
-    };
-
-    for (const auto& candidate_params : preferred_eviction_order) {
-        std::vector<TensorState*> candidate_states;
-        if (!resolve_required_tensor_states(candidate_params, candidate_states)) {
-            return false;
-        }
-        for (TensorState* state : candidate_states) {
-            add_evictable_state(state);
-        }
-        if (release_eviction_states()) {
-            return true;
-        }
-    }
-
-    std::vector<TensorState*> global_candidates;
-    global_candidates.reserve(tensor_states_.size());
-    for (const auto& state : tensor_states_) {
-        if (state != nullptr && eviction_states.find(state.get()) == eviction_states.end()) {
-            global_candidates.push_back(state.get());
-        }
-    }
-    std::stable_sort(global_candidates.begin(),
-                     global_candidates.end(),
-                     [](const TensorState* lhs, const TensorState* rhs) {
-                         return lhs->last_use_epoch < rhs->last_use_epoch;
-                     });
-    for (TensorState* state : global_candidates) {
-        add_evictable_state(state);
-        if (release_eviction_states()) {
-            return true;
-        }
-    }
-
-    // The loader retains mmap buffers after storage blocks are released, so
-    // demoting mapped states would only force duplicate allocations on reload.
-    std::unordered_set<TensorState*> mapped_states;
-    for (const auto& block : params_storage_blocks_) {
-        if (!block->mmap_tensor_stores.empty()) {
-            mapped_states.insert(block->states.begin(), block->states.end());
-        }
-    }
-    std::unordered_set<TensorState*> required_set(required_states.begin(), required_states.end());
-    std::vector<TensorState*> demoted_states;
-    auto revert_demotions = [&]() {
-        for (TensorState* state : demoted_states) {
-            if (state->loaded_to_params_backend) {
-                state->residency_mode = ResidencyMode::ParamBackend;
-            }
-        }
-    };
-    auto can_demote_to_disk = [&](TensorState* state) {
-        return state != nullptr && state->tensor != nullptr && state->tensor->view_src == nullptr &&
-               state->residency_mode == ResidencyMode::ParamBackend &&
-               state->params_backend != nullptr && state->params_backend == state->compute_backend &&
-               state->compute_backend == compute_backend && !sd_backend_is_cpu(state->params_backend) &&
-               state->pin_count == 0 && !state->staged_to_compute_backend && state->loaded_to_params_backend &&
-               protected_states.find(state) == protected_states.end() &&
-               required_set.find(state) == required_set.end() &&
-               mapped_states.find(state) == mapped_states.end() &&
-               !state->sources.empty() && state->applied_lora_epoch == UINT64_MAX &&
-               state->split_buffer_type == nullptr;
-    };
-    for (TensorState* state : global_candidates) {
-        if (!can_demote_to_disk(state)) {
-            continue;
-        }
-        state->residency_mode = ResidencyMode::Disk;
-        demoted_states.push_back(state);
-        add_evictable_state(state);
-        if (release_eviction_states()) {
-            revert_demotions();
-            return true;
-        }
-    }
-    revert_demotions();
-
-    if (check_capacity(request, required_states).fits()) {
-        return true;
-    }
-    const auto capacity                = check_capacity(request, required_states, true);
-    const std::string available_device = capacity.available_device_bytes == SIZE_MAX
-                                             ? "unknown"
-                                             : sd_format("%.2f MB", capacity.available_device_bytes / (1024.0 * 1024.0));
-    const std::string available_budget = capacity.available_budget_bytes == SIZE_MAX
-                                             ? "unlimited"
-                                             : sd_format("%.2f MB", capacity.available_budget_bytes / (1024.0 * 1024.0));
-    LOG_WARN("model manager cannot make enough memory available on %s: need %.2f MB device / %.2f MB budget, available %s device / %s budget",
-             ggml_backend_name(compute_backend),
-             capacity.required_device_bytes / (1024.0 * 1024.0),
-             capacity.required_budget_bytes / (1024.0 * 1024.0),
-             available_device.c_str(),
-             available_budget.c_str());
-    return false;
+    return execution_engine()->ensure_capacity(*this, request, required_params, preferred_eviction_order, protected_params);
 }

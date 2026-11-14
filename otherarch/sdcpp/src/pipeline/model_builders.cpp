@@ -110,7 +110,7 @@ namespace sd::model_builders {
         return false;
     }
 
-    bool build_vae_runners(const Context& ctx, const VAEOptions& options, VAERunners& runners) {
+    bool build_vae_runners(const Context& ctx, const VAEOptions& options, VAERunners& runners) try {
         const auto* sd_ctx_params      = &ctx.params;
         const auto& tensor_storage_map = ctx.tensor_storage_map;
         const auto version             = ctx.version;
@@ -159,6 +159,21 @@ namespace sd::model_builders {
                                                      version,
                                                      weight_manager);
             } else if (find_model_traits(vae_version)->vae_kind == ModelVAEKind::MINIMAX_H3) {
+                if (version == VERSION_MINIMAX_H3_IMAGE) {
+                    auto proj     = tensor_storage_map.find("first_stage_model.decoder.proj_out.weight");
+                    auto embedder = tensor_storage_map.find("first_stage_model.decoder.x_embedder.weight");
+                    if (proj == tensor_storage_map.end() || proj->second.ne[1] != 768 ||
+                        embedder == tensor_storage_map.end() || embedder->second.ne[1] != 1024) {
+                        throw std::runtime_error("MiniMax-H3-Image requires its 2D image VAE; pass --vae minimax_h3_image_vae_fp16.safetensors");
+                    }
+                }
+                if (version == VERSION_P_H3_IMAGE) {
+                    // The video VAE also loads successfully, but uses different temporal decoding and posterior sampling.
+                    auto proj = tensor_storage_map.find("first_stage_model.decoder.proj_out.weight");
+                    if (proj == tensor_storage_map.end() || proj->second.ne[1] != 768) {
+                        throw std::runtime_error("P-H3-Image requires its single-frame VAE; pass --vae p-h3-image_vae_bf16.safetensors");
+                    }
+                }
                 return std::make_shared<MiniMaxH3VAE::MiniMaxH3VideoVAERunner>(ctx.backends.runtime_backend(SDBackendModule::VAE),
                                                                                tensor_storage_map,
                                                                                "first_stage_model",
@@ -240,6 +255,9 @@ namespace sd::model_builders {
         }
         runners = std::move(result);
         return true;
+    } catch (const std::exception& error) {
+        LOG_ERROR("failed to build VAE runners: %s", error.what());
+        return false;
     }
 
     bool build_control_net_runner(const Context& ctx, std::shared_ptr<ControlNet>& runner) {
