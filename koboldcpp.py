@@ -11170,7 +11170,7 @@ def show_gui():
 
     # Horde Tab
     horde_tab = tabcontent["Online Worker"]
-    makelabel(horde_tab, "Horde:", 18,0,"Settings for embedded AI Horde worker").grid(pady=10)
+    makelabel(horde_tab, "AI Horde Worker:", 18,0,"Settings for embedded AI Horde worker").grid(pady=10)
 
     horde_name_entry,  horde_name_label = makelabelentry(horde_tab, "Horde Model Name:", horde_name_var, 20, 180,tooltip="The model name to be displayed on the AI Horde.")
     horde_gen_entry,  horde_gen_label = makelabelentry(horde_tab, "Gen. Length:", horde_gen_var, 21, 50,tooltip="The maximum amount to generate per request that this worker will accept jobs for.")
@@ -11195,7 +11195,7 @@ def show_gui():
 
     makecheckbox(horde_tab, "Configure for Horde", usehorde_var, 19, command=togglehorde,tooltiptxt="Enable the embedded AI Horde worker.")
 
-    makelabel(horde_tab, "BeaverNet:", 26,0,"Settings for embedded BeaverNet worker").grid(pady=10)
+    makelabel(horde_tab, "BeaverNet Worker:", 26,0,"Settings for embedded BeaverNet worker").grid(pady=10)
     beavernet_apikey_entry, beavernet_apikey_label = makelabelentry(horde_tab, "BeaverNet API Key:", beavernet_apikey_var, 28, 180, tooltip="Your BeaverNet provider API key.")
 
     def togglebeavernet(a,b,c):
@@ -12233,7 +12233,7 @@ def make_url_request(url, data, method='POST', headers={}, timeout=600, error_in
         ssl_cert_dir = os.environ.get('SSL_CERT_DIR')
         if not ssl_cert_dir and not nocertify and os.name != 'nt':
             os.environ['SSL_CERT_DIR'] = '/etc/ssl/certs'
-        if method=='POST':
+        if data is not None:
             json_payload = json.dumps(data).encode('utf-8')
             request = urllib.request.Request(url, data=json_payload, headers=headers, method=method)
             request.add_header('content-type', 'application/json')
@@ -12241,10 +12241,14 @@ def make_url_request(url, data, method='POST', headers={}, timeout=600, error_in
             request = urllib.request.Request(url, headers=headers, method=method)
         response_data = ""
         with urllib.request.urlopen(request,timeout=timeout) as response:
+            if error_info is not None:
+                error_info["status"] = response.status
             content_type = response.headers.get('Content-Type', '')
             response_data = response.read()
             if 'audio/wav' in content_type:
                 return response_data #raw binary
+            elif not response_data:
+                return True #successful response with no body, e.g. HTTP 204
             else:
                 json_response = json.loads(response_data.decode('utf-8',"ignore"))
                 return json_response
@@ -12438,6 +12442,95 @@ class _BeaverNetWebSocket:
             self.socket.close()
 
 
+def _beavernet_api_request(api_key, method, path, data=None, timeout=30):
+    """Call the BeaverNet provider API with its common URL and authorization."""
+    error_info = {}
+    result = make_url_request(
+        "https://net.beaverai.org/v1" + path,
+        data,
+        method,
+        {"Authorization": "Bearer " + api_key},
+        timeout,
+        error_info,
+    )
+    return error_info.get("status"), result
+
+
+def _beavernet_error_message(result):
+    if isinstance(result, dict):
+        error = result.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        if isinstance(error, str):
+            return error
+        if result.get("message"):
+            return str(result["message"])
+    return "unknown error"
+
+
+def _reconcile_beavernet_model(api_key, upstream_id, model_name):
+    """Make an embedded-worker upstream contain exactly the loaded KoboldCpp model."""
+    quoted_upstream = urllib.parse.quote(upstream_id, safe="")
+    status, upstream = _beavernet_api_request(api_key, "GET", f"/upstreams/{quoted_upstream}")
+    if status != 200 or not isinstance(upstream, dict):
+        print_with_time(f"BeaverNet Worker - Could not read upstream models ({status}): {_beavernet_error_message(upstream)}")
+        return False
+
+    models = upstream.get("models") if isinstance(upstream.get("models"), list) else []
+    current_model = None
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        if model.get("model") == model_name:
+            current_model = model
+            continue
+        model_id = model.get("id")
+        if not model_id:
+            continue
+        quoted_model = urllib.parse.quote(str(model_id), safe="")
+        delete_status, delete_result = _beavernet_api_request(api_key, "DELETE", f"/upstreams/{quoted_upstream}/models/{quoted_model}")
+        if delete_status not in (200, 204, 404):
+            print_with_time(f"BeaverNet Worker - Could not remove stale model '{model.get('model')}' ({delete_status}): {_beavernet_error_message(delete_result)}")
+            return False
+        print_with_time(f"BeaverNet Worker - Removed stale model '{model.get('model')}'.")
+
+    if current_model is None:
+        add_status, add_result = _beavernet_api_request(
+            api_key,
+            "POST",
+            f"/upstreams/{quoted_upstream}/models",
+            {"model": model_name, "listed": True, "max_concurrency": 1},
+            timeout=120,
+        )
+        if add_status not in (200, 201):
+            print_with_time(f"BeaverNet Worker - Could not register model '{model_name}' ({add_status}): {_beavernet_error_message(add_result)}")
+            return False
+        print_with_time(f"BeaverNet Worker - Registered model '{model_name}'.")
+    elif not current_model.get("listed") or current_model.get("paused"):
+        model_id = current_model.get("id")
+        if not model_id:
+            print_with_time(f"BeaverNet Worker - Existing model '{model_name}' has no model id.")
+            return False
+        quoted_model = urllib.parse.quote(str(model_id), safe="")
+        patch_status, patch_result = _beavernet_api_request(
+            api_key,
+            "PATCH",
+            f"/upstreams/{quoted_upstream}/models/{quoted_model}",
+            {"listed": True, "paused": False},
+        )
+        if patch_status != 200:
+            print_with_time(f"BeaverNet Worker - Could not enable model '{model_name}' ({patch_status}): {_beavernet_error_message(patch_result)}")
+            return False
+        print_with_time(f"BeaverNet Worker - Enabled model '{model_name}'.")
+    else:
+        print_with_time(f"BeaverNet Worker - Model '{model_name}' is already registered.")
+
+    probe_status, probe_result = _beavernet_api_request(api_key, "POST", f"/upstreams/{quoted_upstream}/probe", {}, timeout=60)
+    if probe_status != 200:
+        print_with_time(f"BeaverNet Worker - Model registered, but refresh probe failed ({probe_status}): {_beavernet_error_message(probe_result)}")
+    return True
+
+
 class _BeaverNetLocalCall:
     def __init__(self, websocket, local_url, method, path, headers, body, request_id, finished):
         self.websocket = websocket
@@ -12466,6 +12559,7 @@ class _BeaverNetLocalCall:
 
     def run(self):
         global password
+        completed = False
         connection_type = http.client.HTTPSConnection if self.local.scheme == "https" else http.client.HTTPConnection
         try:
             self.connection = connection_type(self.local.hostname, self.local.port, timeout=10)
@@ -12494,6 +12588,7 @@ class _BeaverNetLocalCall:
                 self.websocket.send_frame(0x2, prefix + chunk)
             if not self.cancelled:
                 self.websocket.send_json({"t": "end", "id": self.request_id})
+                completed = True
         except Exception as error:
             try:
                 self._send_error("local", f"Local KoboldCpp request failed: {error}")
@@ -12505,12 +12600,12 @@ class _BeaverNetLocalCall:
                     self.connection.close()
                 except Exception:
                     pass
-            self.finished(self.request_id)
+            self.finished(self.request_id, self.method, self.path, completed)
 
 
 def run_beavernet_worker(args, api_key):
     """Minimal dependency-free BeaverNet agent for this KoboldCpp server."""
-    global exitcounter
+    global exitcounter, friendlymodelname
     server_url = "wss://net.beaverai.org/v1/agent"
     local_url = get_my_epurl()
     allowed_paths = {"POST /v1/chat/completions", "POST /v1/completions", "GET /v1/models"}
@@ -12520,6 +12615,24 @@ def run_beavernet_worker(args, api_key):
     stop_codes = {4001, 4003, 4004, 4006, 4009}
     retry_delay = 1
     announced_upstream = None
+    registration_lock = threading.Lock()
+    registered_model = [None]
+
+    def register_when_ready(upstream_id, model_name, models_ready, session_closed):
+        for _ in range(60):
+            if models_ready.wait(1):
+                break
+            if session_closed.is_set() or exitcounter >= 100:
+                return
+        else:
+            print_with_time("BeaverNet Worker - Initial model health check did not finish; automatic registration skipped.")
+            return
+        with registration_lock:
+            registration = (upstream_id, model_name)
+            if registered_model[0] == registration or session_closed.is_set() or exitcounter >= 100:
+                return
+            if _reconcile_beavernet_model(api_key, upstream_id, model_name):
+                registered_model[0] = registration
 
     print("\n===\nEmbedded BeaverNet Worker Starting...\n")
     while exitcounter < 100:
@@ -12529,11 +12642,15 @@ def run_beavernet_worker(args, api_key):
         pending = {}
         draining = [False]
         welcomed = False
+        models_ready = threading.Event()
+        session_closed = threading.Event()
 
-        def call_finished(request_id):
+        def call_finished(request_id, method, path, completed):
             with calls_lock:
                 calls.pop(request_id, None)
                 idle = not calls and not pending
+            if completed and method == "GET" and path == "/v1/models":
+                models_ready.set()
             if draining[0] and idle:
                 websocket.close(1001, "Drained")
 
@@ -12590,11 +12707,16 @@ def run_beavernet_worker(args, api_key):
                     if announced_upstream != upstream_id:
                         action = "Created upstream" if message.get("created") else "Connected as"
                         print_with_time(f"BeaverNet Worker - {action} {upstream_name} ({upstream_id}).")
-                        if message.get("created"):
-                            print_with_time(f"BeaverNet Worker - Add the model to '{upstream_name}' in your BeaverNet dashboard.")
                         announced_upstream = upstream_id
                     else:
                         print_with_time("BeaverNet Worker - Reconnected.")
+                    if isinstance(upstream_id, str) and upstream_id:
+                        model_name = textName if autoswapmode and textName is not None else friendlymodelname
+                        threading.Thread(
+                            target=register_when_ready,
+                            args=(upstream_id, model_name, models_ready, session_closed),
+                            daemon=True,
+                        ).start()
                 elif message_type == "request":
                     request_id = message.get("id")
                     if isinstance(request_id, str) and 1 <= len(request_id) <= 64:
@@ -12666,6 +12788,7 @@ def run_beavernet_worker(args, api_key):
             if exitcounter < 100:
                 print_with_time(f"BeaverNet Worker connection failed: {error}. Retrying in {retry_delay}s.")
         finally:
+            session_closed.set()
             with calls_lock:
                 active_calls = list(calls.values())
             for call in active_calls:
