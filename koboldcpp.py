@@ -12633,7 +12633,7 @@ class _BeaverNetLocalCall:
             self.finished(self.request_id, self.method, self.path, completed)
 
 
-def run_beavernet_worker(args, api_key):
+def run_beavernet_worker(args, api_key, worker_slots=None):
     """Minimal dependency-free BeaverNet agent for this KoboldCpp server."""
     global exitcounter, friendlymodelname
     server_url = "wss://net.beaverai.org/v1/agent"
@@ -12643,7 +12643,9 @@ def run_beavernet_worker(args, api_key):
     # ofc they can always add their own upstream if they use drummer's standalone agent, but this prevents kcpp from accidentally messing with other upstreams
     device_id = hashlib.sha256(f"kcpp_auto_upstream_for_{api_key}".encode("utf-8")).hexdigest()
     stop_codes = {4001, 4003, 4004, 4006, 4009}
-    max_inflight = max(1, min(64, int(getattr(args, "parallelrequests", 1) or 1)))
+    if worker_slots is None:
+        worker_slots = getattr(args, "parallelrequests", 1)
+    max_inflight = max(1, min(64, int(worker_slots or 1)))
     retry_delay = 1
     announced_upstream = None
     registration_lock = threading.Lock()
@@ -15447,11 +15449,19 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 agent_host = f"[{agent_host}]"
             agent_base_url = f"{httpsaffix}://{agent_host}:{displayedport}/v1"
 
+        horde_enabled = bool(args.hordekey and args.hordeworkername)
+        beavernet_enabled = bool(args.beavernetkey)
+        total_worker_slots = max(1, int(args.parallelrequests or 1))
+        horde_worker_slots = total_worker_slots
+        beavernet_worker_slots = total_worker_slots
+        if horde_enabled and beavernet_enabled:
+            beavernet_worker_slots = max(1, total_worker_slots // 2)
+            horde_worker_slots = max(1, total_worker_slots - beavernet_worker_slots)
+            print(f"Sharing {total_worker_slots} parallel request slot(s): Horde {horde_worker_slots}, BeaverNet {beavernet_worker_slots}.")
+
         if args.hordekey and args.hordekey!="":
             if args.hordeworkername and args.hordeworkername!="":
-                workers_to_use = 1
-                if args.parallelrequests:
-                    workers_to_use = args.parallelrequests if (args.parallelrequests>1) else 1
+                workers_to_use = horde_worker_slots
                 for w in range(0,workers_to_use):
                     wid = (w+1)
                     print(f"Launching horde worker {wid}...")
@@ -15463,7 +15473,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
         if args.beavernetkey:
             print("Launching BeaverNet worker...")
-            beavernet_thread = threading.Thread(target=run_beavernet_worker, args=(args, args.beavernetkey), daemon=True)
+            beavernet_thread = threading.Thread(target=run_beavernet_worker, args=(args, args.beavernetkey, beavernet_worker_slots), daemon=True)
             beavernet_thread.start()
 
     #if post-ready script specified, execute it
