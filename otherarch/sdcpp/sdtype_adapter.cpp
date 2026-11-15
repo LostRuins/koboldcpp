@@ -833,6 +833,7 @@ struct kcpp_path_class
     bool is_json            = false;
     bool is_mmproj          = false;
     bool is_mmproj_filename = false;  // name heuristic: "mmproj" in the path (fallback only)
+    bool is_connector       = false;  // connector file; currently only MiniMax P-H3 text connector
     kcpp_st_class st;                 // safetensors only
 };
 
@@ -851,10 +852,68 @@ static int st_count_prefix(const std::vector<kcpp_probe_tensor>& ts,
     return n;
 }
 
+// true only when *every* tensor of the file is a connector tensor: the
+// standalone connector file is exactly these tensors, while a combined dump
+// (diffusion / VAE / LLM + connector) must not be routed as a connector
+static bool kcpp_tensors_standalone_connector(const std::vector<kcpp_probe_tensor>& ts)
+{
+    if (ts.empty()) return false;
+
+    // P-H3 flavour 1: the standalone connector file (p-h3-text-connector.safetensors
+    // and external GGUF conversions of it) stores the tensors under bare names;
+    // the loader prepends "embeddings_connectors." (diffusion_engine.cpp) and
+    // name_conversion.cpp maps that onto the model's names. Require the exact
+    // tensor set (plus the proj shape, matching PH3ImageTextConnector's fixed
+    // input/output dims) so unrelated files never match
+    static const std::set<std::string> bare_names = {
+        "input_mean", "input_std", "output_mean", "output_std",
+        "proj.weight", "sink_embedding",
+    };
+    if (ts.size() == bare_names.size()) {
+        bool all_bare = true;
+        for (const auto& t : ts) {
+            if (!bare_names.count(t.name)) { all_bare = false; break; }
+        }
+        if (all_bare) {
+            for (const auto& t : ts) {
+                if (t.name == "proj.weight") {
+                    // shape order differs between safetensors (torch order) and
+                    // gguf (ne order); accept either
+                    if (t.shape.size() == 2
+                     && ((t.shape[0] == 5120 && t.shape[1] == 12800)
+                      || (t.shape[0] == 12800 && t.shape[1] == 5120)))
+                        return true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // P-H3 flavour 2: combined checkpoints keep the connector tensors under a
+    // prefixed name; these prefixes are unique to the MiniMax-H3 family
+    // (see src/name_conversion.cpp), so a file whose tensors all carry one of
+    // them must be a connector dump
+    for (const auto& t : ts) {
+        if (!(t.name.rfind("text_encoders.ph3_image_connector.", 0) == 0
+           || t.name.rfind("text_encoders.llm.text_connector.", 0) == 0
+           || t.name.rfind("embeddings_connectors.", 0) == 0))
+            return false;
+    }
+    return true;
+}
+
 static void kcpp_classify_safetensors(const kcpp_file_probe& probe, kcpp_path_class& c)
 {
     const std::vector<kcpp_probe_tensor>& ts = probe.tensors();
     if (ts.empty()) return;
+
+    // the connector tensors (e.g. P-H3) match no bucket below; classify it first
+    if (kcpp_tensors_standalone_connector(ts))
+    {
+        c.is_connector = true;
+        c.st.label = "text connector";
+        return;
+    }
 
     c.st.text_t5   = st_count_prefix(ts, {"encoder.block.", "encoder.embed_tokens.",
                                           "encoder.final_layer_norm.", "shared.weight"});
@@ -924,7 +983,10 @@ static kcpp_path_class kcpp_classify_path(const std::string& path)
                 || has_vision_kv
                 || get("clip.has_vision_encoder") == "1"
                 || !get("clip.projector_type").empty();
-            identified = c.is_mmproj;
+            // connector GGUFs come from external converters with no metadata
+            // convention; the tensor names are the reliable signal
+            c.is_connector = kcpp_tensors_standalone_connector(probe.tensors());
+            identified = c.is_mmproj || c.is_connector;
         } else if (kcpp_file_format::SAFETENSORS == format) {
             c.is_safetensors = true;
             kcpp_classify_safetensors(probe, c);
@@ -1155,6 +1217,20 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
                     printf("\nKCPP: routing mmproj found in %s to %s\n", *slot, *target);
                     *target = *slot;
                     *slot = "";
+                }
+            }
+            else if (c.is_connector)
+            {
+                // the P-H3 text connector belongs in the embeddings-connectors
+                // field; route it out before the llm swaps below can grab it
+                if (path_empty(params.embeddings_connectors_path))
+                {
+                    printf("\nKCPP: routing P-H3 text connector found in %s to the embeddings-connectors field\n", *slot);
+                    std::swap(params.embeddings_connectors_path, *slot);
+                }
+                else
+                {
+                    printf("\nKCPP: P-H3 text connector found in %s, but the embeddings-connectors field is already in use; leaving it as is\n", *slot);
                 }
             }
             else if (c.is_safetensors && c.st.label)
