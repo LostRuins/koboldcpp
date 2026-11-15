@@ -12468,7 +12468,7 @@ def _beavernet_error_message(result):
     return "unknown error"
 
 
-def _reconcile_beavernet_model(api_key, upstream_id, model_name):
+def _reconcile_beavernet_model(api_key, upstream_id, model_name, max_concurrency):
     """Make an embedded-worker upstream contain exactly the loaded KoboldCpp model."""
     quoted_upstream = urllib.parse.quote(upstream_id, safe="")
     status, upstream = _beavernet_api_request(api_key, "GET", f"/upstreams/{quoted_upstream}")
@@ -12499,7 +12499,7 @@ def _reconcile_beavernet_model(api_key, upstream_id, model_name):
             api_key,
             "POST",
             f"/upstreams/{quoted_upstream}/models",
-            {"model": model_name, "listed": True, "max_concurrency": 1},
+            {"model": model_name, "listed": True, "max_concurrency": max_concurrency},
             timeout=120,
         )
         if add_status not in (200, 201):
@@ -12524,6 +12524,33 @@ def _reconcile_beavernet_model(api_key, upstream_id, model_name):
         print_with_time(f"BeaverNet Worker - Enabled model '{model_name}'.")
     else:
         print_with_time(f"BeaverNet Worker - Model '{model_name}' is already registered.")
+
+    if current_model is not None:
+        model_id = current_model.get("id")
+        if not model_id:
+            print_with_time(f"BeaverNet Worker - Existing model '{model_name}' has no model id.")
+            return False
+        shared_limits = (((current_model.get("rateLimits") or {}).get("shared") or {}).get("own") or {})
+        if shared_limits.get("maxConcurrency") != max_concurrency:
+            rate_limits = {"max_concurrency": max_concurrency}
+            for api_name, response_name in (
+                ("per_minute", "perMinute"),
+                ("per_hour", "perHour"),
+                ("per_day", "perDay"),
+            ):
+                if shared_limits.get(response_name) is not None:
+                    rate_limits[api_name] = shared_limits[response_name]
+            quoted_model = urllib.parse.quote(str(model_id), safe="")
+            limit_status, limit_result = _beavernet_api_request(
+                api_key,
+                "PUT",
+                f"/upstreams/{quoted_upstream}/models/{quoted_model}/rate-limits/shared",
+                rate_limits,
+            )
+            if limit_status not in (200, 204):
+                print_with_time(f"BeaverNet Worker - Could not set model concurrency to {max_concurrency} ({limit_status}): {_beavernet_error_message(limit_result)}")
+                return False
+            print_with_time(f"BeaverNet Worker - Set model concurrency to {max_concurrency}.")
 
     probe_status, probe_result = _beavernet_api_request(api_key, "POST", f"/upstreams/{quoted_upstream}/probe", {}, timeout=60)
     if probe_status != 200:
@@ -12613,6 +12640,7 @@ def run_beavernet_worker(args, api_key):
     # ofc they can always add their own upstream if they use drummer's standalone agent, but this prevents kcpp from accidentally messing with other upstreams
     device_id = hashlib.sha256(f"kcpp_auto_upstream_for_{api_key}".encode("utf-8")).hexdigest()
     stop_codes = {4001, 4003, 4004, 4006, 4009}
+    max_inflight = max(1, min(64, int(getattr(args, "parallelrequests", 1) or 1)))
     retry_delay = 1
     announced_upstream = None
     registration_lock = threading.Lock()
@@ -12628,13 +12656,13 @@ def run_beavernet_worker(args, api_key):
             print_with_time("BeaverNet Worker - Initial model health check did not finish; automatic registration skipped.")
             return
         with registration_lock:
-            registration = (upstream_id, model_name)
+            registration = (upstream_id, model_name, max_inflight)
             if registered_model[0] == registration or session_closed.is_set() or exitcounter >= 100:
                 return
-            if _reconcile_beavernet_model(api_key, upstream_id, model_name):
+            if _reconcile_beavernet_model(api_key, upstream_id, model_name, max_inflight):
                 registered_model[0] = registration
 
-    print("\n===\nEmbedded BeaverNet Worker Starting...\n")
+    print(f"\n===\nEmbedded BeaverNet Worker Starting with {max_inflight} parallel request(s)...\n")
     while exitcounter < 100:
         websocket = None
         calls = {}
@@ -12665,7 +12693,7 @@ def run_beavernet_worker(args, api_key):
                 "agent": {"name": "koboldcpp_embedded_worker", "version": KcppVersion},
                 "paths": sorted(allowed_paths),
                 "features": [],
-                "max_inflight": 1,
+                "max_inflight": max_inflight,
             })
 
             while exitcounter < 100:
@@ -12743,7 +12771,7 @@ def run_beavernet_worker(args, api_key):
                     headers = request.get("headers") if isinstance(request.get("headers"), dict) else {}
                     headers = {str(key).lower(): str(value) for key, value in headers.items()}
                     with calls_lock:
-                        if calls:
+                        if len(calls) >= max_inflight or request_id in calls:
                             call = None
                         else:
                             call = _BeaverNetLocalCall(websocket, local_url, method, path, headers, bytes(body), request_id, call_finished)
