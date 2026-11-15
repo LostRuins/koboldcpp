@@ -10318,6 +10318,12 @@ def show_gui():
             temp.bind("<Leave>", hide_tooltip)
         return temp
 
+    def makehyperlink(parent, text, url, row, column=0, columnspan=1):
+        link = ctk.CTkLabel(parent, text=text, text_color="#3B8ED0", font=ctk.CTkFont(underline=True), cursor="hand2")
+        link.grid(row=row, column=column, columnspan=columnspan, padx=8, pady=1, sticky="nw")
+        link.bind("<Button-1>", lambda event: LaunchWebbrowser(url, f"Could not open {url} in a browser."))
+        return link
+
     def makeslider(parent, label, options, var, row=0, width=160, height=12, set=0, tooltip=""):
         slider_row = ctk.CTkFrame(parent, fg_color="transparent")
         slider_row.grid(row=row, column=0, columnspan=2, padx=8, sticky="w")
@@ -11177,8 +11183,9 @@ def show_gui():
     horde_name_entry,  horde_name_label = makelabelentry(horde_tab, "Horde Model Name:", horde_name_var, 20, 180,tooltip="The model name to be displayed on the AI Horde.")
     horde_gen_entry,  horde_gen_label = makelabelentry(horde_tab, "Gen. Length:", horde_gen_var, 21, 50,tooltip="The maximum amount to generate per request that this worker will accept jobs for.")
     horde_context_entry,  horde_context_label = makelabelentry(horde_tab, "Max Context:",horde_context_var, 22, 50,tooltip="The maximum context length that this worker will accept jobs for.\nIf 0, matches main context limit.")
-    horde_apikey_entry,  horde_apikey_label = makelabelentry(horde_tab, "API Key (If Embedded Worker):",horde_apikey_var, 23, 180,tooltip="Your AI Horde API Key that you have registered.")
+    horde_apikey_entry,  horde_apikey_label = makelabelentry(horde_tab, "AI Horde API Key:",horde_apikey_var, 23, 180,tooltip="Your AI Horde API Key that you have registered.")
     horde_workername_entry,  horde_workername_label = makelabelentry(horde_tab, "Horde Worker Name:",horde_workername_var, 24, 180,tooltip="Your worker's name to be displayed.")
+    horde_signup_link = makehyperlink(horde_tab, "Register AI Horde API Key", "https://aihorde.net/register", 25, columnspan=2)
 
     def togglehorde(a,b,c):
         horde_items = zip([horde_name_entry, horde_gen_entry, horde_context_entry, horde_apikey_entry, horde_workername_entry],
@@ -11191,6 +11198,10 @@ def show_gui():
             else:
                 item.grid_remove()
                 label.grid_remove()
+        if usehorde_var.get() == 1:
+            horde_signup_link.grid()
+        else:
+            horde_signup_link.grid_remove()
         if usehorde_var.get()==1 and (horde_name_var.get()=="koboldcpp" or horde_name_var.get()=="") and model_var.get()!="":
             basefile = os.path.basename(model_var.get())
             horde_name_var.set(sanitize_string(os.path.splitext(basefile)[0]))
@@ -11199,14 +11210,17 @@ def show_gui():
 
     makelabel(horde_tab, "BeaverNet Worker:", 26,0,"Settings for embedded BeaverNet worker").grid(pady=10)
     beavernet_apikey_entry, beavernet_apikey_label = makelabelentry(horde_tab, "BeaverNet API Key:", beavernet_apikey_var, 28, 180, tooltip="Your BeaverNet provider API key.")
+    beavernet_signup_link = makehyperlink(horde_tab, "Register BeaverNet API Key", "https://net.beaverai.org", 29, columnspan=2)
 
     def togglebeavernet(a,b,c):
         if usebeavernet_var.get() == 1:
             beavernet_apikey_entry.grid()
             beavernet_apikey_label.grid()
+            beavernet_signup_link.grid()
         else:
             beavernet_apikey_entry.grid_remove()
             beavernet_apikey_label.grid_remove()
+            beavernet_signup_link.grid_remove()
 
     makecheckbox(horde_tab, "Enable BeaverNet Worker", usebeavernet_var, 27, command=togglebeavernet, tooltiptxt="Share this KoboldCpp model through BeaverNet.")
 
