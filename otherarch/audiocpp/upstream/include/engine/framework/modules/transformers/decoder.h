@@ -111,7 +111,7 @@ struct DecoderLayerConfig {
     int rope_type = GGML_ROPE_TYPE_NEOX;
     DecoderPositionEncoding position_encoding = DecoderPositionEncoding::Rotary;
     ggml_prec attention_precision = GGML_PREC_F32;
-    ggml_prec projection_precision = GGML_PREC_DEFAULT;
+    ggml_prec projection_precision = GGML_PREC_UNDEFINED;
     DecoderQKVLayout qkv_layout = DecoderQKVLayout::Separate;
     bool use_qk_norm = true;
     DecoderActivationCastPolicy activation_cast;
@@ -221,7 +221,7 @@ struct DecoderStackConfig {
     int rope_type = GGML_ROPE_TYPE_NEOX;
     DecoderPositionEncoding position_encoding = DecoderPositionEncoding::Rotary;
     ggml_prec attention_precision = GGML_PREC_F32;
-    ggml_prec projection_precision = GGML_PREC_DEFAULT;
+    ggml_prec projection_precision = GGML_PREC_UNDEFINED;
     DecoderQKVLayout qkv_layout = DecoderQKVLayout::Separate;
     bool use_qk_norm = true;
     DecoderActivationCastPolicy activation_cast;

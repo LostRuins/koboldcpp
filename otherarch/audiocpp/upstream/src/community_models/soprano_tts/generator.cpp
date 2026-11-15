@@ -119,8 +119,8 @@ modules::CausalDecoderConfig make_soprano_qwen3_config(
     out.stack.rms_norm_eps = config.rms_norm_eps;
     out.stack.rope_theta = config.rope_theta;
     out.stack.rope_type = GGML_ROPE_TYPE_NEOX;
-    out.stack.attention_precision = GGML_PREC_DEFAULT;
-    out.stack.projection_precision = GGML_PREC_DEFAULT;
+    out.stack.attention_precision = GGML_PREC_UNDEFINED;
+    out.stack.projection_precision = GGML_PREC_UNDEFINED;
     out.stack.activation_cast = soprano_activation_cast_policy(backend_type);
     out.stack.use_qk_norm = true;
     // Fused projections: single QKV GEMM + single gate/up GEMM with the
@@ -133,7 +133,7 @@ modules::CausalDecoderConfig make_soprano_qwen3_config(
     out.logits_size = config.vocab_size;
     out.logits_mode = modules::CausalDecoderLogitsMode::LastStep;
     out.use_lm_head_bias = false;
-    out.lm_head_precision = GGML_PREC_DEFAULT;
+    out.lm_head_precision = GGML_PREC_UNDEFINED;
     if (backend_type == core::BackendType::Vulkan || backend_type == core::BackendType::Metal) {
         out.lm_head_input_type = GGML_TYPE_F16;
     } else if (backend_type != core::BackendType::Cpu) {

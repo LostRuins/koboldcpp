@@ -487,7 +487,7 @@ core::TensorValue attention_from_heads(
         1.0F / std::sqrt(static_cast<float>(kCodecHeadDim)),
         0.0F,
         0.0F);
-    ggml_flash_attn_ext_set_prec(flash, GGML_PREC_F32);
+    ggml_prec_set_acc(flash, GGML_PREC_F32);
     return core::wrap_tensor(
         flash,
         core::TensorShape::from_dims({q.shape.dims[0], q.shape.dims[2], q.shape.dims[1], kCodecHeadDim}),
@@ -1476,7 +1476,7 @@ void set_encoder_matmul_precision(
         auto * tensor = ggml_graph_node(graph, node);
         if (tensor->op == GGML_OP_MUL_MAT && tensor->src[0]->type == GGML_TYPE_F16 &&
             tensor->src[1]->type == GGML_TYPE_F16) {
-            ggml_mul_mat_set_prec(tensor, GGML_PREC_F32);
+            ggml_prec_set_acc(tensor, GGML_PREC_F32);
         }
     }
 }

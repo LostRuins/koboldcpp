@@ -19,7 +19,7 @@ struct FeedForwardConfig {
     int64_t intermediate_size = 0;
     bool use_bias = true;
     GeluApproximation gelu_approximation = GeluApproximation::ExactErf;
-    ggml_prec projection_precision = GGML_PREC_DEFAULT;
+    ggml_prec projection_precision = GGML_PREC_UNDEFINED;
     FeedForwardActivation activation = FeedForwardActivation::Gelu;
 };
 
@@ -41,7 +41,7 @@ struct GatedFeedForwardConfig {
     bool use_bias = false;
     GatedFeedForwardActivation activation = GatedFeedForwardActivation::Gelu;
     GeluApproximation gelu_approximation = GeluApproximation::Tanh;
-    ggml_prec projection_precision = GGML_PREC_DEFAULT;
+    ggml_prec projection_precision = GGML_PREC_UNDEFINED;
     bool use_weight_type_projection_precision = false;
     bool use_fast_cuda_projection = false;
 };

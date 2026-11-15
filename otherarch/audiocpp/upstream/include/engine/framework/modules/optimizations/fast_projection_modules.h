@@ -7,7 +7,7 @@ namespace engine::modules {
 struct FastPackedProjection4Config {
     int64_t in_features = 0;
     int64_t out_features = 0;
-    ggml_prec precision = GGML_PREC_DEFAULT;
+    ggml_prec precision = GGML_PREC_UNDEFINED;
 };
 
 class FastPackedProjection4Module {

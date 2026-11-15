@@ -84,7 +84,7 @@ core::TensorValue matmul_f32(core::ModuleBuildContext & ctx, const core::TensorV
     core::TensorShape output_shape = lhs.shape;
     output_shape.dims[rank - 1] = rhs.shape.dims[rank - 1];
     ggml_tensor * output = ggml_mul_mat(ctx.ggml, rhs_transposed.tensor, lhs.tensor);
-    ggml_mul_mat_set_prec(output, GGML_PREC_F32);
+    ggml_prec_set_acc(output, GGML_PREC_F32);
     return core::wrap_tensor(output, output_shape, GGML_TYPE_F32);
 }
 
@@ -172,7 +172,7 @@ core::TensorValue self_attention(
     v_heads = repeat_kv_heads(ctx, v_heads, kv_repeats);
     auto k_heads_contiguous = ensure_contiguous(ctx, k_heads);
     auto scores_raw = ggml_mul_mat(ctx.ggml, k_heads_contiguous.tensor, q_heads.tensor);
-    ggml_mul_mat_set_prec(scores_raw, GGML_PREC_F32);
+    ggml_prec_set_acc(scores_raw, GGML_PREC_F32);
     auto scores = core::wrap_tensor(
         scores_raw,
         core::TensorShape::from_dims({q_heads.shape.dims[0], q_heads.shape.dims[1], q_heads.shape.dims[2], k_heads.shape.dims[2]}),

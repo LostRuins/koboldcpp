@@ -56,6 +56,9 @@ patches listed here. Recheck these after every run of `sync-audiocpp.ps1`.
 18. `src/framework/modules/transformers/causal_decoder_runtime.cpp`: replace
     Audio.cpp's private BF16-round operation with portable F32 -> BF16 -> F32
     casts. BreezeTTS uses this path to match its reference BF16 activations.
+19. SentencePiece's bundled protobuf-lite logger writes to standard error on
+    every platform. This avoids an otherwise unnecessary Android `liblog`
+    dependency while preserving protobuf diagnostics in Termux.
 
 Do not add KCPP adapter behavior to upstream-owned files. Put it in the parent
 directory so upstream refreshes remain reviewable.

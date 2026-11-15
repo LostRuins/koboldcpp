@@ -20,7 +20,7 @@ struct ProjectedGroupedSelfAttentionConfig {
     int64_t kv_heads = 0;
     int64_t head_dim = 0;
     bool use_bias = false;
-    ggml_prec projection_precision = GGML_PREC_DEFAULT;
+    ggml_prec projection_precision = GGML_PREC_UNDEFINED;
     ggml_prec attention_precision = GGML_PREC_F32;
     bool use_weight_type_projection_precision = false;
     bool use_fast_cuda_projection = false;

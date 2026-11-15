@@ -713,7 +713,7 @@ core::TensorValue linear(
         weights.weight.shape.dims[1],
         weights.weight.shape.dims[0],
         weights.bias.has_value(),
-        GGML_PREC_DEFAULT}).build(ctx, input, weights);
+        GGML_PREC_UNDEFINED}).build(ctx, input, weights);
 }
 
 core::TensorValue tokenizer_block(

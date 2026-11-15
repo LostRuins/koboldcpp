@@ -53,7 +53,7 @@ modules::CausalDecoderRuntimeConfig make_qwen_config(
     out.decoder.stack.rope_type = GGML_ROPE_TYPE_NEOX;
     out.decoder.stack.use_qk_norm = false;
     out.decoder.stack.attention_precision = GGML_PREC_F32;
-    out.decoder.stack.projection_precision = GGML_PREC_DEFAULT;
+    out.decoder.stack.projection_precision = GGML_PREC_UNDEFINED;
     out.decoder.stack.runtime.attention.prefill_mode = modules::DecoderAttentionMode::FlashGroupedViewKV;
     out.decoder.stack.runtime.attention.static_mode = modules::DecoderAttentionMode::FlashGroupedViewKV;
     out.decoder.stack.runtime.static_cache.update_mode = modules::DecoderStaticCacheUpdateMode::DirectSetRows;

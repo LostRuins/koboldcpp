@@ -64,7 +64,7 @@ core::TensorValue build_explicit(
     const std::optional<core::TensorValue> & score_scale) {
     const MatMulModule matmul;
     auto scores = matmul.build(ctx, q_heads, TransposeModule({{0, 1, 3, 2}, k_heads.shape.rank}).build(ctx, k_heads));
-    ggml_mul_mat_set_prec(scores.tensor, precision);
+    ggml_prec_set_acc(scores.tensor, precision);
     scores = core::ensure_backend_addressable_layout(ctx, scores);
     if (score_scale.has_value()) {
         auto scalar_shape = scores.shape;
@@ -89,7 +89,7 @@ core::TensorValue build_explicit(
         attn = core::wrap_tensor(ggml_soft_max(ctx.ggml, scores.tensor), scores.shape, GGML_TYPE_F32);
     }
     auto context = matmul.build(ctx, attn, v_heads);
-    ggml_mul_mat_set_prec(context.tensor, precision);
+    ggml_prec_set_acc(context.tensor, precision);
     return TransposeModule({{0, 2, 1, 3}, context.shape.rank}).build(ctx, context);
 }
 
@@ -111,7 +111,7 @@ core::TensorValue cpu_matmul_f32(
     auto rhs_t = TransposeModule({transpose_last_two_axes(rank), rank}).build(ctx, rhs);
     rhs_t = core::wrap_tensor(ggml_cont(ctx.ggml, rhs_t.tensor), rhs_t.shape, rhs_t.type);
     ggml_tensor * out = ggml_mul_mat(ctx.ggml, rhs_t.tensor, lhs.tensor);
-    ggml_mul_mat_set_prec(out, precision);
+    ggml_prec_set_acc(out, precision);
     core::TensorShape out_shape = lhs.shape;
     out_shape.dims[rank - 1] = rhs.shape.dims[rank - 1];
     return core::wrap_tensor(out, out_shape, GGML_TYPE_F32);
@@ -146,7 +146,7 @@ core::TensorValue build_explicit_cpu_per_head_one(
         core::ensure_backend_addressable_layout(ctx, v),
         core::TensorShape::from_dims({key_steps, v.shape.dims[3]}));
     ggml_tensor * scores_raw = ggml_mul_mat(ctx.ggml, k_2d.tensor, q_2d.tensor);
-    ggml_mul_mat_set_prec(scores_raw, precision);
+    ggml_prec_set_acc(scores_raw, precision);
     auto scores = core::wrap_tensor(
         scores_raw,
         core::TensorShape::from_dims({query_steps, key_steps}),
@@ -231,7 +231,7 @@ core::TensorValue build_flash(
     const auto v = core::ensure_backend_addressable_layout(ctx, v_heads);
     ggml_tensor * mask = attention_mask.has_value() ? attention_mask->tensor : nullptr;
     auto * flash = ggml_flash_attn_ext(ctx.ggml, q.tensor, k.tensor, v.tensor, mask, scale, 0.0F, 0.0F);
-    ggml_flash_attn_ext_set_prec(flash, precision);
+    ggml_prec_set_acc(flash, precision);
     return core::wrap_tensor(
         flash,
         core::TensorShape::from_dims({q.shape.dims[0], q.shape.dims[2], q.shape.dims[1], q.shape.dims[3]}),
@@ -252,7 +252,7 @@ core::TensorValue build_flash_preserve_views(
     }
     ggml_tensor * mask = attention_mask.has_value() ? attention_mask->tensor : nullptr;
     auto * flash = ggml_flash_attn_ext(ctx.ggml, q_heads.tensor, k_heads.tensor, v_heads.tensor, mask, scale, 0.0F, 0.0F);
-    ggml_flash_attn_ext_set_prec(flash, precision);
+    ggml_prec_set_acc(flash, precision);
     return core::wrap_tensor(
         flash,
         core::TensorShape::from_dims({q_heads.shape.dims[0], q_heads.shape.dims[2], q_heads.shape.dims[1], q_heads.shape.dims[3]}),
@@ -277,7 +277,7 @@ core::TensorValue build_cuda_flash_f16_head40(
     // the requested F16 contract.
     auto portable = build_flash(
         ctx, q_heads, k_heads, v_heads, attention_mask, scale,
-        GGML_PREC_DEFAULT, AttentionCausality::NonCausal);
+        GGML_PREC_UNDEFINED, AttentionCausality::NonCausal);
     return core::wrap_tensor(
         ggml_cast(ctx.ggml, portable.tensor, GGML_TYPE_F16),
         portable.shape,

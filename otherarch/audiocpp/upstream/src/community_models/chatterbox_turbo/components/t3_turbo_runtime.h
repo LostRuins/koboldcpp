@@ -367,7 +367,7 @@ T3TurboLayerOutput build_t3_turbo_layer_cached(
         1.0f / std::sqrt(static_cast<float>(head_dim)),
         0.0f,
         0.0f);
-    ggml_flash_attn_ext_set_prec(flash, GGML_PREC_F32);
+    ggml_prec_set_acc(flash, GGML_PREC_F32);
     auto context = core::wrap_tensor(
         flash,
         core::TensorShape::from_dims({q_heads.shape.dims[0], q_heads.shape.dims[2], q_heads.shape.dims[1], head_dim}),

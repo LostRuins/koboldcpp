@@ -1026,7 +1026,7 @@ engine::core::TensorValue self_attention_no_mask(
             scale,
             0.0f,
             0.0f);
-        ggml_flash_attn_ext_set_prec(flash, GGML_PREC_F32);
+        ggml_prec_set_acc(flash, GGML_PREC_F32);
         context = engine::core::wrap_tensor(
             flash,
             engine::core::TensorShape::from_dims({batch, frames, heads, head_dim}),

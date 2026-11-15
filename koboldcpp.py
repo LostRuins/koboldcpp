@@ -24,7 +24,9 @@ import base64
 import struct
 import json
 import sys
+import http.client
 import http.server
+import ssl
 import time
 import asyncio
 import socket
@@ -41,6 +43,7 @@ from typing import Any, Dict, Optional, Tuple
 import shutil
 import subprocess
 import gzip
+import zlib
 import queue
 
 # constants
@@ -73,6 +76,45 @@ queue_concurrent_limit = 10
 swa_padding_default = 0
 default_reqtimeout = 600 # 10 min default
 default_maxctx = 16384
+
+
+class RequestBodyEncodingError(ValueError):
+    pass
+
+
+class RequestBodyTooLargeError(ValueError):
+    pass
+
+
+def decode_request_body(body, content_encoding, max_size):
+    """Decode HTTP Content-Encoding values while bounding expanded payload size."""
+    encodings = [encoding.strip().lower() for encoding in (content_encoding or "").split(",") if encoding.strip()]
+    decoded = body
+    for encoding in reversed(encodings):
+        if encoding == "identity":
+            continue
+        if encoding in ("gzip", "x-gzip"):
+            decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        elif encoding == "deflate":
+            decompressor = zlib.decompressobj()
+        else:
+            raise RequestBodyEncodingError(f"Unsupported Content-Encoding: {encoding}")
+
+        try:
+            decoded = decompressor.decompress(decoded, max_size + 1)
+            if len(decoded) > max_size:
+                raise RequestBodyTooLargeError(f"Decompressed request body exceeds {max_size} bytes")
+            decoded += decompressor.flush(max_size + 1 - len(decoded))
+        except RequestBodyTooLargeError:
+            raise
+        except zlib.error as e:
+            raise RequestBodyEncodingError(f"Invalid {encoding} request body: {e}") from e
+
+        if len(decoded) > max_size:
+            raise RequestBodyTooLargeError(f"Decompressed request body exceeds {max_size} bytes")
+        if not decompressor.eof or decompressor.unused_data:
+            raise RequestBodyEncodingError(f"Invalid {encoding} request body")
+    return decoded
 
 def parse_reqtimeout(value):
     try:
@@ -118,6 +160,8 @@ lastgeneratedcachedpayload = b''
 lastgeneratedcachedpayloadkey = ''
 currgenimgkey = ''
 image_recovery_lock = threading.Lock()
+sdcpp_current_job = None
+sdcpp_last_job = None
 lastuploadedcomfyimg = b''
 fullsdmodelpath = ""  #if empty, it's not initialized
 password = "" #if empty, no auth key required
@@ -1241,6 +1285,11 @@ def set_backend_props(inputs):
         if args.usevulkan: # is an empty array if using vulkan without defined gpu
             vulkangpus = ','.join([str(g) for g in args.usevulkan])
             handle.set_environment_variable("GGML_VK_VISIBLE_DEVICES".encode("UTF-8"),vulkangpus.encode("UTF-8"))
+
+    # Test high-priority Vulkan allocations on all supported devices. This is
+    # consumed when the Vulkan device is initialized during model loading.
+    if args.usevulkan is not None:
+        handle.set_environment_variable(b"GGML_VK_ENABLE_MEMORY_PRIORITY", b"1")
 
     # set universal flags
     inputs.devices_override = (args.device if args.device else "").encode("UTF-8")
@@ -3255,6 +3304,93 @@ def lora_map_name_to_path(request_list):
             result.append(out)
     return result
 
+def sdcpp_native_to_genparams(request):
+    """Flatten the native sd.cpp image schema into KoboldCpp's image schema."""
+    if not isinstance(request, dict):
+        raise ValueError("request body must be a JSON object")
+    sample = request.get('sample_params') or {}
+    sample = sample if isinstance(sample, dict) else {}
+    guidance = sample.get('guidance') or {}
+    guidance = guidance if isinstance(guidance, dict) else {}
+    ref_image_args = request.get('ref_image_args') or ''
+    if request.get('increase_ref_index'):
+        ref_image_args = ','.join(x for x in (ref_image_args, 'ref_index_mode=increase') if x)
+    return {
+        'prompt': str(request.get('prompt') or ''),
+        'negative_prompt': str(request.get('negative_prompt') or ''),
+        'clip_skip': request.get('clip_skip', -1),
+        'width': request.get('width', 512),
+        'height': request.get('height', 512),
+        'denoising_strength': request.get('strength', 0.75),
+        'seed': request.get('seed', -1),
+        'init_images': [request['init_image']] if request.get('init_image') else [],
+        'mask': request.get('mask_image') or '',
+        'extra_images': request.get('ref_images') or [],
+        'lora': request.get('lora') or [],
+        'ref_image_args': ref_image_args,
+        'sampler_name': sample.get('sample_method', 'default'),
+        'scheduler': sample.get('scheduler', 'default'),
+        'steps': sample.get('sample_steps', 20),
+        'eta': sample.get('eta'),
+        'shifted_timestep': sample.get('shifted_timestep'),
+        'flow_shift': sample.get('flow_shift'),
+        'custom_sigmas': sample.get('custom_sigmas') or [],
+        'extra_sample_args': sample.get('extra_sample_args', ''),
+        'cfg_scale': guidance.get('txt_cfg', 5),
+        'distilled_guidance': guidance.get('distilled_guidance'),
+        'cache_mode': request.get('cache_mode', ''),
+        'cache_options': request.get('cache_option', ''),
+    }
+
+def sdcpp_capabilities():
+    loaded = not (friendlysdmodelname == "inactive" or fullsdmodelpath == "")
+    if autoswapmode and imageName is not None:
+        loaded = True
+    max_side = tryparseint(getattr(args, 'sdclamped', 0), 0) if args is not None else 0
+    max_side = max_side if max_side > 0 else 8192
+    defaults = {'width': 512, 'height': 512, 'strength': 0.75, 'seed': -1,
+                'sample_params': {'sample_method': 'default', 'scheduler': 'default',
+                                  'sample_steps': 20, 'guidance': {'txt_cfg': 5}}}
+    features = {'init_image': True, 'mask_image': True, 'ref_images': True,
+                'lora': bool(imglora_bypath), 'cache': True,
+                'cancel_generating': True, 'preview': True}
+    model_name = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+    model_name = os.path.basename(model_name) if model_name else ''
+    return {
+        'model': {'name': model_name, 'stem': model_name, 'path': ''} if loaded else {},
+        'runtime': sdcpp_model_status(),
+        'current_mode': 'img_gen',
+        'supported_modes': ['img_gen'] if loaded else [],
+        'defaults': defaults,
+        'output_formats': ['png'],
+        'features': features,
+        'defaults_by_mode': {'img_gen': defaults},
+        'output_formats_by_mode': {'img_gen': ['png']},
+        'features_by_mode': {'img_gen': features},
+        'samplers': list(cached_sd_info.get('available_samplers', [])),
+        'schedulers': list(cached_sd_info.get('available_schedulers', [])) + list(cached_sd_custom_sigmas.keys()),
+        'loras': [dict(item, display_path=item['path']) for item in mk_sdapi_lora_list(imglora_bypath)],
+        'upscalers': [],
+        'upscale': False,
+        'preview_modes': ['none', 'proj'],
+        'limits': {
+            'min_width': 64, 'max_width': max_side,
+            'min_height': 64, 'max_height': max_side,
+            'max_batch_count': 1, 'max_queue_size': 0,
+            'max_upscale_width': 0, 'max_upscale_height': 0,
+        },
+    }
+
+def sdcpp_model_status():
+    loaded = not (friendlysdmodelname == 'inactive' or fullsdmodelpath == '')
+    loaded = loaded or bool(autoswapmode and imageName is not None)
+    return {
+        'state': 'ready' if loaded else 'empty', 'recipe': None,
+        'models': {'model': 'koboldcpp-current'} if loaded else {},
+        'error': None, 'origin': 'command_line', 'revision': 1,
+        'load_elapsed_seconds': 0 if loaded else None,
+    }
+
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
 
@@ -3297,7 +3433,7 @@ def sd_generate(genparams):
         seed = random.randint(100000, 999999)
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
-    custom_sigmas = cached_sd_custom_sigmas.get(scheduler)
+    custom_sigmas = genparams.get("custom_sigmas") or cached_sd_custom_sigmas.get(scheduler)
     extra_sample_args = str(genparams.get("extra_sample_args") or "")
     ref_image_args = str(genparams.get("ref_image_args") or "").strip()
     clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
@@ -3417,6 +3553,35 @@ def sd_get_ongoing_generation_info():
     else:
         print("An error occurred while getting sd ongoing generation info")
     return {}
+
+def sdcpp_get_job(job_id):
+    with image_recovery_lock:
+        current = copy.deepcopy(sdcpp_current_job) if sdcpp_current_job else None
+        last = copy.deepcopy(sdcpp_last_job) if sdcpp_last_job else None
+    if current and current['id'] == job_id:
+        handle.sd_request_ongoing_generation_preview()
+        info = sd_get_ongoing_generation_info()
+        step, steps = info.get('step', 0), info.get('steps', 0)
+        elapsed = int(info.get('elapsed_time', 0) * 1000)
+        current['progress'] = {
+            'stage': {'conditioning': 'conditioning', 'diffusing': 'sampling',
+                      'decoding': 'vae_decode'}.get(info.get('status'), 'preparing'),
+            'detail': '', 'pass': 0, 'completed': step, 'total': steps,
+            'unit': 'steps', 'stage_elapsed_ms': elapsed, 'elapsed_ms': elapsed,
+        }
+        current['preview'] = ({'pass': 1, 'step': step, 'total_steps': steps,
+                               'b64_json': info['preview']} if info.get('preview') else None)
+        return current
+    return last if last and last['id'] == job_id else None
+
+def sdcpp_cancel_job(job_id):
+    with image_recovery_lock:
+        if not sdcpp_current_job or sdcpp_current_job['id'] != job_id:
+            return None
+        sdcpp_current_job['cancel_requested'] = True
+        job = copy.deepcopy(sdcpp_current_job)
+    handle.sd_abort_generation()
+    return job
 
 def parse_query_bool(parsed_dict, key, default=False):
     value = parsed_dict.get(key, [default])
@@ -6035,7 +6200,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
         is_chat_completions_path = (clean_path.endswith('/v1/chat/completions') or clean_path=='/chat/completions')
 
         #any requests to the following endpoints is capable of waking the server
-        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/api/extra/music/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale","/api/generate", "/api/chat", "/v1/messages", "/messages"]
+        wake_requests = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/extra/transcribe","/api/extra/music/transcribe","/v1/audio/transcriptions","/api/extra/tts","/v1/audio/speech","/api/extra/embeddings","/v1/embeddings","/api/embed","/api/extra/music/prepare","/api/extra/music/generate","/images/generations","/v1/images/generations","/images/edits","/v1/images/edits","/sdapi/v1/txt2img","/sdapi/v1/img2img","/sdapi/v1/upscale","/sdcpp/v1/img_gen","/api/generate", "/api/chat", "/v1/messages", "/messages"]
         is_wake_request = clean_path in wake_requests
 
         autoswapEnabled = global_memory["autoswapmode"] is not None and global_memory["autoswapmode"]
@@ -6089,7 +6254,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                 ttsReqs = ["/api/extra/tts", "/v1/audio/speech"]
                 embedReqs = ["/api/extra/embeddings", "/v1/embeddings", "/api/embed"]
                 musicReqs = ["/api/extra/music/prepare","/api/extra/music/generate"]
-                imageReqs = ["/images/generations", "/v1/images/generations", "/images/edits", "/v1/images/edits", "/sdapi/v1/txt2img", "/sdapi/v1/img2img", "/sdapi/v1/upscale"] # "/sdapi/v1/sd-models", "/sdapi/v1/options", "/sdapi/v1/samplers"
+                imageReqs = ["/images/generations", "/v1/images/generations", "/images/edits", "/v1/images/edits", "/sdapi/v1/txt2img", "/sdapi/v1/img2img", "/sdapi/v1/upscale", "/sdcpp/v1/img_gen"] # "/sdapi/v1/sd-models", "/sdapi/v1/options", "/sdapi/v1/samplers"
 
                 requestedType = None
                 if any(clean_path.endswith(e) for e in textReqs):
@@ -6435,11 +6600,14 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         req_id_suffix = genparams.get('oai_uniqueid',1)
         chatcmpl_id = f"chatcmpl-A{req_id_suffix}"
         cmpl_id = f"cmpl-A{req_id_suffix}"
+        is_background_worker = (
+            genparams.get('genkey', '').startswith('HORDEREQ_') or
+            self.headers.get('X-KoboldCpp-Background-Worker') == 'beavernet'
+        )
 
         def run_blocking():  # api format 1=basic,2=kai,3=oai,4=oai-chat
             # flag instance as non-idle for a while
-            washordereq = genparams.get('genkey', '').startswith('HORDEREQ_')
-            if not washordereq:
+            if not is_background_worker:
                 global last_non_horde_req_time
                 last_non_horde_req_time = time.time()
 
@@ -6473,8 +6641,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             logprobsdict = parse_last_logprobs(lastlogprobs)
 
         # flag instance as non-idle for a while
-        washordereq = genparams.get('genkey', '').startswith('HORDEREQ_')
-        if not washordereq:
+        if not is_background_worker:
             global last_non_horde_req_time
             last_non_horde_req_time = time.time()
 
@@ -7515,7 +7682,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     gen_payload = {"prompt": prefix+prompt,"max_length": max_length,"temperature": temperature,"top_k": top_k,"top_p": top_p,"rep_pen": rep_pen,"ban_eos_token":ban_eos_token, "stop_sequence":stops}
                     respjson = make_url_request(f'{epurl}/api/v1/generate', gen_payload)
-                    reply = html.escape(respjson["results"][0]["text"])
+                    reply = respjson["results"][0]["text"]
                     if chatmode:
                         reply = " "+reply.strip()
                 status = "Generation Completed"
@@ -7544,30 +7711,38 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         <input type="submit" value="Image Mode">
         </form>'''
 
+        def escape_html(value):
+            return html.escape(str(value), quote=True)
+
         bodycontent = f'''<b><u>{"Image Mode" if imgmode else ("Chat Mode" if chatmode else "Story Mode")}</u></b><br>'''
         optionscontent = ""
         if imgmode:
             randimg = f'<img src="view_image{random.randint(100, 999)}.png" width="320" width="320">'
-            bodycontent += f'''<p>Generated Image: {prompt if prompt else "None"}</p>
+            bodycontent += f'''<p>Generated Image: {escape_html(prompt) if prompt else "None"}</p>
             {randimg if prompt else ""}<br>
             <label>Image Prompt: </label><input type="text" size="40" value="" name="imgprompt">
             <input type="hidden" name="generate" value="Generate" />
             <input type="submit" value="Generate"> (Be patient)'''
         elif chatmode:
-            oldconvo = prompt.strip().replace(f"{human_name}:",f"<b>{human_name}:</b>").replace(f"{bot_name}:",f"<b>{bot_name}:</b>").replace("\n","<br>")
-            oldconvo += f'''<input type="hidden" name="human_name" value="{human_name}"><input type="hidden" name="bot_name" value="{bot_name}">'''
+            safe_human_name = escape_html(human_name)
+            safe_bot_name = escape_html(bot_name)
+            oldconvo = escape_html(prompt.strip())
+            oldconvo = oldconvo.replace(f"{safe_human_name}:", f"<b>{safe_human_name}:</b>")
+            oldconvo = oldconvo.replace(f"{safe_bot_name}:", f"<b>{safe_bot_name}:</b>")
+            oldconvo = oldconvo.replace("\n", "<br>")
+            oldconvo += f'''<input type="hidden" name="human_name" value="{safe_human_name}"><input type="hidden" name="bot_name" value="{safe_bot_name}">'''
             newconvo = '''Start a new conversation.<br>
             <label>Your Name: </label> <input type="text" size="10" value="User" name="human_name"><br>
             <label>Bot Name: </label> <input type="text" size="10" value="Assistant" name="bot_name"><br>'''
             clnprompt = prompt.replace("\n","1HdNl1")
             bodycontent += f'''<p>{newconvo if prompt=="" else oldconvo}</p>
-            <input type="hidden" name="prompt" value="{clnprompt}">
+            <input type="hidden" name="prompt" value="{escape_html(clnprompt)}">
             <label>Say: </label><input type="text" size="40" value="" name="chatmsg">
             <input type="hidden" name="generate" value="Send" />
             <input type="submit" value="Send"> (Be patient)'''
         else:
             bodycontent += f'''
-<textarea name="prompt" cols="60" rows="8" wrap="soft" placeholder="Enter Prompt Here">{prompt}</textarea><br>
+<textarea name="prompt" cols="60" rows="8" wrap="soft" placeholder="Enter Prompt Here">{escape_html(prompt)}</textarea><br>
 <input type="hidden" name="generate" value="Generate" />
 <input type="submit" value="Generate"> (Be patient)
 '''
@@ -7595,7 +7770,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 <form action="/noscript">
 {bodycontent}
 <hr>
-<b>{status}</b><br>
+<b>{escape_html(status)}</b><br>
 <hr>
 {optionscontent}
 <input type="hidden" name="chatmode" value="{chatmode}">
@@ -7644,6 +7819,7 @@ Change Mode<br>
             return
 
         response_body = None
+        response_code = 200
         content_type = 'application/json'
         content_encoding = None
 
@@ -7654,7 +7830,45 @@ Change Mode<br>
         if clean_path!="/lcpp" and clean_path.startswith("/lcpp/"):
             clean_path = clean_path[5:] #adapt lcpp paths to the root
 
-        if clean_path in [""]: # the root url is lite
+        if clean_path.startswith('/sdcpp/v1/') and not self.secure_endpoint():
+            return
+
+        if clean_path == '/sdcpp/v1/capabilities':
+            response_body = json.dumps(sdcpp_capabilities()).encode()
+
+        elif clean_path == '/sdcpp/v1/model-files':
+            status = sdcpp_model_status()
+            model_name = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+            files = ([{'id': 'koboldcpp-current', 'name': os.path.basename(model_name),
+                       'category': 'checkpoints', 'root': '', 'relative_path': 'koboldcpp-current'}]
+                     if status['state'] == 'ready' else [])
+            response_body = json.dumps({'files': files, 'errors': []}).encode()
+
+        elif clean_path == '/sdcpp/v1/recipes':
+            response_body = json.dumps({'recipes': [], 'errors': []}).encode()
+
+        elif clean_path == '/sdcpp/v1/models/status':
+            response_body = json.dumps(sdcpp_model_status()).encode()
+
+        elif clean_path == '/sdcpp/v1/models':
+            status = sdcpp_model_status()
+            model_name = imageName if autoswapmode and imageName is not None else friendlysdmodelname
+            data = ([{'id': 'koboldcpp-current', 'name': os.path.basename(model_name),
+                      'object': 'model', 'created': int(time.time()), 'owned_by': 'koboldcpp',
+                      'status': {'value': 'loaded'}, 'permission': [], 'root': 'koboldcpp'}]
+                    if status['state'] == 'ready' else [])
+            response_body = json.dumps({'object': 'list', 'data': data}).encode()
+
+        elif re.fullmatch(r'/sdcpp/v1/jobs/[^/]+', clean_path):
+            job_id = clean_path.rsplit('/', 1)[-1]
+            job = sdcpp_get_job(job_id)
+            if job is None:
+                response_code = 404
+                response_body = json.dumps({'error': 'Job not found', 'code': 'job_not_found'}).encode()
+            else:
+                response_body = json.dumps(job).encode()
+
+        elif clean_path in [""]: # the root url is lite
             content_type = 'text/html'
             if supports_gzip and embedded_kailite_gz is not None:
                 response_body = embedded_kailite_gz
@@ -8044,7 +8258,7 @@ Change Mode<br>
             rp = f"Error: KoboldCpp HTTP Server is running, but this endpoint does not exist. Please check the URL and METHOD.<br><a href=\"/api\">[Read API documentation here]</a><br><br>Current path: {self.path}"
             self.wfile.write(rp.encode())
         else:
-            self.send_response(200)
+            self.send_response(response_code)
             self.send_header('content-length', str(len(response_body)))
             if content_encoding:
                 self.send_header('Content-Encoding', content_encoding)
@@ -8054,15 +8268,16 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, sdcpp_current_job, sdcpp_last_job, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
         body = None
+        max_pl = int(args.maxrequestsize) if args.maxrequestsize else 32
+        max_payload_size = 1024*1024*max_pl
         if contlenstr:
             content_length = int(contlenstr)
-            max_pl = int(args.maxrequestsize) if args.maxrequestsize else 32
-            if content_length > (1024*1024*max_pl): #payload size limit
+            if content_length > max_payload_size: #payload size limit
                 self.send_response(500)
                 self.end_headers(content_type='application/json')
                 self.wfile.write(json.dumps({"detail": {
@@ -8105,12 +8320,53 @@ Change Mode<br>
                 }}).encode())
                 return
 
+        try:
+            body = decode_request_body(body, self.headers.get('content-encoding', ''), max_payload_size)
+        except RequestBodyTooLargeError:
+            self.send_response(413)
+            self.end_headers(content_type='application/json')
+            self.wfile.write(json.dumps({"detail": {
+            "msg": f"Decompressed payload is too big. Max payload size is {max_pl}MB.",
+            "type": "bad_input",
+            }}).encode())
+            return
+        except RequestBodyEncodingError as e:
+            utfprint("Request Body Encoding Error: " + str(e))
+            response_code = 415 if str(e).startswith("Unsupported Content-Encoding:") else 400
+            self.send_response(response_code)
+            self.end_headers(content_type='application/json')
+            self.wfile.write(json.dumps({"detail": {
+            "msg": str(e),
+            "type": "bad_input",
+            }}).encode())
+            return
+
         self.path = self.path.rstrip('/')
         clean_path = self.path.split("?")[0] #for cases where we do not want query params
         response_body = None
         response_code = 200
+        if clean_path.startswith('/sdcpp/v1/') and not self.secure_endpoint():
+            return
 
-        if clean_path.endswith('/api/extra/tokencount') or clean_path.endswith('/api/extra/tokenize'):
+        cancel_match = re.fullmatch(r'/sdcpp/v1/jobs/([^/]+)/cancel', clean_path)
+        if cancel_match:
+            cancelled = sdcpp_cancel_job(cancel_match.group(1))
+            if cancelled is None:
+                response_code = 404
+                response_body = json.dumps({'error': 'Job not found', 'code': 'job_not_found'}).encode()
+            else:
+                response_body = json.dumps(cancelled).encode()
+
+        elif clean_path == '/sdcpp/v1/models/refresh':
+            response_body = json.dumps({'errors': []}).encode()
+
+        elif clean_path in ('/sdcpp/v1/models/load', '/sdcpp/v1/models/unload'):
+            status = sdcpp_model_status()
+            if clean_path.endswith('/load') and status['state'] == 'ready':
+                status['already_loaded'] = True
+            response_body = json.dumps(status).encode()
+
+        elif clean_path.endswith('/api/extra/tokencount') or clean_path.endswith('/api/extra/tokenize'):
             if not self.secure_endpoint():
                 return
             try:
@@ -8578,6 +8834,7 @@ Change Mode<br>
             is_comfyui_imggen = False
             is_oai_imggen = False
             is_oai_imgedit = False
+            is_sdcpp_imggen = False
             is_img_upscale = False
             is_transcribe = False
             is_tts = False
@@ -8677,10 +8934,12 @@ Change Mode<br>
                 api_format = 9
             elif clean_path.endswith('/sdapi/v1/extra-single-image') or clean_path.endswith('/sdapi/v1/upscale'):
                 is_img_upscale = True
-            elif clean_path=="/prompt" or clean_path=="/images/generations" or clean_path.endswith('/v1/images/generations') or clean_path=="/images/edits" or clean_path.endswith('/v1/images/edits') or clean_path.endswith('/sdapi/v1/txt2img') or clean_path.endswith('/sdapi/v1/img2img'):
+            elif clean_path=="/prompt" or clean_path=="/images/generations" or clean_path.endswith('/v1/images/generations') or clean_path=="/images/edits" or clean_path.endswith('/v1/images/edits') or clean_path.endswith('/sdapi/v1/txt2img') or clean_path.endswith('/sdapi/v1/img2img') or clean_path=='/sdcpp/v1/img_gen':
                 is_imggen = True
                 if clean_path=="/prompt":
                     is_comfyui_imggen = True
+                elif clean_path=='/sdcpp/v1/img_gen':
+                    is_sdcpp_imggen = True
                 elif clean_path.endswith('/v1/images/generations') or clean_path=="/images/generations":
                     is_oai_imggen = True
                 elif clean_path.endswith('/v1/images/edits') or clean_path=="/images/edits":
@@ -8736,6 +8995,8 @@ Change Mode<br>
                         return
 
                 # Embedded Horde chat jobs mandate jinja
+                if is_sdcpp_imggen:
+                    genparams = sdcpp_native_to_genparams(genparams)
                 if genparams.get("is_chat_job") is True:
                     use_jinja = True
 
@@ -9093,6 +9354,7 @@ Change Mode<br>
                     keepalive_started = False
                     final_write_started = False
                     recovery_genkey = ''
+                    sdcpp_created = 0
                     try:
                         send_keepalive = bool(tryparseint(genparams.get('keepalive', False), 0))
                         recovery_params = copy.deepcopy(genparams)
@@ -9119,8 +9381,17 @@ Change Mode<br>
                             abort_gen = None
                             send_keepalive = True
                         # Cloudflare proxy heuristic, trigger keepalive if cloudflare is detected
-                        if self.headers.get('CF-Connecting-IP'):
+                        if self.headers.get('CF-Connecting-IP') and not is_sdcpp_imggen:
                             send_keepalive = True
+                        if is_sdcpp_imggen:
+                            sdcpp_created = int(time.time() * 1000)
+                            with image_recovery_lock:
+                                sdcpp_last_job = None
+                                sdcpp_current_job = {
+                                    'id': 'job_koboldcpp', 'kind': 'img_gen', 'status': 'generating',
+                                    'created': sdcpp_created, 'started': sdcpp_created, 'completed': None,
+                                    'queue_position': 0, 'result': None, 'error': None,
+                                }
                         if send_keepalive:
                             # Close-delimited JSON works with HTTP/1.0 and HTTP/1.1.
                             # No Content-Length: the body includes periodic whitespace.
@@ -9165,7 +9436,28 @@ Change Mode<br>
                             with image_recovery_lock:
                                 if currgenimgkey == recovery_genkey:
                                     currgenimgkey = ''
-                        if is_comfyui_imggen:
+                        if is_sdcpp_imggen:
+                            completed = int(time.time() * 1000)
+                            with image_recovery_lock:
+                                cancelled = bool(sdcpp_current_job and sdcpp_current_job.get('cancel_requested'))
+                                sdcpp_last_job = {
+                                    'id': 'job_koboldcpp', 'kind': 'img_gen',
+                                    'status': 'completed' if gendat else ('cancelled' if cancelled else 'failed'),
+                                    'created': sdcpp_created, 'started': sdcpp_created,
+                                    'completed': completed, 'queue_position': 0,
+                                    'result': ({'output_format': 'png', 'images': [{'index': 0, 'b64_json': gendat}]}
+                                               if gendat else None),
+                                    'error': (None if gendat else {
+                                        'code': 'cancelled' if cancelled else 'generation_failed',
+                                        'message': 'job cancelled by client' if cancelled else 'image generation returned no result'}),
+                                }
+                                sdcpp_current_job = None
+                            genresp = json.dumps({
+                                'id': 'job_koboldcpp', 'kind': 'img_gen',
+                                'status': sdcpp_last_job['status'], 'created': sdcpp_created,
+                                'poll_url': '/sdcpp/v1/jobs/job_koboldcpp',
+                            }).encode()
+                        elif is_comfyui_imggen:
                             if gendat:
                                 lastgeneratedcomfyimg = base64.b64decode(gendat)
                             else:
@@ -9177,7 +9469,7 @@ Change Mode<br>
                         else:
                             genresp = (json.dumps({"images":[gendat],"parameters":{},"info":geninfo,"animated":genanim,"extra_data":gendatextra, "final_frame":genfinalframe}).encode())
                         if not keepalive_started:
-                            self.send_response(200)
+                            self.send_response(202 if is_sdcpp_imggen else 200)
                             self.send_header('content-length', str(len(genresp)))
                             self.end_headers(content_type='application/json')
                         final_write_started = True
@@ -9186,6 +9478,15 @@ Change Mode<br>
                         with image_recovery_lock:
                             if currgenimgkey == recovery_genkey:
                                 currgenimgkey = ''
+                            if is_sdcpp_imggen:
+                                sdcpp_current_job = None
+                                sdcpp_last_job = {
+                                    'id': 'job_koboldcpp', 'kind': 'img_gen', 'status': 'failed',
+                                    'created': sdcpp_created, 'started': sdcpp_created,
+                                    'completed': int(time.time() * 1000), 'queue_position': 0,
+                                    'result': None,
+                                    'error': {'code': 'generation_failed', 'message': 'image generation failed'},
+                                }
                         if keepalive_started and not final_write_started:
                             # Headers are already committed; finish with a JSON error.
                             try:
@@ -9406,7 +9707,7 @@ Change Mode<br>
         else:
             self.send_header('access-control-allow-origin', '*')
         self.send_header('access-control-allow-methods', '*')
-        self.send_header('access-control-allow-headers', '*, Accept, Content-Type, Content-Length, Cache-Control, Accept-Encoding, X-CSRF-Token, Client-Agent, X-Fields, Content-Type, Authorization, X-Requested-With, X-HTTP-Method-Override, apikey, genkey')
+        self.send_header('access-control-allow-headers', '*, Accept, Content-Type, Content-Length, Content-Encoding, Cache-Control, Accept-Encoding, X-CSRF-Token, Client-Agent, X-Fields, Content-Type, Authorization, X-Requested-With, X-HTTP-Method-Override, apikey, genkey')
         self.send_header('access-control-allow-private-network', 'true')
         self.send_header("cache-control", "no-store")
         if content_type is not None:
@@ -9798,6 +10099,7 @@ def show_gui():
         togglectxshift(1,1,1)
         togglesmartcache(1,1,1)
         togglehorde(1,1,1)
+        togglebeavernet(1,1,1)
         toggletaesd(1,1,1)
         togglesdlora(1,1,1)
         togglejinja(1,1,1)
@@ -9880,7 +10182,7 @@ def show_gui():
 
     tabs = ctk.CTkFrame(root, corner_radius = 0, width=windowwidth, height=windowheight-50)
     tabs.grid(row=0, stick="nsew")
-    tabnames= ["Quick Launch", "Hardware", "Context", "Loaded Files", "Network", "Horde Worker","Image Gen","Audio","Agent","Admin","Extra"]
+    tabnames= ["Quick Launch", "Hardware", "Context", "Loaded Files", "Network", "Online Worker","Image Gen","Audio","Agent","Admin","Extra"]
     navbuttons = {}
     navbuttonframe = ctk.CTkFrame(tabs, width=int(104), height=int(tabs.cget("height")))
     navbuttonframe.grid(row=0, column=0, padx=2,pady=2)
@@ -9996,6 +10298,8 @@ def show_gui():
     horde_apikey_var = ctk.StringVar(value="")
     horde_workername_var = ctk.StringVar(value="")
     usehorde_var = ctk.IntVar()
+    beavernet_apikey_var = ctk.StringVar(value="")
+    usebeavernet_var = ctk.IntVar()
     ssl_cert_var = ctk.StringVar()
     ssl_key_var = ctk.StringVar()
     password_var = ctk.StringVar()
@@ -10131,6 +10435,12 @@ def show_gui():
             temp.bind("<Enter>", lambda event: show_tooltip(event, tooltiptxt))
             temp.bind("<Leave>", hide_tooltip)
         return temp
+
+    def makehyperlink(parent, text, url, row, column=0, columnspan=1):
+        link = ctk.CTkLabel(parent, text=text, text_color="#3B8ED0", font=ctk.CTkFont(underline=True), cursor="hand2")
+        link.grid(row=row, column=column, columnspan=columnspan, padx=8, pady=1, sticky="nw")
+        link.bind("<Button-1>", lambda event: LaunchWebbrowser(url, f"Could not open {url} in a browser."))
+        return link
 
     def makeslider(parent, label, options, var, row=0, width=160, height=12, set=0, tooltip=""):
         slider_row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -10985,14 +11295,15 @@ def show_gui():
 
 
     # Horde Tab
-    horde_tab = tabcontent["Horde Worker"]
-    makelabel(horde_tab, "Horde:", 18,0,"Settings for embedded AI Horde worker").grid(pady=10)
+    horde_tab = tabcontent["Online Worker"]
+    makelabel(horde_tab, "AI Horde Worker:", 18,0,"Settings for embedded AI Horde worker").grid(pady=10)
 
     horde_name_entry,  horde_name_label = makelabelentry(horde_tab, "Horde Model Name:", horde_name_var, 20, 180,tooltip="The model name to be displayed on the AI Horde.")
     horde_gen_entry,  horde_gen_label = makelabelentry(horde_tab, "Gen. Length:", horde_gen_var, 21, 50,tooltip="The maximum amount to generate per request that this worker will accept jobs for.")
     horde_context_entry,  horde_context_label = makelabelentry(horde_tab, "Max Context:",horde_context_var, 22, 50,tooltip="The maximum context length that this worker will accept jobs for.\nIf 0, matches main context limit.")
-    horde_apikey_entry,  horde_apikey_label = makelabelentry(horde_tab, "API Key (If Embedded Worker):",horde_apikey_var, 23, 180,tooltip="Your AI Horde API Key that you have registered.")
+    horde_apikey_entry,  horde_apikey_label = makelabelentry(horde_tab, "AI Horde API Key:",horde_apikey_var, 23, 180,tooltip="Your AI Horde API Key that you have registered.")
     horde_workername_entry,  horde_workername_label = makelabelentry(horde_tab, "Horde Worker Name:",horde_workername_var, 24, 180,tooltip="Your worker's name to be displayed.")
+    horde_signup_link = makehyperlink(horde_tab, "Register AI Horde API Key", "https://aihorde.net/register", 25, columnspan=2)
 
     def togglehorde(a,b,c):
         horde_items = zip([horde_name_entry, horde_gen_entry, horde_context_entry, horde_apikey_entry, horde_workername_entry],
@@ -11005,11 +11316,31 @@ def show_gui():
             else:
                 item.grid_remove()
                 label.grid_remove()
+        if usehorde_var.get() == 1:
+            horde_signup_link.grid()
+        else:
+            horde_signup_link.grid_remove()
         if usehorde_var.get()==1 and (horde_name_var.get()=="koboldcpp" or horde_name_var.get()=="") and model_var.get()!="":
             basefile = os.path.basename(model_var.get())
             horde_name_var.set(sanitize_string(os.path.splitext(basefile)[0]))
 
     makecheckbox(horde_tab, "Configure for Horde", usehorde_var, 19, command=togglehorde,tooltiptxt="Enable the embedded AI Horde worker.")
+
+    makelabel(horde_tab, "BeaverNet Worker:", 26,0,"Settings for embedded BeaverNet worker").grid(pady=10)
+    beavernet_apikey_entry, beavernet_apikey_label = makelabelentry(horde_tab, "BeaverNet API Key:", beavernet_apikey_var, 28, 180, tooltip="Your BeaverNet provider API key.")
+    beavernet_signup_link = makehyperlink(horde_tab, "Register BeaverNet API Key", "https://net.beaverai.org", 29, columnspan=2)
+
+    def togglebeavernet(a,b,c):
+        if usebeavernet_var.get() == 1:
+            beavernet_apikey_entry.grid()
+            beavernet_apikey_label.grid()
+            beavernet_signup_link.grid()
+        else:
+            beavernet_apikey_entry.grid_remove()
+            beavernet_apikey_label.grid_remove()
+            beavernet_signup_link.grid_remove()
+
+    makecheckbox(horde_tab, "Enable BeaverNet Worker", usebeavernet_var, 27, command=togglebeavernet, tooltiptxt="Share this KoboldCpp model through BeaverNet.")
 
     # Image Gen Tab
 
@@ -11222,6 +11553,7 @@ def show_gui():
     togglectxshift(1,1,1)
     togglesmartcache(1,1,1)
     togglehorde(1,1,1)
+    togglebeavernet(1,1,1)
     toggletaesd(1,1,1)
     togglesdlora(1,1,1)
     togglejinja(1,1,1)
@@ -11430,6 +11762,8 @@ def show_gui():
             if horde_apikey_var.get()!="" and horde_workername_var.get()!="":
                 args.hordekey = horde_apikey_var.get()
                 args.hordeworkername = horde_workername_var.get()
+
+        args.beavernetkey = beavernet_apikey_var.get() if usebeavernet_var.get() != 0 else ""
 
         args.sdmodel = sd_model_var.get() if sd_model_var.get() != "" else ""
         args.sdflashattention = True if sd_flash_attention_var.get()==1 else False
@@ -11744,6 +12078,8 @@ def show_gui():
         horde_apikey_var.set(mydict["hordekey"] if ("hordekey" in mydict and mydict["hordekey"]) else "")
         horde_workername_var.set(mydict["hordeworkername"] if ("hordeworkername" in mydict and mydict["hordeworkername"]) else "")
         usehorde_var.set(1 if ("hordekey" in mydict and mydict["hordekey"]) else 0)
+        beavernet_apikey_var.set(mydict["beavernetkey"] if ("beavernetkey" in mydict and mydict["beavernetkey"]) else "")
+        usebeavernet_var.set(1 if ("beavernetkey" in mydict and mydict["beavernetkey"]) else 0)
         maxrequestsize_var.set(mydict["maxrequestsize"] if ("maxrequestsize" in mydict and mydict["maxrequestsize"]) else 32)
         ratelimit_var.set(mydict["ratelimit"] if ("ratelimit" in mydict and mydict["ratelimit"]) else 0)
         reqtimeout_var.set(mydict["reqtimeout"] if ("reqtimeout" in mydict and mydict["reqtimeout"]) else 0)
@@ -12031,7 +12367,7 @@ def make_url_request(url, data, method='POST', headers={}, timeout=600, error_in
         ssl_cert_dir = os.environ.get('SSL_CERT_DIR')
         if not ssl_cert_dir and not nocertify and os.name != 'nt':
             os.environ['SSL_CERT_DIR'] = '/etc/ssl/certs'
-        if method=='POST':
+        if data is not None:
             json_payload = json.dumps(data).encode('utf-8')
             request = urllib.request.Request(url, data=json_payload, headers=headers, method=method)
             request.add_header('content-type', 'application/json')
@@ -12039,10 +12375,14 @@ def make_url_request(url, data, method='POST', headers={}, timeout=600, error_in
             request = urllib.request.Request(url, headers=headers, method=method)
         response_data = ""
         with urllib.request.urlopen(request,timeout=timeout) as response:
+            if error_info is not None:
+                error_info["status"] = response.status
             content_type = response.headers.get('Content-Type', '')
             response_data = response.read()
             if 'audio/wav' in content_type:
                 return response_data #raw binary
+            elif not response_data:
+                return True #successful response with no body, e.g. HTTP 204
             else:
                 json_response = json.loads(response_data.decode('utf-8',"ignore"))
                 return json_response
@@ -12064,6 +12404,572 @@ def make_url_request(url, data, method='POST', headers={}, timeout=600, error_in
     except Exception as e:
         print_with_time(f"Error: {e} - {response_data}")
         return None
+
+
+class _BeaverNetWebSocketClosed(Exception):
+    def __init__(self, code=None, reason=""):
+        super().__init__(reason)
+        self.code = code
+        self.reason = reason
+
+
+class _BeaverNetWebSocket:
+    """Small WebSocket client for the embedded BeaverNet worker."""
+
+    def __init__(self, url):
+        target = urllib.parse.urlsplit(url)
+        if target.scheme != "wss" or not target.hostname:
+            raise ValueError("BeaverNet worker URL must use wss://")
+        port = target.port or 443
+        raw_socket = socket.create_connection((target.hostname, port), timeout=15)
+        try:
+            self.socket = ssl.create_default_context().wrap_socket(raw_socket, server_hostname=target.hostname)
+        except Exception:
+            raw_socket.close()
+            raise
+        self.socket.settimeout(45)
+        self.send_lock = threading.Lock()
+        self.buffer = bytearray()
+        self.closed = False
+
+        ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
+        path = target.path or "/"
+        if target.query:
+            path += "?" + target.query
+        host = target.netloc
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {ws_key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "Sec-WebSocket-Protocol: beavernet-agent.1\r\n\r\n"
+        )
+        self.socket.sendall(request.encode("ascii"))
+        response = self._read_headers()
+        lines = response.decode("iso-8859-1").split("\r\n")
+        if not lines or " 101 " not in lines[0]:
+            self.abort()
+            raise ConnectionError(f"WebSocket upgrade failed: {lines[0] if lines else 'no response'}")
+        headers = {}
+        for line in lines[1:]:
+            if ":" in line:
+                key, value = line.split(":", 1)
+                headers[key.strip().lower()] = value.strip()
+        expected = base64.b64encode(hashlib.sha1((ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()).decode("ascii")
+        if headers.get("sec-websocket-accept") != expected or headers.get("sec-websocket-protocol") != "beavernet-agent.1":
+            self.abort()
+            raise ConnectionError("BeaverNet returned an invalid WebSocket handshake")
+
+    def _read_headers(self):
+        while b"\r\n\r\n" not in self.buffer:
+            chunk = self.socket.recv(4096)
+            if not chunk:
+                raise ConnectionError("Connection closed during WebSocket upgrade")
+            self.buffer.extend(chunk)
+            if len(self.buffer) > 32768:
+                raise ConnectionError("WebSocket upgrade headers are too large")
+        at = self.buffer.index(b"\r\n\r\n") + 4
+        headers = bytes(self.buffer[:at])
+        del self.buffer[:at]
+        return headers
+
+    def _recv_exact(self, amount):
+        while len(self.buffer) < amount:
+            chunk = self.socket.recv(max(4096, amount - len(self.buffer)))
+            if not chunk:
+                raise _BeaverNetWebSocketClosed()
+            self.buffer.extend(chunk)
+        data = bytes(self.buffer[:amount])
+        del self.buffer[:amount]
+        return data
+
+    def _recv_frame(self):
+        first, second = self._recv_exact(2)
+        if first & 0x70:
+            raise ConnectionError("Unsupported WebSocket extension data")
+        final = bool(first & 0x80)
+        opcode = first & 0x0f
+        masked = bool(second & 0x80)
+        length = second & 0x7f
+        if length == 126:
+            length = struct.unpack("!H", self._recv_exact(2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", self._recv_exact(8))[0]
+        if length > 2 * 1024 * 1024:
+            raise ConnectionError("BeaverNet WebSocket frame is too large")
+        mask = self._recv_exact(4) if masked else None
+        payload = self._recv_exact(length)
+        if mask:
+            payload = bytes(value ^ mask[index & 3] for index, value in enumerate(payload))
+        return final, opcode, payload
+
+    def recv_message(self):
+        message_opcode = None
+        chunks = []
+        while True:
+            final, opcode, payload = self._recv_frame()
+            if opcode == 0x8:
+                code = struct.unpack("!H", payload[:2])[0] if len(payload) >= 2 else None
+                reason = payload[2:].decode("utf-8", "replace") if len(payload) > 2 else ""
+                try:
+                    self.send_frame(0x8, payload[:125])
+                except Exception:
+                    pass
+                raise _BeaverNetWebSocketClosed(code, reason)
+            if opcode == 0x9:
+                self.send_frame(0xA, payload)
+                continue
+            if opcode == 0xA:
+                continue
+            if opcode in (0x1, 0x2):
+                if message_opcode is not None:
+                    raise ConnectionError("Unexpected WebSocket data frame")
+                message_opcode = opcode
+                chunks = [payload]
+            elif opcode == 0x0:
+                if message_opcode is None:
+                    raise ConnectionError("Unexpected WebSocket continuation frame")
+                chunks.append(payload)
+            else:
+                raise ConnectionError("Unsupported WebSocket frame")
+            if final:
+                return message_opcode, b"".join(chunks)
+
+    def send_frame(self, opcode, payload=b""):
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+        mask = os.urandom(4)
+        length = len(payload)
+        if length < 126:
+            header = bytes((0x80 | opcode, 0x80 | length))
+        elif length <= 0xffff:
+            header = bytes((0x80 | opcode, 0x80 | 126)) + struct.pack("!H", length)
+        else:
+            header = bytes((0x80 | opcode, 0x80 | 127)) + struct.pack("!Q", length)
+        masked = bytes(value ^ mask[index & 3] for index, value in enumerate(payload))
+        with self.send_lock:
+            if self.closed:
+                raise _BeaverNetWebSocketClosed()
+            self.socket.sendall(header + mask + masked)
+
+    def send_json(self, message):
+        self.send_frame(0x1, json.dumps(message, separators=(",", ":")))
+
+    def close(self, code=1000, reason=""):
+        try:
+            self.send_frame(0x8, struct.pack("!H", code) + reason.encode("utf-8")[:123])
+        except Exception:
+            pass
+        self.abort()
+
+    def abort(self):
+        with self.send_lock:
+            if self.closed:
+                return
+            self.closed = True
+            try:
+                self.socket.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            self.socket.close()
+
+
+def _beavernet_api_request(api_key, method, path, data=None, timeout=30):
+    """Call the BeaverNet provider API with its common URL and authorization."""
+    error_info = {}
+    result = make_url_request(
+        "https://net.beaverai.org/v1" + path,
+        data,
+        method,
+        {"Authorization": "Bearer " + api_key},
+        timeout,
+        error_info,
+    )
+    return error_info.get("status"), result
+
+
+def _beavernet_error_message(result):
+    if isinstance(result, dict):
+        error = result.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        if isinstance(error, str):
+            return error
+        if result.get("message"):
+            return str(result["message"])
+    return "unknown error"
+
+
+def _reconcile_beavernet_model(api_key, upstream_id, model_name, max_concurrency):
+    """Make an embedded-worker upstream contain exactly the loaded KoboldCpp model."""
+    quoted_upstream = urllib.parse.quote(upstream_id, safe="")
+    status, upstream = _beavernet_api_request(api_key, "GET", f"/upstreams/{quoted_upstream}")
+    if status != 200 or not isinstance(upstream, dict):
+        print_with_time(f"BeaverNet Worker - Could not read upstream models ({status}): {_beavernet_error_message(upstream)}")
+        return False
+
+    models = upstream.get("models") if isinstance(upstream.get("models"), list) else []
+    current_model = None
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        if model.get("model") == model_name:
+            current_model = model
+            continue
+        model_id = model.get("id")
+        if not model_id:
+            continue
+        quoted_model = urllib.parse.quote(str(model_id), safe="")
+        delete_status, delete_result = _beavernet_api_request(api_key, "DELETE", f"/upstreams/{quoted_upstream}/models/{quoted_model}")
+        if delete_status not in (200, 204, 404):
+            print_with_time(f"BeaverNet Worker - Could not remove stale model '{model.get('model')}' ({delete_status}): {_beavernet_error_message(delete_result)}")
+            return False
+        print_with_time(f"BeaverNet Worker - Removed stale model '{model.get('model')}'.")
+
+    if current_model is None:
+        add_status, add_result = _beavernet_api_request(
+            api_key,
+            "POST",
+            f"/upstreams/{quoted_upstream}/models",
+            {"model": model_name, "listed": True, "max_concurrency": max_concurrency},
+            timeout=120,
+        )
+        if add_status not in (200, 201):
+            print_with_time(f"BeaverNet Worker - Could not register model '{model_name}' ({add_status}): {_beavernet_error_message(add_result)}")
+            return False
+        print_with_time(f"BeaverNet Worker - Registered model '{model_name}'.")
+    elif not current_model.get("listed") or current_model.get("paused"):
+        model_id = current_model.get("id")
+        if not model_id:
+            print_with_time(f"BeaverNet Worker - Existing model '{model_name}' has no model id.")
+            return False
+        quoted_model = urllib.parse.quote(str(model_id), safe="")
+        patch_status, patch_result = _beavernet_api_request(
+            api_key,
+            "PATCH",
+            f"/upstreams/{quoted_upstream}/models/{quoted_model}",
+            {"listed": True, "paused": False},
+        )
+        if patch_status != 200:
+            print_with_time(f"BeaverNet Worker - Could not enable model '{model_name}' ({patch_status}): {_beavernet_error_message(patch_result)}")
+            return False
+        print_with_time(f"BeaverNet Worker - Enabled model '{model_name}'.")
+    else:
+        print_with_time(f"BeaverNet Worker - Model '{model_name}' is already registered.")
+
+    if current_model is not None:
+        model_id = current_model.get("id")
+        if not model_id:
+            print_with_time(f"BeaverNet Worker - Existing model '{model_name}' has no model id.")
+            return False
+        shared_limits = (((current_model.get("rateLimits") or {}).get("shared") or {}).get("own") or {})
+        if shared_limits.get("maxConcurrency") != max_concurrency:
+            rate_limits = {"max_concurrency": max_concurrency}
+            for api_name, response_name in (
+                ("per_minute", "perMinute"),
+                ("per_hour", "perHour"),
+                ("per_day", "perDay"),
+            ):
+                if shared_limits.get(response_name) is not None:
+                    rate_limits[api_name] = shared_limits[response_name]
+            quoted_model = urllib.parse.quote(str(model_id), safe="")
+            limit_status, limit_result = _beavernet_api_request(
+                api_key,
+                "PUT",
+                f"/upstreams/{quoted_upstream}/models/{quoted_model}/rate-limits/shared",
+                rate_limits,
+            )
+            if limit_status not in (200, 204):
+                print_with_time(f"BeaverNet Worker - Could not set model concurrency to {max_concurrency} ({limit_status}): {_beavernet_error_message(limit_result)}")
+                return False
+            print_with_time(f"BeaverNet Worker - Set model concurrency to {max_concurrency}.")
+
+    probe_status, probe_result = _beavernet_api_request(api_key, "POST", f"/upstreams/{quoted_upstream}/probe", {}, timeout=60)
+    if probe_status != 200:
+        print_with_time(f"BeaverNet Worker - Model registered, but refresh probe failed ({probe_status}): {_beavernet_error_message(probe_result)}")
+    return True
+
+
+class _BeaverNetLocalCall:
+    def __init__(self, websocket, local_url, method, path, headers, body, request_id, finished):
+        self.websocket = websocket
+        self.local = urllib.parse.urlsplit(local_url)
+        self.method = method
+        self.path = path
+        self.headers = headers
+        self.body = body
+        self.request_id = request_id
+        self.finished = finished
+        self.cancelled = False
+        self.connection = None
+
+    def cancel(self):
+        self.cancelled = True
+        connection = self.connection
+        if connection and connection.sock:
+            try:
+                connection.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def _send_error(self, kind, message):
+        if not self.cancelled:
+            self.websocket.send_json({"t": "error", "id": self.request_id, "kind": kind, "message": str(message)[:300]})
+
+    def run(self):
+        global password
+        completed = False
+        connection_type = http.client.HTTPSConnection if self.local.scheme == "https" else http.client.HTTPConnection
+        try:
+            self.connection = connection_type(self.local.hostname, self.local.port, timeout=10)
+            try:
+                self.connection.connect()
+            except OSError as error:
+                self._send_error("connect", f"Can't reach local KoboldCpp: {error}")
+                return
+            self.connection.sock.settimeout(None)
+            request_headers = {key: value for key, value in self.headers.items() if key in ("content-type", "accept", "x-beavernet-hop")}
+            request_headers["x-koboldcpp-background-worker"] = "beavernet"
+            if password:
+                request_headers["authorization"] = "Bearer " + password
+            self.connection.request(self.method, self.path, body=self.body or None, headers=request_headers)
+            response = self.connection.getresponse()
+            content_type = response.getheader("content-type")
+            response_headers = {"content-type": content_type} if content_type else {}
+            if self.cancelled:
+                return
+            self.websocket.send_json({"t": "head", "id": self.request_id, "status": response.status, "headers": response_headers})
+            read = getattr(response, "read1", None) or response.read
+            prefix = bytes((len(self.request_id),)) + self.request_id.encode("ascii")
+            while not self.cancelled:
+                chunk = read(64 * 1024)
+                if not chunk:
+                    break
+                self.websocket.send_frame(0x2, prefix + chunk)
+            if not self.cancelled:
+                self.websocket.send_json({"t": "end", "id": self.request_id})
+                completed = True
+        except Exception as error:
+            try:
+                self._send_error("local", f"Local KoboldCpp request failed: {error}")
+            except Exception:
+                pass
+        finally:
+            if self.connection:
+                try:
+                    self.connection.close()
+                except Exception:
+                    pass
+            self.finished(self.request_id, self.method, self.path, completed)
+
+
+def run_beavernet_worker(args, api_key, worker_slots=None):
+    """Minimal dependency-free BeaverNet agent for this KoboldCpp server."""
+    global exitcounter, friendlymodelname
+    server_url = "wss://net.beaverai.org/v1/agent"
+    local_url = get_my_epurl()
+    allowed_paths = {"POST /v1/chat/completions", "POST /v1/completions", "GET /v1/models"}
+    # determined upstream always for this api key. idea is that we'll reuse the same upstream for automated kcpp workers for this user.
+    # ofc they can always add their own upstream if they use drummer's standalone agent, but this prevents kcpp from accidentally messing with other upstreams
+    device_id = hashlib.sha256(f"kcpp_auto_upstream_for_{api_key}".encode("utf-8")).hexdigest()
+    stop_codes = {4001, 4003, 4004, 4006, 4009}
+    if worker_slots is None:
+        worker_slots = getattr(args, "parallelrequests", 1)
+    max_inflight = max(1, min(64, int(worker_slots or 1)))
+    retry_delay = 1
+    announced_upstream = None
+    registration_lock = threading.Lock()
+    registered_model = [None]
+
+    def register_when_ready(upstream_id, model_name, models_ready, session_closed):
+        for _ in range(60):
+            if models_ready.wait(1):
+                break
+            if session_closed.is_set() or exitcounter >= 100:
+                return
+        else:
+            print_with_time("BeaverNet Worker - Initial model health check did not finish; automatic registration skipped.")
+            return
+        with registration_lock:
+            registration = (upstream_id, model_name, max_inflight)
+            if registered_model[0] == registration or session_closed.is_set() or exitcounter >= 100:
+                return
+            if _reconcile_beavernet_model(api_key, upstream_id, model_name, max_inflight):
+                registered_model[0] = registration
+
+    print(f"\n===\nEmbedded BeaverNet Worker Starting with {max_inflight} parallel request(s)...\n")
+    while exitcounter < 100:
+        websocket = None
+        calls = {}
+        calls_lock = threading.Lock()
+        pending = {}
+        draining = [False]
+        welcomed = False
+        models_ready = threading.Event()
+        session_closed = threading.Event()
+
+        def call_finished(request_id, method, path, completed):
+            with calls_lock:
+                calls.pop(request_id, None)
+                idle = not calls and not pending
+            if completed and method == "GET" and path == "/v1/models":
+                models_ready.set()
+            if draining[0] and idle:
+                websocket.close(1001, "Drained")
+
+        try:
+            websocket = _BeaverNetWebSocket(server_url)
+            websocket.send_json({
+                "t": "hello",
+                "key": api_key,
+                "upstream": None,
+                "new": False,
+                "device": device_id,
+                "agent": {"name": "koboldcpp_embedded_worker", "version": KcppVersion},
+                "paths": sorted(allowed_paths),
+                "features": [],
+                "max_inflight": max_inflight,
+            })
+
+            while exitcounter < 100:
+                opcode, payload = websocket.recv_message()
+                if opcode == 0x2:
+                    if len(payload) < 2 or payload[0] == 0 or payload[0] > 64 or len(payload) < payload[0] + 1:
+                        websocket.close(4008, "Bad body frame")
+                        break
+                    id_length = payload[0]
+                    try:
+                        request_id = payload[1:1 + id_length].decode("ascii")
+                    except UnicodeDecodeError:
+                        websocket.close(4008, "Bad request id")
+                        break
+                    if request_id in pending:
+                        if not pending[request_id][2]:
+                            pending[request_id][1].extend(payload[1 + id_length:])
+                            if len(pending[request_id][1]) > 10 * 1024 * 1024:
+                                pending[request_id][1].clear()
+                                pending[request_id][2] = True
+                    continue
+
+                try:
+                    message = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    websocket.close(4008, "Bad JSON")
+                    break
+                if not isinstance(message, dict) or not isinstance(message.get("t"), str):
+                    websocket.close(4008, "Bad control message")
+                    break
+                message_type = message["t"]
+
+                if message_type == "welcome":
+                    welcomed = True
+                    retry_delay = 1
+                    upstream = message.get("upstream") if isinstance(message.get("upstream"), dict) else {}
+                    upstream_id = upstream.get("id")
+                    upstream_name = upstream.get("label") or upstream.get("name") or upstream_id or "unknown"
+                    if announced_upstream != upstream_id:
+                        action = "Created upstream" if message.get("created") else "Connected as"
+                        print_with_time(f"BeaverNet Worker - {action} {upstream_name} ({upstream_id}).")
+                        announced_upstream = upstream_id
+                    else:
+                        print_with_time("BeaverNet Worker - Reconnected.")
+                    if isinstance(upstream_id, str) and upstream_id:
+                        model_name = textName if autoswapmode and textName is not None else friendlymodelname
+                        threading.Thread(
+                            target=register_when_ready,
+                            args=(upstream_id, model_name, models_ready, session_closed),
+                            daemon=True,
+                        ).start()
+                elif message_type == "request":
+                    request_id = message.get("id")
+                    if isinstance(request_id, str) and 1 <= len(request_id) <= 64:
+                        try:
+                            request_id.encode("ascii")
+                        except UnicodeEncodeError:
+                            websocket.close(4008, "Bad request id")
+                            break
+                        else:
+                            pending[request_id] = [message, bytearray(), False]
+                elif message_type == "body_end":
+                    request_id = message.get("id")
+                    request_data = pending.pop(request_id, None)
+                    if request_data is None:
+                        continue
+                    request, body, too_large = request_data
+                    method = request.get("method")
+                    path = request.get("path")
+                    route = f"{method} {path}"
+                    if too_large or route not in allowed_paths:
+                        reason = "Request body is too large" if too_large else f"Not allowed: {route}"
+                        websocket.send_json({"t": "error", "id": request_id, "kind": "refused", "message": reason})
+                        continue
+                    headers = request.get("headers") if isinstance(request.get("headers"), dict) else {}
+                    headers = {str(key).lower(): str(value) for key, value in headers.items()}
+                    with calls_lock:
+                        if len(calls) >= max_inflight or request_id in calls:
+                            call = None
+                        else:
+                            call = _BeaverNetLocalCall(websocket, local_url, method, path, headers, bytes(body), request_id, call_finished)
+                            calls[request_id] = call
+                    if call is None:
+                        websocket.send_json({"t": "error", "id": request_id, "kind": "refused", "message": "Worker is busy"})
+                    else:
+                        threading.Thread(target=call.run, daemon=True).start()
+                elif message_type == "cancel":
+                    request_id = message.get("id")
+                    pending.pop(request_id, None)
+                    with calls_lock:
+                        call = calls.get(request_id)
+                    if call:
+                        call.cancel()
+                elif message_type == "drain":
+                    draining[0] = True
+                    with calls_lock:
+                        idle = not calls and not pending
+                    if idle:
+                        websocket.close(1001, "Drained")
+                        break
+
+        except _BeaverNetWebSocketClosed as closed:
+            if exitcounter >= 100:
+                break
+            if closed.code in stop_codes:
+                hints = {
+                    4001: "The BeaverNet API key was rejected.",
+                    4003: "The BeaverNet upstream is unavailable.",
+                    4004: "The BeaverNet account has reached its upstream limit.",
+                    4006: "This BeaverNet upstream is connected from another machine.",
+                    4009: "This BeaverNet agent protocol version is no longer supported.",
+                }
+                print_with_time(f"BeaverNet Worker stopped: {hints[closed.code]}")
+                return
+            if closed.code == 1001:
+                retry_delay = 1
+            elif welcomed:
+                print_with_time(f"BeaverNet Worker disconnected{f' ({closed.code})' if closed.code else ''}; reconnecting in {retry_delay}s.")
+        except Exception as error:
+            if exitcounter < 100:
+                print_with_time(f"BeaverNet Worker connection failed: {error}. Retrying in {retry_delay}s.")
+        finally:
+            session_closed.set()
+            with calls_lock:
+                active_calls = list(calls.values())
+            for call in active_calls:
+                call.cancel()
+            if websocket:
+                websocket.abort()
+
+        if exitcounter >= 100:
+            break
+        for _ in range(retry_delay):
+            if exitcounter >= 100:
+                break
+            time.sleep(1)
+        retry_delay = min(retry_delay * 2, 30)
+
+    print_with_time("BeaverNet Worker Shutdown - Server Closing.")
 
 #A very simple and stripped down embedded horde worker with no dependencies
 def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_threads):
@@ -12718,6 +13624,7 @@ def convert_args_to_template(savdict):
     savdict["threads"] = -1
     savdict["hordekey"] = ""
     savdict["hordeworkername"] = ""
+    savdict["beavernetkey"] = ""
     savdict["sdthreads"] = 0
     savdict["maingpu"] = -1
     savdict["sdmaingpu"] = -1
@@ -14158,7 +15065,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         password = args.password.strip()
 
     safe_args = argparse.Namespace(**vars(args))
-    for secret_key in ("password", "adminpassword", "hordekey", "agent_api_key"):
+    for secret_key in ("password", "adminpassword", "hordekey", "beavernetkey", "agent_api_key"):
         if getattr(safe_args, secret_key, None):
             setattr(safe_args, secret_key, "***")
     print(safe_args)
@@ -14674,11 +15581,19 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                 agent_host = f"[{agent_host}]"
             agent_base_url = f"{httpsaffix}://{agent_host}:{displayedport}/v1"
 
+        horde_enabled = bool(args.hordekey and args.hordeworkername)
+        beavernet_enabled = bool(args.beavernetkey)
+        total_worker_slots = max(1, int(args.parallelrequests or 1))
+        horde_worker_slots = total_worker_slots
+        beavernet_worker_slots = total_worker_slots
+        if horde_enabled and beavernet_enabled:
+            beavernet_worker_slots = max(1, total_worker_slots // 2)
+            horde_worker_slots = max(1, total_worker_slots - beavernet_worker_slots)
+            print(f"Sharing {total_worker_slots} parallel request slot(s): Horde {horde_worker_slots}, BeaverNet {beavernet_worker_slots}.")
+
         if args.hordekey and args.hordekey!="":
             if args.hordeworkername and args.hordeworkername!="":
-                workers_to_use = 1
-                if args.parallelrequests:
-                    workers_to_use = args.parallelrequests if (args.parallelrequests>1) else 1
+                workers_to_use = horde_worker_slots
                 for w in range(0,workers_to_use):
                     wid = (w+1)
                     print(f"Launching horde worker {wid}...")
@@ -14687,6 +15602,11 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     horde_thread.start()
             else:
                 print("Horde worker could not start. You need to specify a horde worker name with --hordeworkername")
+
+        if args.beavernetkey:
+            print("Launching BeaverNet worker...")
+            beavernet_thread = threading.Thread(target=run_beavernet_worker, args=(args, args.beavernetkey, beavernet_worker_slots), daemon=True)
+            beavernet_thread.start()
 
     #if post-ready script specified, execute it
     if args.onready:
@@ -14971,6 +15891,9 @@ if __name__ == '__main__':
     hordeparsergroup.add_argument("--hordekey", metavar=('[apikey]'), help="Sets your AI Horde API key.", default="")
     hordeparsergroup.add_argument("--hordemaxctx", metavar=('[amount]'), help="Sets the maximum context length your worker will accept from an AI Horde job. If 0, matches main context limit.", type=int, default=0)
     hordeparsergroup.add_argument("--hordegenlen", metavar=('[amount]'), help="Sets the maximum number of tokens your worker will generate from an AI horde job.", type=int, default=0)
+
+    beavernetparsergroup = parser.add_argument_group('BeaverNet Worker Commands')
+    beavernetparsergroup.add_argument("--beavernetkey", metavar=('[apikey]'), help="Sets your BeaverNet provider API key and enables the embedded BeaverNet worker.", default="")
 
     sdparsergroup = parser.add_argument_group('Image Generation Commands')
     sdparsergroup.add_argument("--sdaudiovae", metavar=('[filename]'), help="Specify an image generation audio VAE for LTX2.3 video generation.", default="")

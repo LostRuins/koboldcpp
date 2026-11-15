@@ -255,7 +255,7 @@ core::TensorValue apply_codec_attention(
     const core::TensorValue & positions) {
     const ggml_prec matmul_precision = ctx.backend_type == core::BackendType::Cpu
         ? GGML_PREC_F32
-        : GGML_PREC_DEFAULT;
+        : GGML_PREC_UNDEFINED;
     core::TensorValue q;
     core::TensorValue k;
     core::TensorValue v;
@@ -326,7 +326,7 @@ core::TensorValue transformer_layer(
             .build(ctx, hidden, weights.ffn_norm);
     const ggml_prec matmul_precision = ctx.backend_type == core::BackendType::Cpu
         ? GGML_PREC_F32
-        : GGML_PREC_DEFAULT;
+        : GGML_PREC_UNDEFINED;
     x = modules::LinearModule({config.hidden_size, config.intermediate_size, false, matmul_precision})
             .build(ctx, x, weights.fc1);
     x = modules::SiluModule().build(ctx, x);

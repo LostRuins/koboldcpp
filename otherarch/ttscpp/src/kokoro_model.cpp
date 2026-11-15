@@ -125,7 +125,7 @@ static struct ggml_tensor * build_ada_residual_conv(ggml_context * ctx, struct g
 	if (block->upsample) {
 		cur = ggml_cont(ctx, ggml_transpose(ctx, cur));
 		if (block->pool) {
-			cur = ggml_upscale_ext(ctx, cur, cur->ne[0], cur->ne[1]*2, cur->ne[2], cur->ne[3],GGML_SCALE_MODE_NEAREST);
+			cur = ggml_interpolate(ctx, cur, cur->ne[0], cur->ne[1]*2, cur->ne[2], cur->ne[3], GGML_SCALE_MODE_NEAREST);
 		}
 		cur = ggml_mul_mat(ctx, block->upsample, cur);
 		cur = ggml_cont(ctx, ggml_transpose(ctx, cur));
@@ -175,7 +175,7 @@ static struct ggml_tensor * build_sin_gen(ggml_context * ctx, kokoro_model * mod
 	struct ggml_tensor * cur = ggml_mul(ctx, ggml_repeat(ctx, x, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, x->ne[0], harmonic_num)), model->harmonic_sampling_norm);
 	cur = ggml_mul(ctx, ggml_cumsum_tts(ctx, ggml_mod(ctx, cur, 1.0f)), model->sampling_factor_scalar);
 	cur = ggml_upscale_linear(ctx, cur, 300);
-	struct ggml_tensor * upscaled = ggml_upscale_ext(ctx, x, x->ne[0]*300, x->ne[1], x->ne[2], x->ne[3],GGML_SCALE_MODE_NEAREST);
+	struct ggml_tensor * upscaled = ggml_interpolate(ctx, x, x->ne[0]*300, x->ne[1], x->ne[2], x->ne[3], GGML_SCALE_MODE_NEAREST);
 
 	kctx->uv_noise_data = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, sequence_length*harmonic_num+4);
 	ggml_set_input(kctx->uv_noise_data);

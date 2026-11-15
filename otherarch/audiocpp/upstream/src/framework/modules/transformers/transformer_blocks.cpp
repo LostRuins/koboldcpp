@@ -346,7 +346,7 @@ core::TensorValue TransformerDecoderBlockModule::build(
     const LayerNormModule norm3(make_norm_config(config_.hidden_size, config_.eps));
     const FeedForwardModule feed_forward(
         {config_.hidden_size, config_.intermediate_size, config_.use_bias, GeluApproximation::ExactErf,
-            GGML_PREC_DEFAULT, config_.activation});
+            GGML_PREC_UNDEFINED, config_.activation});
     const ResidualAddModule add;
 
     auto cur = norm1.build(ctx, input, weights.norm1);
@@ -391,7 +391,7 @@ core::TensorValue TransformerDecoderBlockModule::build_cached_tail(
     cur = add.build(ctx, cur, x);
     x = norm.build(ctx, cur, weights.norm3);
     x = FeedForwardModule({config_.hidden_size, config_.intermediate_size, config_.use_bias,
-        GeluApproximation::ExactErf, GGML_PREC_DEFAULT, config_.activation}).build(ctx, x, weights.feed_forward);
+        GeluApproximation::ExactErf, GGML_PREC_UNDEFINED, config_.activation}).build(ctx, x, weights.feed_forward);
     return add.build(ctx, cur, x);
 }
 

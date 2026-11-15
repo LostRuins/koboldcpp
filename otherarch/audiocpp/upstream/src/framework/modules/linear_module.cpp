@@ -83,7 +83,7 @@ core::TensorValue LinearModule::build(
     validate_weight_shape(config_, weights);
     if (config_.cuda_f16_output && (ctx.backend_type != core::BackendType::Cuda ||
             input.type != GGML_TYPE_F16 || weights.weight.type != GGML_TYPE_F16 ||
-            config_.precision != GGML_PREC_DEFAULT || config_.cuda_nvfp4_f16_activation_lowering)) {
+            config_.precision != GGML_PREC_UNDEFINED || config_.cuda_nvfp4_f16_activation_lowering)) {
         throw std::runtime_error("FP16 linear output requires CUDA, FP16 operands, and default precision");
     }
     const core::TensorValue contiguous_input = core::ensure_backend_addressable_layout(ctx, input);
@@ -95,8 +95,8 @@ core::TensorValue LinearModule::build(
     // Build the ordinary matmul and represent F16 output with a standard cast.
     ggml_tensor * projected_raw =
         ggml_mul_mat(ctx.ggml, weights.weight.tensor, matrix_input.tensor);
-    if (config_.precision != GGML_PREC_DEFAULT) {
-        ggml_mul_mat_set_prec(projected_raw, config_.precision);
+    if (config_.precision != GGML_PREC_UNDEFINED) {
+        ggml_prec_set_acc(projected_raw, config_.precision);
     }
     if (config_.cuda_f16_output) {
         projected_raw = ggml_cast(ctx.ggml, projected_raw, GGML_TYPE_F16);

@@ -259,8 +259,8 @@ StreamingAttentionOutputs StreamingSelfAttentionModule::build(
         }
         auto k_transposed = permute_tensor(ctx, all_k_heads, {0, 1, 3, 2});
         auto scores = matmul.build(ctx, q_heads, k_transposed);
-        if (config_.attention_precision != GGML_PREC_DEFAULT) {
-            ggml_mul_mat_set_prec(scores.tensor, config_.attention_precision);
+        if (config_.attention_precision != GGML_PREC_UNDEFINED) {
+            ggml_prec_set_acc(scores.tensor, config_.attention_precision);
         }
         core::TensorValue attn;
         if (attention_mask.has_value()) {
@@ -277,14 +277,14 @@ StreamingAttentionOutputs StreamingSelfAttentionModule::build(
             attn = core::wrap_tensor(ggml_soft_max(ctx.ggml, ensure_contiguous_layout(ctx, scores).tensor), scores.shape, GGML_TYPE_F32);
         }
         context = matmul.build(ctx, attn, all_v_heads);
-        if (config_.attention_precision != GGML_PREC_DEFAULT) {
-            ggml_mul_mat_set_prec(context.tensor, config_.attention_precision);
+        if (config_.attention_precision != GGML_PREC_UNDEFINED) {
+            ggml_prec_set_acc(context.tensor, config_.attention_precision);
         }
     } else {
         auto k_transposed = permute_tensor(ctx, k_heads, {0, 1, 3, 2});
         auto scores = matmul.build(ctx, q_heads, k_transposed);
-        if (config_.attention_precision != GGML_PREC_DEFAULT) {
-            ggml_mul_mat_set_prec(scores.tensor, config_.attention_precision);
+        if (config_.attention_precision != GGML_PREC_UNDEFINED) {
+            ggml_prec_set_acc(scores.tensor, config_.attention_precision);
         }
         core::TensorValue attn;
         if (attention_mask.has_value()) {
@@ -298,8 +298,8 @@ StreamingAttentionOutputs StreamingSelfAttentionModule::build(
             attn = core::wrap_tensor(ggml_soft_max(ctx.ggml, ensure_contiguous_layout(ctx, scores).tensor), scores.shape, GGML_TYPE_F32);
         }
         context = matmul.build(ctx, attn, v_heads);
-        if (config_.attention_precision != GGML_PREC_DEFAULT) {
-            ggml_mul_mat_set_prec(context.tensor, config_.attention_precision);
+        if (config_.attention_precision != GGML_PREC_UNDEFINED) {
+            ggml_prec_set_acc(context.tensor, config_.attention_precision);
         }
     }
 

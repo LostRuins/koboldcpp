@@ -30,7 +30,7 @@ struct ggml_tensor * TTSTransformer::mul_mat(struct ggml_context * ctx,
                                               struct ggml_tensor * b) {
     struct ggml_tensor * result = ggml_mul_mat(ctx, a, b);
     if (force_f32_acc_) {
-        ggml_mul_mat_set_prec(result, GGML_PREC_F32);
+        ggml_prec_set_acc(result, GGML_PREC_F32);
     }
     return result;
 }
