@@ -1332,7 +1332,7 @@ bool StableDiffusionGGML::validate_and_load_runners() {
     }
 
     if (audio_vae_model) {
-        if (!sd_version_is_minimax_h3(version) && !sd_version_is_ltxav(version)) { // kcpp
+        if (!sd_version_is_minimax_h3(version)) {
             ignore_tensors.insert("audio_vae.encoder");
         }
     }
