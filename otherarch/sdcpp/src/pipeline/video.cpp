@@ -2449,12 +2449,12 @@ namespace sd::pipeline {
         if (frames_out != nullptr) {
             *frames_out = result;
         }
-        if (sd->version == VERSION_WAN2_2_S2V && generated_audio != nullptr) {
-            // Limit the driving track to the generated video's duration.
+        if ((sd->version == VERSION_WAN2_2_S2V || sd_version_is_minimax_h3(sd->version)) && generated_audio != nullptr) {
+            // Limit the audio track to the generated video's duration.
             int fps               = request.fps;
             uint64_t video_frames = num_frames_out != nullptr ? (uint64_t)*num_frames_out : 0;
             uint64_t want_samples = (uint64_t)((double)video_frames / fps * generated_audio->sample_rate);
-            LOG_DEBUG("s2v audio truncate: %llu samples -> %llu (video %llu frames @ %d fps)",
+            LOG_DEBUG("output audio truncate: %llu samples -> %llu (video %llu frames @ %d fps)",
                       (unsigned long long)generated_audio->sample_count,
                       (unsigned long long)want_samples,
                       (unsigned long long)video_frames,
