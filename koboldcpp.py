@@ -12438,28 +12438,6 @@ class _BeaverNetWebSocket:
             self.socket.close()
 
 
-def _beavernet_device_id(local_url):
-    machine = None
-    for filename in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
-        try:
-            with open(filename, encoding="utf-8") as file:
-                machine = file.read().strip()
-            if machine:
-                break
-        except OSError:
-            pass
-    if not machine and sys.platform == "win32":
-        try:
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
-                machine = winreg.QueryValueEx(key, "MachineGuid")[0]
-        except OSError:
-            pass
-    if not machine:
-        machine = platform.node() or "koboldcpp"
-    return hashlib.sha256(f"{machine}\n{local_url}".encode("utf-8")).hexdigest()
-
-
 class _BeaverNetLocalCall:
     def __init__(self, websocket, local_url, method, path, headers, body, request_id, finished):
         self.websocket = websocket
@@ -12536,7 +12514,9 @@ def run_beavernet_worker(args, api_key):
     server_url = "wss://net.beaverai.org/v1/agent"
     local_url = get_my_epurl()
     allowed_paths = {"POST /v1/chat/completions", "POST /v1/completions", "GET /v1/models"}
-    device_id = _beavernet_device_id(local_url)
+    # determined upstream always for this api key. idea is that we'll reuse the same upstream for automated kcpp workers for this user.
+    # ofc they can always add their own upstream if they use drummer's standalone agent, but this prevents kcpp from accidentally messing with other upstreams
+    device_id = hashlib.sha256(f"kcpp_auto_upstream_for_{api_key}".encode("utf-8")).hexdigest()
     stop_codes = {4001, 4003, 4004, 4006, 4009}
     retry_delay = 1
     announced_upstream = None
@@ -12565,7 +12545,7 @@ def run_beavernet_worker(args, api_key):
                 "upstream": None,
                 "new": False,
                 "device": device_id,
-                "agent": {"name": "koboldcpp.py", "version": KcppVersion},
+                "agent": {"name": "koboldcpp_embedded_worker", "version": KcppVersion},
                 "paths": sorted(allowed_paths),
                 "features": [],
                 "max_inflight": 1,
