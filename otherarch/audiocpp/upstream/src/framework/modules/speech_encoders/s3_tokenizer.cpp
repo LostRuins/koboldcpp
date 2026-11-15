@@ -225,7 +225,7 @@ public:
                 channels,
                 channels * 3,
                 true,
-                GGML_PREC_DEFAULT,
+                GGML_PREC_UNDEFINED,
             }).build(ctx, norm, block.attn_qkv_packed);
             qkv = engine::core::ensure_backend_addressable_layout(ctx, qkv);
 
@@ -256,7 +256,7 @@ public:
             auto context = ScaledDotProductAttentionModule({
                 head_dim,
                 ScaledDotProductAttentionLowering::Explicit,
-                GGML_PREC_DEFAULT,
+                GGML_PREC_UNDEFINED,
                 AttentionCausality::NonCausal,
             }).build(ctx, q, k, v);
             context = engine::core::ensure_backend_addressable_layout(ctx, context);
@@ -268,7 +268,7 @@ public:
                 channels,
                 channels,
                 true,
-                GGML_PREC_DEFAULT,
+                GGML_PREC_UNDEFINED,
             }).build(ctx, context, block.attn_out);
 
             seq = AddModule{}.build(ctx, AddModule{}.build(ctx, seq, attn_out), fsmn);
@@ -278,14 +278,14 @@ public:
                 channels,
                 channels * 4,
                 true,
-                GGML_PREC_DEFAULT,
+                GGML_PREC_UNDEFINED,
             }).build(ctx, mlp_in, block.mlp_fc1);
             ff = GeluModule({GeluApproximation::ExactErf}).build(ctx, ff);
             ff = LinearModule({
                 channels * 4,
                 channels,
                 true,
-                GGML_PREC_DEFAULT,
+                GGML_PREC_UNDEFINED,
             }).build(ctx, ff, block.mlp_fc2);
             seq = AddModule{}.build(ctx, seq, ff);
         }
@@ -294,7 +294,7 @@ public:
             channels,
             config.quantizer_dim,
             true,
-            GGML_PREC_DEFAULT,
+            GGML_PREC_UNDEFINED,
         }).build(ctx, seq, weights.quantizer_project_down);
         ggml_set_name(quant_out_.tensor, "framework_s3tokenizer_quant_out");
 

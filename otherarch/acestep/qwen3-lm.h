@@ -343,7 +343,7 @@ static struct ggml_tensor * qw3lm_build_attn(
     // Flash attention
     float scale = 1.0f / sqrtf((float)D);
     struct ggml_tensor * attn = ggml_flash_attn_ext(ctx, q, k_full, v_full, mask, scale, 0.0f, 0.0f);
-    ggml_flash_attn_ext_set_prec(attn, GGML_PREC_F32); // F32 accumulation
+    ggml_prec_set_acc(attn, GGML_PREC_F32); // F32 accumulation
 
     // Reshape: [D, Nh, S] -> [Nh*D, S]
     attn = ggml_reshape_2d(ctx, attn, Nh * D, S);
@@ -616,7 +616,7 @@ static void qw3lm_forward_batch(Qwen3LM * m, const int * token_ids,
             // Flash attention
             struct ggml_tensor * attn_i = ggml_flash_attn_ext(ctx, qi, k_full, v_full,
                 NULL, scale, 0.0f, 0.0f);
-            ggml_flash_attn_ext_set_prec(attn_i, GGML_PREC_F32); // F32 accumulation
+            ggml_prec_set_acc(attn_i, GGML_PREC_F32); // F32 accumulation
             attn_i = ggml_reshape_2d(ctx, attn_i, Nh * D, 1);
 
             if (i == 0) attn_cat = attn_i;

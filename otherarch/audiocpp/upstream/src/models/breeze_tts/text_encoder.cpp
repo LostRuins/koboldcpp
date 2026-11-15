@@ -159,7 +159,7 @@ struct BreezeT5Gemma2TextEncoderRuntime::Impl {
                 positions_value,
                 attention_value,
                 this->weights->encoder);
-            auto projected = modules::LinearModule({config.text_hidden_size, config.hidden_size, false, GGML_PREC_DEFAULT}).build(
+            auto projected = modules::LinearModule({config.text_hidden_size, config.hidden_size, false, GGML_PREC_UNDEFINED}).build(
                 build,
                 encoded,
                 this->weights->projector);

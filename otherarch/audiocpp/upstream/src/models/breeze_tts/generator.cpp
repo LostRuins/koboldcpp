@@ -120,7 +120,7 @@ modules::CausalDecoderRuntimeConfig backbone_config(
     out.decoder.stack.qkv_layout = modules::DecoderQKVLayout::PackedQKV;
     out.decoder.stack.runtime.mlp.mode = modules::DecoderMLPMode::PackedGateUp;
     out.decoder.stack.attention_precision = GGML_PREC_F32;
-    out.decoder.stack.projection_precision = GGML_PREC_DEFAULT;
+    out.decoder.stack.projection_precision = GGML_PREC_UNDEFINED;
     // Eager graph for GPUs without a flash kernel (e.g. sm70).
     out.decoder.stack.runtime.attention.allow_flash_attention = allow_flash_attention;
     if (allow_flash_attention) {
@@ -180,7 +180,7 @@ modules::CausalDecoderRuntimeConfig depth_config(
     out.decoder.stack.qkv_layout = modules::DecoderQKVLayout::PackedQKV;
     out.decoder.stack.runtime.mlp.mode = modules::DecoderMLPMode::PackedGateUp;
     out.decoder.stack.attention_precision = GGML_PREC_F32;
-    out.decoder.stack.projection_precision = GGML_PREC_DEFAULT;
+    out.decoder.stack.projection_precision = GGML_PREC_UNDEFINED;
     out.decoder.stack.runtime.attention.allow_flash_attention = allow_flash_attention;
     if (allow_flash_attention) {
         out.decoder.stack.runtime.attention.prefill_mode = modules::DecoderAttentionMode::FlashGroupedViewKV;

@@ -43,8 +43,8 @@ struct OpenClipRuntimeOptions {
     size_t graph_arena_bytes = 1024ull * 1024ull * 1024ull;
     size_t weight_context_bytes = 3ull * 1024ull * 1024ull * 1024ull;
     assets::TensorStorageType weight_storage_type = assets::TensorStorageType::Native;
-    ggml_prec projection_precision = GGML_PREC_DEFAULT;
-    ggml_prec attention_precision = GGML_PREC_DEFAULT;
+    ggml_prec projection_precision = GGML_PREC_UNDEFINED;
+    ggml_prec attention_precision = GGML_PREC_UNDEFINED;
     bool load_text = true;
     bool load_image = false;
 };

@@ -234,7 +234,7 @@ core::TensorValue CrossAttentionModule::build_cached_flash(
     }
     validate_cross_cache(key_value, query, shape.dims[3], config_);
     const auto query_heads = build_cross_query(ctx, query, config_, weights);
-    const auto precision = config_.attention_precision == GGML_PREC_DEFAULT
+    const auto precision = config_.attention_precision == GGML_PREC_UNDEFINED
         ? GGML_PREC_F32 : config_.attention_precision;
     auto context = ScaledDotProductAttentionModule({cross_head_dim(config_),
         ScaledDotProductAttentionLowering::Flash, precision})

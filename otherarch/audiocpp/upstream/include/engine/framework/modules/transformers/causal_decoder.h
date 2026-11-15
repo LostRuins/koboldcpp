@@ -30,7 +30,7 @@ struct CausalDecoderConfig {
     int64_t logits_size = 0;
     CausalDecoderLogitsMode logits_mode = CausalDecoderLogitsMode::LastStep;
     bool use_lm_head_bias = false;
-    ggml_prec lm_head_precision = GGML_PREC_DEFAULT;
+    ggml_prec lm_head_precision = GGML_PREC_UNDEFINED;
     std::optional<ggml_type> lm_head_input_type;
     ggml_type static_cache_type = GGML_TYPE_F32;
 };

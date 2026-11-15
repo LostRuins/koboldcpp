@@ -141,7 +141,7 @@ modules::CausalDecoderConfig make_neutts_qwen3_config(
     out.stack.rope_theta = config.rope_theta;
     out.stack.rope_type = GGML_ROPE_TYPE_NEOX;
     out.stack.attention_precision = GGML_PREC_F32;
-    out.stack.projection_precision = GGML_PREC_DEFAULT;
+    out.stack.projection_precision = GGML_PREC_UNDEFINED;
     out.stack.activation_cast = neutts_activation_cast_policy(backend_type);
     out.stack.use_qk_norm = true;
     out.stack.runtime.attention.prefill_mode = modules::DecoderAttentionMode::FlashGroupedViewKV;
@@ -149,7 +149,7 @@ modules::CausalDecoderConfig make_neutts_qwen3_config(
     out.stack.runtime.static_cache.update_mode = modules::DecoderStaticCacheUpdateMode::DirectSetRows;
     out.logits_size = config.vocab_size;
     out.logits_mode = modules::CausalDecoderLogitsMode::LastStep;
-    out.lm_head_precision = GGML_PREC_DEFAULT;
+    out.lm_head_precision = GGML_PREC_UNDEFINED;
     if (backend_type == core::BackendType::Vulkan || backend_type == core::BackendType::Metal) {
         out.lm_head_input_type = GGML_TYPE_F16;
     } else if (backend_type != core::BackendType::Cpu) {

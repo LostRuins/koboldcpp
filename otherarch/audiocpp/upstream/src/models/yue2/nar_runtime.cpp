@@ -305,7 +305,7 @@ core::TensorValue mixed_attention(
             1.0F / std::sqrt(static_cast<float>(config.head_dim)),
             0.0F,
             0.0F);
-        ggml_flash_attn_ext_set_prec(flash, GGML_PREC_F32);
+        ggml_prec_set_acc(flash, GGML_PREC_F32);
         return core::wrap_tensor(
             flash,
             core::TensorShape::from_dims({q_heads.shape.dims[0], q_heads.shape.dims[2], q_heads.shape.dims[1], config.head_dim}),
@@ -359,7 +359,7 @@ core::TensorValue mixed_attention(
                 }
             }
             auto * scores = ggml_mul_mat(ctx.ggml, k_heads.tensor, q_tile);
-            ggml_mul_mat_set_prec(scores, GGML_PREC_F32);
+            ggml_prec_set_acc(scores, GGML_PREC_F32);
             auto * attn = ggml_soft_max_ext(
                 ctx.ggml,
                 scores,
@@ -367,7 +367,7 @@ core::TensorValue mixed_attention(
                 1.0F / std::sqrt(static_cast<float>(config.head_dim)),
                 0.0F);
             auto * context = ggml_mul_mat(ctx.ggml, v_t, attn);
-            ggml_mul_mat_set_prec(context, GGML_PREC_F32);
+            ggml_prec_set_acc(context, GGML_PREC_F32);
             // Joining tile by tile keeps the tiles sequential in the graph, so
             // the allocator reuses one tile's score memory for the next.
             joined = joined == nullptr ? context : ggml_concat(ctx.ggml, joined, context, 1);

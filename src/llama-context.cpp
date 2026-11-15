@@ -211,7 +211,6 @@ llama_context::llama_context(
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
-    cparams.warmup                  = false;
 
     // +1: id n_layer() taps the output of the last layer ("input" of the head)
     cparams.embeddings_layer_inp.resize(hparams.n_layer() + 1, false);
@@ -451,6 +450,15 @@ llama_context::llama_context(
     if (cparams.n_ctx_seq > hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: n_ctx_seq (%u) > n_ctx_train (%u) -- possible training context overflow\n",
                 __func__, cparams.n_ctx_seq, hparams.n_ctx_train);
+    }
+
+    {
+        const int64_t max_nodes = graph_max_nodes();
+
+        gf_res_reserve = std::make_unique<llm_graph_result>(max_nodes);
+        for (auto & res : gf_res_prev) {
+            res = std::make_unique<llm_graph_result>(max_nodes);
+        }
     }
 
     if (!hparams.vocab_only) {
@@ -806,11 +814,14 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
-    for (auto & res : gf_res_prev) {
-        res.reset();
-    }
-    gf_res_reserve.reset(new llm_graph_result(max_nodes));
     gf_res_prev_active = nullptr;
+
+    gf_res_reserve->set_max_nodes(max_nodes);
+    gf_res_reserve->reset();
+    for (auto & res : gf_res_prev) {
+        res->set_max_nodes(max_nodes);
+        res->reset();
+    }
 
     sched_new({
         /*.max_nodes  =*/ max_nodes,
@@ -1058,9 +1069,7 @@ bool llama_context::memory_update(bool optimize) {
         // reset the previous graph results to make sure that they won't be reused
         // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
         for (auto & res : gf_res_prev) {
-            if (res) {
-                res->reset();
-            }
+            res->reset();
         }
         gf_res_prev_active = nullptr;
 
@@ -1653,11 +1662,11 @@ bool llama_context::set_h_nextn_rows(int64_t row0, int64_t n_rows, const float *
     return true;
 }
 
-bool llama_context::set_state_src(llama_context * src) {
-    if (cparams.ctx_state_src != src) {
+bool llama_context::set_ctx_state_src(llama_context * ctx_src) {
+    if (cparams.ctx_state_src != ctx_src) {
         sched_need_reserve = true;
     }
-    cparams.ctx_state_src = src;
+    cparams.ctx_state_src = ctx_src;
     return supports_state_row();
 }
 
@@ -1698,14 +1707,6 @@ void llama_context::set_causal_attn(bool value) {
 
 bool llama_context::get_causal_attn() const {
     return cparams.causal_attn;
-}
-
-void llama_context::set_warmup(bool value) {
-    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
-
-    // no scheduler reserve needed because warmups are usually with small batches
-
-    cparams.warmup = value;
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -2958,11 +2959,7 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 }
 
 llm_graph_result * llama_context::get_gf_res_prev() {
-    auto & res = gf_res_prev[n_outputs > 0];
-    if (!res) {
-        res.reset(new llm_graph_result(gf_res_reserve->get_max_nodes()));
-    }
-    return res.get();
+    return gf_res_prev[n_outputs > 0].get();
 }
 
 // pack sampler outputs into as few sequences as possible before using sequences without samplers
@@ -3036,9 +3033,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     // when the scheduler is reset, we cannot reuse old graphs, so we reset the previous graph results
     for (auto & res : gf_res_prev) {
-        if (res) {
-            res->reset();
-        }
+        res->reset();
     }
     gf_res_prev_active = nullptr;
 
@@ -4451,7 +4446,6 @@ llama_context_params llama_context_default_params() {
         /*.yarn_beta_fast              =*/ -1.0f,
         /*.yarn_beta_slow              =*/ -1.0f,
         /*.yarn_orig_ctx               =*/ 0,
-        /*.defrag_thold                =*/ -1.0f,
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
@@ -4620,13 +4614,6 @@ llama_context * llama_init_from_model(
     return nullptr;
 }
 
-// deprecated
-llama_context * llama_new_context_with_model(
-                 llama_model * model,
-        llama_context_params   params) {
-    return llama_init_from_model(model, params);
-}
-
 void llama_free(llama_context * ctx) {
     delete ctx;
 }
@@ -4702,10 +4689,6 @@ bool llama_get_causal_attn(const llama_context * ctx) {
     return ctx->get_causal_attn();
 }
 
-void llama_set_warmup(llama_context * ctx, bool warmup) {
-    ctx->set_warmup(warmup);
-}
-
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
 }
@@ -4764,8 +4747,8 @@ bool llama_set_embeddings_nextn_rows(llama_context * ctx, int64_t row0, int64_t 
     return ctx->set_h_nextn_rows(row0, n_rows, data);
 }
 
-bool llama_set_embd_state_src(llama_context * ctx, llama_context * src) {
-    return ctx->set_state_src(src);
+bool llama_set_ctx_state_src(llama_context * ctx, llama_context * ctx_src) {
+    return ctx->set_ctx_state_src(ctx_src);
 }
 
 void llama_set_embeddings_layer_inp_dev(llama_context * ctx, bool value) {
@@ -4999,31 +4982,6 @@ bool llama_memory_can_shift(llama_memory_t mem) {
 }
 
 // llama state API
-
-// deprecated
-size_t llama_get_state_size(llama_context * ctx) {
-    return llama_state_get_size(ctx);
-}
-
-// deprecated
-size_t llama_copy_state_data(llama_context * ctx, uint8_t * dst) {
-    return llama_state_get_data(ctx, dst, -1);
-}
-
-// deprecated
-size_t llama_set_state_data(llama_context * ctx, const uint8_t * src) {
-    return llama_state_set_data(ctx, src, -1);
-}
-
-// deprecated
-bool llama_load_session_file(llama_context * ctx, const char * path_session, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
-    return llama_state_load_file(ctx, path_session, tokens_out, n_token_capacity, n_token_count_out);
-}
-
-// deprecated
-bool llama_save_session_file(llama_context * ctx, const char * path_session, const llama_token * tokens, size_t n_token_count) {
-    return llama_state_save_file(ctx, path_session, tokens, n_token_count);
-}
 
 // Returns the *actual* size of the state.
 // Intended to be used when saving to state to a buffer.

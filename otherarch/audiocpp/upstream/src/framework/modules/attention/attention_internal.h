@@ -400,7 +400,7 @@ inline core::TensorValue build_linear_projection_impl(
     bool use_weight_type_precision,
     bool use_fast_cuda_projection) {
     const ggml_prec resolved_precision = use_weight_type_precision
-        ? (ggml_is_quantized(weights.weight.type) ? GGML_PREC_DEFAULT : GGML_PREC_F32)
+        ? (ggml_is_quantized(weights.weight.type) ? GGML_PREC_UNDEFINED : GGML_PREC_F32)
         : precision;
     // kcpp: Audio.cpp's optional CUDA projection calls the private
     // ggml_mul_mat_pack4 op. KoboldCpp keeps upstream GGML and uses the
@@ -531,15 +531,15 @@ inline core::TensorValue build_attention_impl(
     auto k_transposed = permute_tensor(ctx, k_heads, {0, 1, 3, 2});
 
     auto scores = matmul.build(ctx, q_heads, k_transposed);
-    if (config.attention_precision != GGML_PREC_DEFAULT) {
-        ggml_mul_mat_set_prec(scores.tensor, config.attention_precision);
+    if (config.attention_precision != GGML_PREC_UNDEFINED) {
+        ggml_prec_set_acc(scores.tensor, config.attention_precision);
     }
     scores = core::wrap_tensor(ggml_scale(ctx.ggml, scores.tensor, scale), scores.shape, GGML_TYPE_F32);
     auto attn = core::wrap_tensor(ggml_soft_max(ctx.ggml, scores.tensor), scores.shape, GGML_TYPE_F32);
 
     auto context = matmul.build(ctx, attn, v_heads);
-    if (config.attention_precision != GGML_PREC_DEFAULT) {
-        ggml_mul_mat_set_prec(context.tensor, config.attention_precision);
+    if (config.attention_precision != GGML_PREC_UNDEFINED) {
+        ggml_prec_set_acc(context.tensor, config.attention_precision);
     }
     context = permute_tensor(ctx, context, {0, 2, 1, 3});
     context = ensure_contiguous_layout(ctx, context);

@@ -167,7 +167,7 @@ static struct ggml_tensor * qwen3_build_self_attn(
     // 6) Flash attention (handles GQA)
     float scale = 1.0f / sqrtf((float)D);
     struct ggml_tensor * attn = ggml_flash_attn_ext(ctx, q, k, v, mask, scale, 0.0f, 0.0f);
-    ggml_flash_attn_ext_set_prec(attn, GGML_PREC_F32); // F32 accumulation
+    ggml_prec_set_acc(attn, GGML_PREC_F32); // F32 accumulation
 
     // 7) Reshape back: [D, Nh, S] -> [Nh*D, S]
     attn = ggml_reshape_2d(ctx, attn, Nh * D, S);

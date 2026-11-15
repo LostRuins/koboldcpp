@@ -34,7 +34,7 @@ struct Qwen3VlEncoderRuntimeConfig {
     Qwen3VlEncoderOutputMode output_mode = Qwen3VlEncoderOutputMode::Hidden;
     bool return_hidden = false;
     bool use_lm_head_bias = false;
-    ggml_prec lm_head_precision = GGML_PREC_DEFAULT;
+    ggml_prec lm_head_precision = GGML_PREC_UNDEFINED;
     std::optional<ggml_type> lm_head_input_type;
     bool use_cuda_fast_projection = true;
     std::optional<ggml_type> readback_round_type;

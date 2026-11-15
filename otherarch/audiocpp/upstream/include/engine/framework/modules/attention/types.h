@@ -15,8 +15,8 @@ struct AttentionConfig {
     int64_t hidden_size = 0;
     int64_t num_heads = 0;
     bool use_bias = true;
-    ggml_prec projection_precision = GGML_PREC_DEFAULT;
-    ggml_prec attention_precision = GGML_PREC_DEFAULT;
+    ggml_prec projection_precision = GGML_PREC_UNDEFINED;
+    ggml_prec attention_precision = GGML_PREC_UNDEFINED;
     AttentionPrefixCacheLayout prefix_cache_layout = AttentionPrefixCacheLayout::SequenceHeads;
     bool use_packed_qkv = false;
     bool causal = false;

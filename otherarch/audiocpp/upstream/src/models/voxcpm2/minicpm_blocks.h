@@ -142,7 +142,7 @@ attention_from_heads(engine::core::ModuleBuildContext &ctx,
   auto *flash = ggml_flash_attn_ext(
       ctx.ggml, q.tensor, k.tensor, v.tensor, attention_mask.tensor,
       1.0F / std::sqrt(static_cast<float>(dim)), 0.0F, 0.0F);
-  ggml_flash_attn_ext_set_prec(flash, GGML_PREC_F32);
+  ggml_prec_set_acc(flash, GGML_PREC_F32);
   return engine::core::wrap_tensor(
       flash,
       engine::core::TensorShape::from_dims(

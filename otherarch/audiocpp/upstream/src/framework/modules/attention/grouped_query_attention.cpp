@@ -94,7 +94,7 @@ core::TensorValue build_flash_grouped(
     const auto v = view_kv ? v_heads : core::ensure_backend_addressable_layout(ctx, v_heads);
     ggml_tensor * mask = attention_mask.has_value() ? attention_mask->tensor : nullptr;
     auto * flash = ggml_flash_attn_ext(ctx.ggml, q.tensor, k.tensor, v.tensor, mask, scale, 0.0F, 0.0F);
-    ggml_flash_attn_ext_set_prec(flash, precision);
+    ggml_prec_set_acc(flash, precision);
     return core::wrap_tensor(
         flash,
         core::TensorShape::from_dims({q.shape.dims[0], q.shape.dims[2], q.shape.dims[1], q.shape.dims[3]}),

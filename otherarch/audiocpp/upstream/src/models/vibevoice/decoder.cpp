@@ -147,7 +147,7 @@ core::TensorValue flash_attention_from_grouped_heads_view_kv(
         1.0F / std::sqrt(static_cast<float>(dim)),
         0.0F,
         0.0F);
-    ggml_flash_attn_ext_set_prec(flash, GGML_PREC_F32);
+    ggml_prec_set_acc(flash, GGML_PREC_F32);
     return core::wrap_tensor(
         flash,
         core::TensorShape::from_dims({q_contiguous.shape.dims[0], q_contiguous.shape.dims[2], q_contiguous.shape.dims[1], dim}),

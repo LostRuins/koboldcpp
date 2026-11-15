@@ -46,7 +46,7 @@ inline LinearConfig linear_config(
     int64_t in_features,
     int64_t out_features,
     bool use_bias) {
-    return {in_features, out_features, use_bias, GGML_PREC_DEFAULT};
+    return {in_features, out_features, use_bias, GGML_PREC_UNDEFINED};
 }
 
 template <typename Store, typename Values>
