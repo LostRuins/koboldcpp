@@ -6487,11 +6487,14 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         req_id_suffix = genparams.get('oai_uniqueid',1)
         chatcmpl_id = f"chatcmpl-A{req_id_suffix}"
         cmpl_id = f"cmpl-A{req_id_suffix}"
+        is_background_worker = (
+            genparams.get('genkey', '').startswith('HORDEREQ_') or
+            self.headers.get('X-KoboldCpp-Background-Worker') == 'beavernet'
+        )
 
         def run_blocking():  # api format 1=basic,2=kai,3=oai,4=oai-chat
             # flag instance as non-idle for a while
-            washordereq = genparams.get('genkey', '').startswith('HORDEREQ_')
-            if not washordereq:
+            if not is_background_worker:
                 global last_non_horde_req_time
                 last_non_horde_req_time = time.time()
 
@@ -6525,8 +6528,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
             logprobsdict = parse_last_logprobs(lastlogprobs)
 
         # flag instance as non-idle for a while
-        washordereq = genparams.get('genkey', '').startswith('HORDEREQ_')
-        if not washordereq:
+        if not is_background_worker:
             global last_non_horde_req_time
             last_non_horde_req_time = time.time()
 
@@ -12597,6 +12599,7 @@ class _BeaverNetLocalCall:
                 return
             self.connection.sock.settimeout(None)
             request_headers = {key: value for key, value in self.headers.items() if key in ("content-type", "accept", "x-beavernet-hop")}
+            request_headers["x-koboldcpp-background-worker"] = "beavernet"
             if password:
                 request_headers["authorization"] = "Bearer " + password
             self.connection.request(self.method, self.path, body=self.body or None, headers=request_headers)
