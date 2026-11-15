@@ -1,0 +1,179 @@
+name: Koboldcpp Windows ARM64
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional commit hash to build from'
+        required: false
+        default: ''
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  # llvm-mingw defaults to Win7 (w64devkit gcc: Win10) and links libc++ dynamically
+  CC: clang -D_WIN32_WINNT=0x0A00
+  CXX: clang++ -D_WIN32_WINNT=0x0A00 -static
+  UNAME_M: aarch64
+
+jobs:
+  windows-arm64:
+    runs-on: windows-11-arm
+    permissions: write-all
+    steps:
+      - name: Show runner hardware
+        shell: pwsh
+        run: |
+          Write-Host "::group::GitHub runner"
+          Write-Host "Name: $env:RUNNER_NAME"
+          Write-Host "OS/architecture: $env:RUNNER_OS / $env:RUNNER_ARCH"
+          Write-Host "Image: $env:ImageOS $env:ImageVersion"
+          Write-Host "::endgroup::"
+          Write-Host "::group::Machine and operating system"
+          $system = Get-CimInstance Win32_ComputerSystem
+          $os = Get-CimInstance Win32_OperatingSystem
+          $system | Select-Object Manufacturer, Model, SystemType, HypervisorPresent, TotalPhysicalMemory | Format-List
+          Write-Host ("Installed RAM: {0} bytes ({1:N2} GiB)" -f $system.TotalPhysicalMemory, ($system.TotalPhysicalMemory / 1GB))
+          $os | Select-Object Caption, Version, BuildNumber, OSArchitecture | Format-List
+          Write-Host "::endgroup::"
+          Write-Host "::group::CPU"
+          Get-CimInstance Win32_Processor | Select-Object Name, Manufacturer, Description, SocketDesignation, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed | Format-List
+          Write-Host "::endgroup::"
+          Write-Host "::group::Memory modules"
+          Get-CimInstance Win32_PhysicalMemory | Select-Object Manufacturer, PartNumber, Capacity, Speed, ConfiguredClockSpeed | Format-List
+          Write-Host "::endgroup::"
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}
+
+      - name: Show Commit Used
+        run: |
+          echo "Building from ref: ${{ inputs.commit_hash != '' && inputs.commit_hash || github.head_ref || github.ref_name }}"
+
+      - name: Get Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: arm64
+
+      - name: Install python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install customtkinter==5.2.0 pyinstaller==6.11.0 psutil==7.2.2 jinja2==3.1.6
+
+      - name: Download and install llvm-mingw
+        run: |
+          curl -L https://github.com/mstorsjo/llvm-mingw/releases/download/20251118/llvm-mingw-20251118-ucrt-aarch64.zip --output llvm-mingw.zip
+          Expand-Archive llvm-mingw.zip -DestinationPath .
+
+      - name: Add llvm-mingw to PATH
+        run: |
+          echo "C:\Program Files\Git\usr\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+          echo "$(Get-Location)\llvm-mingw-20251118-ucrt-aarch64\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      # kcpp_src/lib/vulkan-1.lib is x64 only, so generate an arm64 import library with the same exports
+      - name: Generate ARM64 Vulkan import library
+        shell: bash
+        run: |
+          { echo "LIBRARY vulkan-1.dll"; echo "EXPORTS"; nm kcpp_src/lib/vulkan-1.lib | awk '$2=="T"{print $3}' | sort -u; } > vulkan-1.def
+          dlltool -d vulkan-1.def -l vulkan-1-arm64.lib
+
+      - name: Build Non-CUDA
+        id: make_build
+        run: |
+          mingw32-make LLAMA_VULKAN=1 LLAMA_PORTABLE=1 VULKAN_LIB=vulkan-1-arm64.lib KCPP_VARIANT_EXPORT_FLAGS= -j ${env:NUMBER_OF_PROCESSORS}
+
+      - name: Package PyInstallers
+        id: make_pyinstaller
+        run: |
+          ./make_pyinstaller.bat
+
+      - name: Save artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: kcpp_windows_pyinstallers
+          path: dist/
+
+      - name: Upload to GitHub Rolling Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          Copy-Item dist/koboldcpp-nocuda.exe koboldcpp-arm64.exe
+          gh release upload rolling koboldcpp-arm64.exe --clobber
+
+      - name: Generate VK Instructions
+        id: gen_vk_instructions
+        run: |
+          echo "If you cannot compile vulkan shaders yourself with glslc, you can manually patch in precompiled vulkan shader source files. Copy ggml-vulkan-shaders.cpp and ggml-vulkan-shaders.hpp to the ggml/src subdirectory in KoboldCpp source files before building." > vulkan-readme.txt
+
+      - name: Save Standalone Vulkan Shaders
+        uses: actions/upload-artifact@v6
+        with:
+          name: vulkan_precompiled_shaders
+          path: |
+            ggml/src/ggml-vulkan-shaders.cpp
+            ggml/src/ggml-vulkan-shaders.hpp
+            vulkan-readme.txt
+
+      - name: Build Tools
+        id: make_tools
+        run: |
+          mingw32-make tools -j 4
+          New-Item -ItemType Directory -Path legacy
+          Copy-Item quantize_gpt2.exe -Destination legacy
+          Copy-Item quantize_gptj.exe -Destination legacy
+          Copy-Item quantize_mpt.exe -Destination legacy
+          Copy-Item quantize_neox.exe -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_gpt2.py -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_gptj.py -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_mpt.py -Destination legacy
+          Copy-Item otherarch/tools/convert_hf_neox.py -Destination legacy
+          Copy-Item otherarch/tools/convert_llama_ggml_to_gguf.py -Destination legacy
+          Copy-Item otherarch/tools/convert_pt_rwkv.py -Destination legacy
+        shell: pwsh
+
+      - name: Upload Tools
+        uses: actions/upload-artifact@v6
+        with:
+          name: koboldcpp_tools
+          path: |
+            gguf-split.exe
+            quantize_gguf.exe
+            whispermain.exe
+            sdmain.exe
+            ttsmain.exe
+            convert_hf_to_gguf.py
+            convert_hf_to_gguf_update.py
+            conversion
+            gguf-py
+            legacy
+
+      - name: Package Tools Release
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path `
+              gguf-split.exe,
+              quantize_gguf.exe,
+              whispermain.exe,
+              sdmain.exe,
+              ttsmain.exe,
+              convert_hf_to_gguf.py,
+              convert_hf_to_gguf_update.py,
+              conversion,
+              gguf-py,
+              legacy `
+            -DestinationPath koboldcpp_tools.zip `
+            -Force
+
+      - name: Upload tools to GitHub Rolling Tools Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          Copy-Item koboldcpp_tools.zip koboldcpp_tools_arm64.zip
+          gh release upload kcpp_tools_rolling `
+            koboldcpp_tools_arm64.zip `
+            --clobber
