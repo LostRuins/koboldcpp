@@ -804,21 +804,20 @@ tinylibwebp-smoke: $(LIB_TINYLIBWEBP) vendor/tinylibwebp/tests/anim_smoke.c
 SOURCES_SDCOMMON := $(foreach f,$(SDCPP_COMMON_BASENAMES),otherarch/sdcpp/$(f))
 HEADERS_SDCOMMON := $(filter %.h,$(SOURCES_SDCOMMON)) $(filter %.hpp, $(SOURCES_SDCOMMON))
 OBJS_SDCOMMON := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON))) $(patsubst %.c,%.o,$(filter %.c,$(SOURCES_SDCOMMON)))
-SDCPP_COMMON_OBJS := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON)))
+SDCPP_COMMON_CPP_OBJS := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDCOMMON)))
 
 SOURCES_SDMAIN := $(foreach f,$(SDCPP_MAIN_BASENAMES),otherarch/sdcpp/$(f))
 HEADERS_SDMAIN := $(filter %.h,$(SOURCES_SDMAIN)) $(filter %.hpp, $(SOURCES_SDMAIN))
 OBJS_SDMAIN := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_SDMAIN)))
 
-# .d files (compiler-generated dependency lists, see the -MMD flags below and
-# the deps target below): exact per-object dependencies. Objects that don't
-# have a .d file yet fall back to the coarse all-headers rules.
+# Compiler-generated exact per-object dependencies. Objects without a .d file
+# fall back to the coarse all-headers rules until their next compilation.
 SDCPP_DEPS := $(OBJS_SDCOMMON:.o=.d) $(OBJS_SDMAIN:.o=.d) otherarch/sdcpp/sdtype_adapter.d
 -include $(SDCPP_DEPS)
 
 # coarse fallback: only objects without a .d file depend on all sdcpp headers
 # (.c objects never had header dependencies)
-$(patsubst %.d,%.o,$(filter-out $(wildcard $(SDCPP_COMMON_OBJS:.o=.d)),$(SDCPP_COMMON_OBJS:.o=.d))): $(HEADERS_SDCOMMON)
+$(patsubst %.d,%.o,$(filter-out $(wildcard $(SDCPP_COMMON_CPP_OBJS:.o=.d)),$(SDCPP_COMMON_CPP_OBJS:.o=.d))): $(HEADERS_SDCOMMON)
 $(patsubst %.d,%.o,$(filter-out $(wildcard $(OBJS_SDMAIN:.o=.d)),$(OBJS_SDMAIN:.o=.d))): $(HEADERS_SDMAIN)
 
 otherarch/sdcpp/src/%.o: otherarch/sdcpp/src/%.cpp
@@ -837,41 +836,6 @@ otherarch/sdcpp/examples/%.o: otherarch/sdcpp/examples/%.cpp
 SDCPP_ADAPTER_HEADERS := otherarch/sdcpp/include/stable-diffusion.h otherarch/sdcpp/src/kcpp_sd_extensions.h kcpp_src/model_adapter.h otherarch/utils.h otherarch/webp_image.h vendor/tinylibwebp/src/webp/decode.h vendor/tinylibwebp/src/webp/encode.h vendor/tinylibwebp/src/webp/mux.h
 otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp $(if $(wildcard otherarch/sdcpp/sdtype_adapter.d),,$(SDCPP_ADAPTER_HEADERS))
 	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./vendor/tinylibwebp/src $(CXXFLAGS) -MMD -MP -c $< -o $@
-
-# `make deps`: generate/refresh the sdcpp .d files without compiling. A .d is
-# only rewritten if its content changed, so unchanged files keep their
-# timestamps. The .d rules are only defined when deps is an explicit goal, so
-# a regular build never creates .d files (objects then use the coarse fallback
-# rules, and .d files get refreshed as a side effect of compiling, via -MMD).
-.PHONY: deps
-deps: $(SDCPP_DEPS)
-ifneq (,$(filter deps,$(MAKECMDGOALS)))
-
-otherarch/sdcpp/src/%.d: otherarch/sdcpp/src/%.cpp
-	$(CXX) -DUTF8PROC_STATIC -DSD_USE_UPSTREAM_GGML -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./otherarch/sdcpp/src/core -I./vendor/nlohmann -I./otherarch/sdcpp/thirdparty/oniguruma -I./otherarch/sdcpp/thirdparty/utf8proc $(CXXFLAGS) -MM -MP -MT otherarch/sdcpp/src/$*.o -MF $@.tmp -c $<
-	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
-
-otherarch/sdcpp/thirdparty/oniguruma/%.d: otherarch/sdcpp/thirdparty/oniguruma/%.c
-	$(CC) $(CFLAGS) -I./otherarch/sdcpp/thirdparty/oniguruma -MM -MP -MT otherarch/sdcpp/thirdparty/oniguruma/$*.o -MF $@.tmp -c $<
-	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
-
-otherarch/sdcpp/thirdparty/utf8proc/%.d: otherarch/sdcpp/thirdparty/utf8proc/%.c
-	$(CC) -DUTF8PROC_STATIC $(CFLAGS) -I./otherarch/sdcpp/thirdparty/utf8proc -MM -MP -MT otherarch/sdcpp/thirdparty/utf8proc/$*.o -MF $@.tmp -c $<
-	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
-
-otherarch/sdcpp/thirdparty/zip.d: otherarch/sdcpp/thirdparty/zip.c
-	$(CC) $(CFLAGS) -MM -MP -MT otherarch/sdcpp/thirdparty/zip.o -MF $@.tmp -c $<
-	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
-
-otherarch/sdcpp/examples/%.d: otherarch/sdcpp/examples/%.cpp
-	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/examples -I./vendor/nlohmann $(CXXFLAGS) -MM -MP -MT otherarch/sdcpp/examples/$*.o -MF $@.tmp -c $<
-	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
-
-otherarch/sdcpp/sdtype_adapter.d: otherarch/sdcpp/sdtype_adapter.cpp
-	$(CXX) -I./otherarch/sdcpp/include -I./otherarch/sdcpp/src -I./vendor/tinylibwebp/src $(CXXFLAGS) -MM -MP -MT otherarch/sdcpp/sdtype_adapter.o -MF $@.tmp -c $<
-	@if [ -f $@ ] && cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
-
-endif
 
 kcpp_sdcpp_tokenizer.o: kcpp_src/sdcpp_gguf_tokenizer.cpp kcpp_src/sdcpp_gguf_tokenizer.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
