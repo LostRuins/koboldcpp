@@ -1267,7 +1267,7 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
     int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
     if (split->inputs_capacity > 0) {
         new_cap = 2*split->inputs_capacity;
-        GGML_LOG_DEBUG("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
+        // GGML_LOG_DEBUG("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
     }
     auto * pnew = (struct ggml_tensor **) realloc((void *) split->inputs, new_cap * sizeof(struct ggml_tensor *));
     if (pnew == NULL) {
