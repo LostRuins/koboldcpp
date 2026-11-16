@@ -6821,7 +6821,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             self.close_connection = True
             if genparams.get('_keep_on_disconnect', False):
-                genparams['_client_disconnected'] = True
+                genparams['_client_disconnected'] = True #do not reply once the kept generation finishes
             else:
                 handle.abort_generate()
 
