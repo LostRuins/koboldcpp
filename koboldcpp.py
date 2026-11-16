@@ -14854,7 +14854,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         friendlymodelname = "koboldcpp/" + sanitize_string(newmdldisplayname)
 
     # horde worker settings
-    global maxhordelen, maxhordectx, showdebug, has_multiplayer, savedata_obj
+    global maxhordelen, maxhordectx, showdebug, has_multiplayer, savedata_obj, net_save_slots
     if args.hordemodelname and args.hordemodelname!="":
         friendlymodelname = args.hordemodelname
         if args.debugmode == 1 or args.gendefaults:
@@ -14882,6 +14882,10 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         if not filepath.lower().endswith(".jsondb"):
             filepath += ".jsondb"
             args.savedatafile += ".jsondb"
+        slots = tryparseint(args.savedataslots, net_save_slots)
+        net_save_slots = max(1, min(1000, slots))
+        if net_save_slots != slots:
+            print(f"Warning: savedataslots must be between 1 and 1000, using {net_save_slots}.")
         try:
             with open(filepath, 'r+', encoding='utf-8', errors='ignore') as f:
                 loaded = json.load(f)
@@ -15811,6 +15815,7 @@ if __name__ == '__main__':
     advparser.add_argument("--remotetunnel", help="Uses Cloudflare to create a remote tunnel, allowing you to access koboldcpp remotely over the internet even behind a firewall.", action='store_true')
     advparser.add_argument("--ropeconfig", help="If set, uses customized RoPE scaling from configured frequency scale and frequency base (e.g. --ropeconfig 0.25 10000). Otherwise, uses NTK-Aware scaling set automatically based on context size. For linear rope, simply set the freq-scale and ignore the freq-base",metavar=('[rope-freq-scale]', '[rope-freq-base]'), default=[0.0, 10000.0], type=float, nargs='+')
     advparser.add_argument("--savedatafile", metavar=('[savefile]'), help="If enabled, creates or opens a persistent database file on the server, that allows users to save and load their data remotely. A new file is created if it does not exist.", default="")
+    advparser.add_argument("--savedataslots", metavar=('[slots]'), help="Sets how many save slots --savedatafile offers, from 1 to 1000. Lowering it does not delete any data, slots above the limit are only hidden.", type=int, default=net_save_slots)
     advparser.add_argument("--singleinstance", help="Allows this KoboldCpp instance to be shut down by any new instance requesting the same port, preventing duplicate servers from clashing on a port.", action='store_true')
     advparser.add_argument("--smartcache", help="Enables intelligent context switching by saving KV cache snapshots to RAM. Requires fast forwarding.", metavar=('limit'), nargs='?', const=1, type=int, default=0)
     advparser.add_argument("--smartcontext", help="Reserving a portion of context to try processing less frequently. Outdated. Not recommended.", action='store_true')
