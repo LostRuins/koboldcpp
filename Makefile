@@ -859,17 +859,23 @@ SOURCES_AUDIOCPP := $(foreach f,$(AUDIOCPP_COMMON_BASENAMES),otherarch/audiocpp/
 HEADERS_AUDIOCPP := $(foreach f,$(AUDIOCPP_HEADER_BASENAMES),otherarch/audiocpp/upstream/$(f))
 OBJS_AUDIOCPP := $(patsubst %.cpp,%.o,$(filter %.cpp,$(SOURCES_AUDIOCPP))) $(patsubst %.cc,%.o,$(filter %.cc,$(SOURCES_AUDIOCPP))) $(patsubst %.c,%.o,$(filter %.c,$(SOURCES_AUDIOCPP)))
 
+AUDIOCPP_POSIX_DEFINES := -D_POSIX_C_SOURCE=200809L
+ifeq ($(UNAME_S),FreeBSD)
+# FreeBSD libc++ uses isascii(), which is hidden unless XSI is visible.
+AUDIOCPP_POSIX_DEFINES += -D_XOPEN_SOURCE=700
+endif
+
 $(OBJS_AUDIOCPP): $(HEADERS_AUDIOCPP)
 
 # cJSON for audiocpp
 otherarch/audiocpp/upstream/external/cJSON/cJSON.o otherarch/audiocpp/upstream/src/framework/io/json.o: Makefile
 otherarch/audiocpp/upstream/src/framework/model_spec/package.o: otherarch/audiocpp/upstream/generated/model_specs.inc
 otherarch/audiocpp/upstream/%.o: otherarch/audiocpp/upstream/%.cpp
-	$(CXX) -DCJSON_HIDE_SYMBOLS -D_USE_INTERNAL_STRING_VIEW -DHAVE_PTHREAD=1 -D_POSIX_C_SOURCE=200809L -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CXXFLAGS) -c $< -o $@
+	$(CXX) -DCJSON_HIDE_SYMBOLS -D_USE_INTERNAL_STRING_VIEW -DHAVE_PTHREAD=1 $(AUDIOCPP_POSIX_DEFINES) -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CXXFLAGS) -c $< -o $@
 otherarch/audiocpp/upstream/%.o: otherarch/audiocpp/upstream/%.cc
-	$(CXX) -DCJSON_HIDE_SYMBOLS -D_USE_INTERNAL_STRING_VIEW -DHAVE_PTHREAD=1 -D_POSIX_C_SOURCE=200809L -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CXXFLAGS) -c $< -o $@
+	$(CXX) -DCJSON_HIDE_SYMBOLS -D_USE_INTERNAL_STRING_VIEW -DHAVE_PTHREAD=1 $(AUDIOCPP_POSIX_DEFINES) -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CXXFLAGS) -c $< -o $@
 otherarch/audiocpp/upstream/%.o: otherarch/audiocpp/upstream/%.c
-	$(CC) -DCJSON_HIDE_SYMBOLS -D_POSIX_C_SOURCE=200809L -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CFLAGS) -c $< -o $@
+	$(CC) -DCJSON_HIDE_SYMBOLS $(AUDIOCPP_POSIX_DEFINES) -DYAML_DECLARE_STATIC=1 -DYAML_VERSION_MAJOR=0 -DYAML_VERSION_MINOR=2 -DYAML_VERSION_PATCH=5 -DYAML_VERSION_STRING=\"0.2.5\" $(CFLAGS) -c $< -o $@
 
 tts_default.o: otherarch/tts_adapter.cpp otherarch/audiocpp/upstream/generated/kcpp_tts_registry_headers.inc otherarch/audiocpp/upstream/generated/kcpp_tts_registry_loaders.inc otherarch/ttscpp/src/ttscpp.cpp otherarch/ttscpp/src/ttstokenizer.cpp otherarch/ttscpp/src/ttssampler.cpp otherarch/ttscpp/src/parler_model.cpp otherarch/ttscpp/src/dac_model.cpp otherarch/ttscpp/src/ttsutil.cpp otherarch/ttscpp/src/ttsargs.cpp otherarch/ttscpp/src/ttst5_encoder_model.cpp otherarch/ttscpp/src/phonemizer.cpp otherarch/ttscpp/src/tts_model.cpp otherarch/ttscpp/src/kokoro_model.cpp otherarch/ttscpp/src/dia_model.cpp otherarch/ttscpp/src/orpheus_model.cpp otherarch/ttscpp/src/snac_model.cpp otherarch/ttscpp/src/general_neural_audio_codec.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@

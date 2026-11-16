@@ -37,5 +37,9 @@ target_compile_definitions(audiocpp PRIVATE
     YAML_VERSION_PATCH=5
     YAML_VERSION_STRING="0.2.5"
 )
+if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+    # FreeBSD libc++ uses isascii(), which is hidden unless XSI is visible.
+    target_compile_definitions(audiocpp PRIVATE _XOPEN_SOURCE=700)
+endif()
 target_link_libraries(audiocpp PRIVATE ggml)
 set_target_properties(audiocpp PROPERTIES POSITION_INDEPENDENT_CODE ON)
