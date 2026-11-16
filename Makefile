@@ -1,6 +1,9 @@
 # Add custom options to Makefile.local rather than editing this file.
 -include $(abspath $(lastword ${MAKEFILE_LIST})).local
 
+PREFIX ?= /usr/local
+INSTALL ?= install
+
 # GNU Make's ifdef considers command-line values such as FOO=0 to be enabled.
 # Accept the conventional explicit disable form before evaluating feature flags.
 ifeq ($(strip $(LLAMA_CUBLAS)),0)
@@ -20,7 +23,7 @@ $(error LLAMA_CUBLAS and LLAMA_HIPBLAS share object files; enable only one and r
 endif
 endif
 
-.PHONY: finishedmsg tinylibwebp tinylibwebp-smoke koboldcpp_default_backend koboldcpp_common koboldcpp_vulkan_shaders koboldcpp_vulkan_noext_shaders
+.PHONY: install finishedmsg tinylibwebp tinylibwebp-smoke koboldcpp_default_backend koboldcpp_common koboldcpp_vulkan_shaders koboldcpp_vulkan_noext_shaders
 
 default: koboldcpp_default koboldcpp_failsafe koboldcpp_noavx2 koboldcpp_vulkan_failsafe koboldcpp_cublas koboldcpp_hipblas koboldcpp_vulkan koboldcpp_vulkan_noavx2 finishedmsg
 tools: quantize_gpt2 quantize_gptj quantize_gguf quantize_neox quantize_mpt ttsmain whispermain sdmain gguf-split
@@ -901,6 +904,27 @@ clean:
 	rm -vrf ggml/src/ggml-cuda/template-instances/*.o
 	rm -vrf llguidance
 	rm -vf otherarch/sdcpp/*.o otherarch/sdcpp/*/*.o otherarch/sdcpp/*/*/*.o otherarch/sdcpp/*/*/*/*.o
+
+ifeq ($(OS),Windows_NT)
+install:
+	$(error make install is supported on Unix only; on Windows run python koboldcpp.py from the build directory)
+else
+install: default
+	$(INSTALL) -d "$(DESTDIR)$(PREFIX)/bin" "$(DESTDIR)$(PREFIX)/share/koboldcpp/embd_res" "$(DESTDIR)$(PREFIX)/share/koboldcpp/kcpp_adapters" "$(DESTDIR)$(PREFIX)/share/koboldcpp/kcpp_src"
+	$(INSTALL) -m 755 koboldcpp.py "$(DESTDIR)$(PREFIX)/share/koboldcpp/koboldcpp.py"
+	$(INSTALL) -m 644 kcpp_agent.py "$(DESTDIR)$(PREFIX)/share/koboldcpp/kcpp_agent.py"
+	$(INSTALL) -m 644 kcpp_src/json_to_gbnf.py "$(DESTDIR)$(PREFIX)/share/koboldcpp/kcpp_src/json_to_gbnf.py"
+	$(INSTALL) -m 644 embd_res/* "$(DESTDIR)$(PREFIX)/share/koboldcpp/embd_res/"
+	$(INSTALL) -m 644 kcpp_adapters/* "$(DESTDIR)$(PREFIX)/share/koboldcpp/kcpp_adapters/"
+	@if [ -d kernels ]; then \
+		$(INSTALL) -d "$(DESTDIR)$(PREFIX)/share/koboldcpp/kernels" && \
+		$(INSTALL) -m 644 kernels/*.metal kernels/*.h "$(DESTDIR)$(PREFIX)/share/koboldcpp/kernels/" || exit 1; \
+	fi
+	@for lib in koboldcpp_*.so; do \
+		if [ -f "$$lib" ]; then $(INSTALL) -m 755 "$$lib" "$(DESTDIR)$(PREFIX)/share/koboldcpp/$$lib" || exit 1; fi; \
+	done
+	ln -sf ../share/koboldcpp/koboldcpp.py "$(DESTDIR)$(PREFIX)/bin/koboldcpp"
+endif
 
 # useful tools
 main: tools/completion/main.cpp tools/completion/completion.cpp common/arg.cpp common/preset.cpp $(COMMON_DOWNLOAD_SRCS) build-info.h ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-tiled.o ggml-tiled-kernel.o ggml-unops.o llama.o chat.o chat-tts-norm.o llama-model.o console.o $(MTMD_CORE_OBJS) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
