@@ -6022,10 +6022,16 @@ def get_my_epurl():
     global sslvalid
     httpsaffix = ("https" if sslvalid else "http")
     displayedport = (args.port if not args.proxy_port else args.proxy_port)
-    epurl = f"{httpsaffix}://localhost:{displayedport}"
-    if args.host!="":
-        epurl = f"{httpsaffix}://{args.host}:{displayedport}"
-    return epurl
+    endpoint_host = args.host
+    if endpoint_host == "":
+        endpoint_host = "localhost"
+    elif endpoint_host == "0.0.0.0":
+        endpoint_host = "127.0.0.1"
+    elif endpoint_host in ("::", "[::]"):
+        endpoint_host = "[::1]"
+    elif ":" in endpoint_host and not endpoint_host.startswith("["):
+        endpoint_host = f"[{endpoint_host}]"
+    return f"{httpsaffix}://{endpoint_host}:{displayedport}"
 
 proxy_reload_lock = threading.Lock()
 ###########################################################
@@ -7880,7 +7886,7 @@ Change Mode<br>
                 modelNameToReturn = textName
 
             mlist = [{"id":modelNameToReturn,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","status":{"value":"loaded"},"permission":[],"root":"koboldcpp"}]
-            if args.routermode:
+            if args.routermode and self.headers.get("X-KoboldCpp-Background-Worker") != "beavernet":
                 alist = get_current_admindir_list()
                 for itm in alist:
                     mlist.append({"id":itm,"object":"model","created":int(time.time()),"owned_by":"koboldcpp","status":{"value":"loaded"},"permission":[],"root":"koboldcpp"})
@@ -12296,10 +12302,15 @@ class _BeaverNetWebSocketClosed(Exception):
         self.reason = reason
 
 
+_BEAVERNET_API_URL = "https://net.beaverai.org/v1"
+_BEAVERNET_INITIAL_MAX_FRAME_SIZE = 2 * 1024 * 1024
+_BEAVERNET_BODY_FRAME_OVERHEAD = 65  # One length byte and up to 64 request-id bytes.
+
+
 class _BeaverNetWebSocket:
     """Small WebSocket client for the embedded BeaverNet worker."""
 
-    def __init__(self, url):
+    def __init__(self, url, max_frame_size):
         target = urllib.parse.urlsplit(url)
         if target.scheme != "wss" or not target.hostname:
             raise ValueError("BeaverNet worker URL must use wss://")
@@ -12314,6 +12325,7 @@ class _BeaverNetWebSocket:
         self.send_lock = threading.Lock()
         self.buffer = bytearray()
         self.closed = False
+        self.max_frame_size = max_frame_size
 
         ws_key = base64.b64encode(os.urandom(16)).decode("ascii")
         path = target.path or "/"
@@ -12380,7 +12392,7 @@ class _BeaverNetWebSocket:
             length = struct.unpack("!H", self._recv_exact(2))[0]
         elif length == 127:
             length = struct.unpack("!Q", self._recv_exact(8))[0]
-        if length > 2 * 1024 * 1024:
+        if length > self.max_frame_size:
             raise ConnectionError("BeaverNet WebSocket frame is too large")
         mask = self._recv_exact(4) if masked else None
         payload = self._recv_exact(length)
@@ -12463,7 +12475,7 @@ def _beavernet_api_request(api_key, method, path, data=None, timeout=30):
     """Call the BeaverNet provider API with its common URL and authorization."""
     error_info = {}
     result = make_url_request(
-        "https://net.beaverai.org/v1" + path,
+        _BEAVERNET_API_URL + path,
         data,
         method,
         {"Authorization": "Bearer " + api_key},
@@ -12575,6 +12587,28 @@ def _reconcile_beavernet_model(api_key, upstream_id, model_name, max_concurrency
     return True
 
 
+def _beavernet_device_id(local_url):
+    machine = None
+    for filename in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            with open(filename, encoding="utf-8") as file:
+                machine = file.read().strip()
+            if machine:
+                break
+        except OSError:
+            pass
+    if not machine and sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography") as key:
+                machine = winreg.QueryValueEx(key, "MachineGuid")[0]
+        except OSError:
+            pass
+    if not machine:
+        machine = platform.node() or "koboldcpp"
+    return hashlib.sha256(f"{machine}\n{local_url}".encode("utf-8")).hexdigest()
+
+
 class _BeaverNetLocalCall:
     def __init__(self, websocket, local_url, method, path, headers, body, request_id, finished):
         self.websocket = websocket
@@ -12651,12 +12685,21 @@ class _BeaverNetLocalCall:
 def run_beavernet_worker(args, api_key, worker_slots=None):
     """Minimal dependency-free BeaverNet agent for this KoboldCpp server."""
     global exitcounter, friendlymodelname
-    server_url = "wss://net.beaverai.org/v1/agent"
+    server_url = _BEAVERNET_API_URL.replace("https://", "wss://", 1) + "/agent"
     local_url = get_my_epurl()
-    allowed_paths = {"POST /v1/chat/completions", "POST /v1/completions", "GET /v1/models"}
+    local_size_limit = max(1, int(args.maxrequestsize or 32)) * 1024 * 1024
+    allowed_paths = {
+        "POST /v1/chat/completions",
+        "POST /v1/completions",
+        "POST /api/extra/tokencount",
+        "GET /v1/models",
+        "GET /api/extra/version",
+        "GET /api/extra/true_max_context_length",
+        "GET /props",
+    }
     # determined upstream always for this api key. idea is that we'll reuse the same upstream for automated kcpp workers for this user.
     # ofc they can always add their own upstream if they use drummer's standalone agent, but this prevents kcpp from accidentally messing with other upstreams
-    device_id = hashlib.sha256(f"kcpp_auto_upstream_for_{api_key}".encode("utf-8")).hexdigest()
+    device_id = hashlib.sha256(f"kcpp_auto_upstream_for_{api_key}_{_beavernet_device_id(local_url)}".encode("utf-8")).hexdigest()
     stop_codes = {4001, 4003, 4004, 4006, 4009}
     if worker_slots is None:
         worker_slots = getattr(args, "parallelrequests", 1)
@@ -12685,6 +12728,7 @@ def run_beavernet_worker(args, api_key, worker_slots=None):
     print(f"\n===\nEmbedded BeaverNet Worker Starting with {max_inflight} parallel request(s)...\n")
     while exitcounter < 100:
         websocket = None
+        max_body_size = local_size_limit
         calls = {}
         calls_lock = threading.Lock()
         pending = {}
@@ -12703,7 +12747,9 @@ def run_beavernet_worker(args, api_key, worker_slots=None):
                 websocket.close(1001, "Drained")
 
         try:
-            websocket = _BeaverNetWebSocket(server_url)
+            # Keep the conservative legacy ceiling until the server advertises its
+            # protocol limits. Request-body and WebSocket-frame limits are distinct.
+            websocket = _BeaverNetWebSocket(server_url, _BEAVERNET_INITIAL_MAX_FRAME_SIZE)
             websocket.send_json({
                 "t": "hello",
                 "key": api_key,
@@ -12731,7 +12777,7 @@ def run_beavernet_worker(args, api_key, worker_slots=None):
                     if request_id in pending:
                         if not pending[request_id][2]:
                             pending[request_id][1].extend(payload[1 + id_length:])
-                            if len(pending[request_id][1]) > 10 * 1024 * 1024:
+                            if len(pending[request_id][1]) > max_body_size:
                                 pending[request_id][1].clear()
                                 pending[request_id][2] = True
                     continue
@@ -12749,6 +12795,12 @@ def run_beavernet_worker(args, api_key, worker_slots=None):
                 if message_type == "welcome":
                     welcomed = True
                     retry_delay = 1
+                    limits = message.get("limits") if isinstance(message.get("limits"), dict) else {}
+                    if isinstance(limits.get("max_in"), int) and limits["max_in"] > 0:
+                        max_body_size = min(local_size_limit, limits["max_in"])
+                    if isinstance(limits.get("max_frame"), int) and limits["max_frame"] > 0:
+                        local_frame_limit = local_size_limit + _BEAVERNET_BODY_FRAME_OVERHEAD
+                        websocket.max_frame_size = min(local_frame_limit, limits["max_frame"])
                     upstream = message.get("upstream") if isinstance(message.get("upstream"), dict) else {}
                     upstream_id = upstream.get("id")
                     upstream_name = upstream.get("label") or upstream.get("name") or upstream_id or "unknown"
@@ -15466,7 +15518,9 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
         horde_enabled = bool(args.hordekey and args.hordeworkername)
         beavernet_enabled = bool(args.beavernetkey)
-        total_worker_slots = max(1, int(args.parallelrequests or 1))
+        configured_worker_slots = max(1, int(args.parallelrequests or 1))
+        batching_available = continuous_batching_python_eligible({}, 1) and handle.batch_generate_enabled()
+        total_worker_slots = configured_worker_slots if batching_available else 1
         horde_worker_slots = total_worker_slots
         beavernet_worker_slots = total_worker_slots
         if horde_enabled and beavernet_enabled:
