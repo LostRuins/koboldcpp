@@ -2765,7 +2765,7 @@ def sd_build_custom_sigmas():
     gend = gendefaults_parse_meta_field(args.gendefaults or '')
     # legacy: the field used to be named 'custom_sigmas', which collides with the
     # flat sigma list accepted on the API; a dict under that name is the alias map
-    custom = gend.get('custom_sigma_aliases', gend.get('custom_sigmas'))
+    custom = gend.get('custom_sigma_aliases', gend.get('custom_sigmas', {}))
     if not isinstance(custom, dict):
         print("Warning: gendefaults custom_sigma_aliases is not a dictionary, ignoring")
         return result
