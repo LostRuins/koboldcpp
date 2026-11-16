@@ -233,6 +233,37 @@ def gendefaults_parse_meta_field(*args, **kwargs):
     return koboldcpp.gendefaults_parse_meta_field(*args, **kwargs)
 
 
+def write_json_atomic(*args, **kwargs):
+    '''
+    >>> import json, shutil, tempfile
+    >>> d = tempfile.mkdtemp()
+    >>> p = os.path.join(d, 'save.jsondb')
+    >>> write_json_atomic(p, {'0': {'title': 'a'}})
+    >>> json.load(open(p)), os.listdir(d)
+    ({'0': {'title': 'a'}}, ['save.jsondb'])
+
+    a failed write keeps the previous file, and leaves no temp file behind
+    >>> write_json_atomic(p, {'0': object()})
+    Traceback (most recent call last):
+    ...
+    TypeError: Object of type object is not JSON serializable
+    >>> json.load(open(p)), os.listdir(d)
+    ({'0': {'title': 'a'}}, ['save.jsondb'])
+
+    a file that cannot be swapped in is written in place instead
+    >>> real_replace = os.replace
+    >>> def busy(src, dst): raise OSError(16, 'Device or resource busy')
+    >>> os.replace = busy
+    >>> write_json_atomic(p, {}) # doctest: +ELLIPSIS
+    Could not swap in '...save.jsondb' atomically, writing it in place instead.
+    >>> os.replace = real_replace
+    >>> json.load(open(p)), os.listdir(d)
+    ({}, ['save.jsondb'])
+    >>> shutil.rmtree(d)
+    '''
+    return koboldcpp.write_json_atomic(*args, **kwargs)
+
+
 if __name__ == '__main__':
     import doctest
     failures, _ = doctest.testmod()

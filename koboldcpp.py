@@ -214,6 +214,7 @@ cached_sd_info = {}
 cached_sd_custom_sigmas = {}
 cached_jinja_kwargs = None
 savedata_obj = None
+savedata_lock = threading.Lock()
 mcp_connections = [] #every element is linked to one mcp source, contains obj {"client":obj, "tools":[]}
 mcp_lock = threading.Lock()
 MCP_AGENT_LAUNCH_WAIT_SECONDS = 10
@@ -1311,6 +1312,38 @@ def tryparsefloat(value,fallback):
         return parsed if math.isfinite(parsed) else fallback
     except (TypeError, ValueError, OverflowError):
         return fallback
+
+def write_json_atomic(path, obj): #writes to a temp file then swaps it in, so a crash cannot leave a truncated file
+    path = os.path.realpath(path) #replace the real file, not a symlink pointing at it
+    tmp = path + ".tmp"
+    try:
+        f = open(tmp, 'w', encoding='utf-8')
+    except OSError: #cannot create a file next to the target, e.g. a read-only directory
+        f = None
+    if f:
+        try:
+            with f:
+                json.dump(obj, f)
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                shutil.copymode(path, tmp)
+            except OSError:
+                pass
+            for _ in range(5):
+                try:
+                    os.replace(tmp, path)
+                    return
+                except PermissionError: #windows: the target can be briefly held open by antivirus or sync tools
+                    time.sleep(0.1)
+                except OSError: #the target cannot be replaced, e.g. a bind-mounted single file
+                    break
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+    print(f"Could not swap in '{path}' atomically, writing it in place instead.")
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(obj, f)
 
 def replace_last_in_string(text: str, match: str, replacement: str) -> str:
     if match == "":
@@ -8159,7 +8192,7 @@ Change Mode<br>
 
     def do_POST(self):
         global thinkformats
-        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, sdcpp_current_job, sdcpp_last_job, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock
+        global modelbusy, batched_request_runner_count, requestsinqueue, currentusergenkey, totalgens, pendingabortkey, lastuploadedcomfyimg, lastgeneratedcomfyimg, lastgeneratedcachedpayload, lastgeneratedcachedpayloadkey, currgenimgkey, sdcpp_current_job, sdcpp_last_job, multiplayer_turn_major, multiplayer_turn_minor, multiplayer_story_data_compressed, multiplayer_dataformat, multiplayer_lastactive, net_save_slots, has_vision_support, savestate_limit, mcp_lock, savedata_obj
         global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
         contlenstr = self.headers['content-length']
         content_length = 0
@@ -8446,6 +8479,7 @@ Change Mode<br>
                     if slotid >= 0 and slotid < net_save_slots:  # we shall provide some fixed network save slots
                         saveneeded = False
                         saveaccepted = True
+                        newstory = None
                         if storybody and storybody!="":
                             storybody = str(storybody)
                             if len(storybody) > (1024*1024*16): #limit each story to 16mb
@@ -8453,18 +8487,28 @@ Change Mode<br>
                                 response_code = 400
                                 response_body = (json.dumps({"success":False, "error":"Story is too long!"}).encode())
                             else:
-                                savedata_obj[str(slotid)] = {"title":title, "format":dataformat, "data":storybody}
+                                newstory = {"title":title, "format":dataformat, "data":storybody}
                                 saveneeded = True
                         else: #erasing existing story
                             if str(slotid) in savedata_obj:
-                                savedata_obj.pop(str(slotid))
                                 saveneeded = True
                         if saveneeded:
                             if args.savedatafile and os.path.exists(os.path.abspath(args.savedatafile)):
-                                with open(os.path.abspath(args.savedatafile), 'w+', encoding='utf-8', errors='ignore') as f:
-                                    json.dump(savedata_obj, f)
+                                try:
+                                    with savedata_lock: #memory is only updated once the file was written
+                                        newdata = dict(savedata_obj)
+                                        if newstory:
+                                            newdata[str(slotid)] = newstory
+                                        else:
+                                            newdata.pop(str(slotid), None)
+                                        write_json_atomic(os.path.abspath(args.savedatafile), newdata)
+                                        savedata_obj = newdata
                                     print(f"Data was saved to slot {slotid}")
-                                response_body = (json.dumps({"success":True, "error":""}).encode())
+                                    response_body = (json.dumps({"success":True, "error":""}).encode())
+                                except OSError as e:
+                                    utfprint("Remote Save Story - Write Error: " + str(e))
+                                    response_code = 500
+                                    response_body = (json.dumps({"success":False, "error":"Failed to write SaveDataFile!"}).encode())
                             else:
                                 response_code = 400
                                 response_body = (json.dumps({"success":False, "error":"SaveDataFile is missing!"}).encode())
