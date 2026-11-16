@@ -2285,7 +2285,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
      //special case, is img2img and denoise strength is 0 and steps is 1, do a passthru
     bool is_passthrough = (sd_params->sample_steps<=1 && sd_params->strength<=0 && is_img2img && vid_req_frames<=1 && extra_image_data.size()==0);
     sd_audio_t* generated_audio = nullptr;
-    sd_audio_t input_audio = {0, 0, 0, nullptr};
 
     if(is_vid_model)
     {
@@ -2307,13 +2306,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         vid_gen_params.vae_tiling_params = params.vae_tiling_params;
         vid_gen_params.loras = params.loras;
         vid_gen_params.lora_count = params.lora_count;
-        if (!info.is_minimaxh3 && ref_audio_data.size()>0) {
-            input_audio = load_audio_from_b64(ref_audio_data[0]);
-            if (input_audio.data == nullptr) {
-                return sd_generation.error("KCPP SD: load audio from base64 failed!");
-            }
-            vid_gen_params.input_audio = &input_audio;
-        }
         if (info.is_minimaxh3 && reference_imgs.size() > 0) {
             vid_gen_params.ref_images = reference_imgs.data();
             vid_gen_params.ref_images_count = (int)reference_imgs.size();
@@ -2355,7 +2347,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             << "\nINIT_IMGS:" << ((vid_gen_params.init_image.data ? 1 : 0) + (vid_gen_params.end_image.data ? 1 : 0))
             << "\nREF_IMGS:" << vid_gen_params.ref_images_count
             << "\nREF_AUDIOS:" << vid_gen_params.ref_audios_count
-            << "\nINPUT_AUDIO:" << (vid_gen_params.input_audio ? "true" : "false")
             << "\n\n";
             printf("%s", ss.str().c_str());
         }
@@ -2476,10 +2467,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     if (!is_passthrough && (is_vid_model ? vid_result == nullptr : img_result == nullptr)) {
-        if (input_audio.data) {
-            free(input_audio.data);
-            input_audio.data = nullptr;
-        }
         if (info.is_qwenimg && params.ref_images_count > 0) {
             printf("\nKCPP SD: If using Qwen Image 2.1, editing requires Qwen3-VL vision mmproj!\n");
         }
@@ -2633,11 +2620,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             free_sd_image_generation_result(img_result);
             img_result = nullptr;
         }
-    }
-
-    if (input_audio.data) {
-        free(input_audio.data);
-        input_audio.data = nullptr;
     }
 
     total_img_gens += 1;
