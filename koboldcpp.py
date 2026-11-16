@@ -1339,8 +1339,10 @@ def write_json_atomic(path, obj): #writes to a temp file then swaps it in, so a 
                 except OSError: #the target cannot be replaced, e.g. a bind-mounted single file
                     break
         finally:
-            if os.path.exists(tmp):
+            try:
                 os.remove(tmp)
+            except OSError: #already swapped in, or locked by another program on windows. the windows case is untested, we have no windows machine
+                pass
     print(f"Could not swap in '{path}' atomically, writing it in place instead.")
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(obj, f)

@@ -259,6 +259,16 @@ def write_json_atomic(*args, **kwargs):
     >>> os.replace = real_replace
     >>> json.load(open(p)), os.listdir(d)
     ({}, ['save.jsondb'])
+
+    a temp file that cannot be deleted, as when locked on windows, does not stop the save
+    >>> real_remove = os.remove
+    >>> def locked(*args): raise PermissionError(13, 'Access is denied')
+    >>> os.replace = os.remove = locked
+    >>> write_json_atomic(p, {'1': 1}) # doctest: +ELLIPSIS
+    Could not swap in '...save.jsondb' atomically, writing it in place instead.
+    >>> os.replace, os.remove = real_replace, real_remove
+    >>> json.load(open(p)), sorted(os.listdir(d))
+    ({'1': 1}, ['save.jsondb', 'save.jsondb.tmp'])
     >>> shutil.rmtree(d)
     '''
     return koboldcpp.write_json_atomic(*args, **kwargs)
