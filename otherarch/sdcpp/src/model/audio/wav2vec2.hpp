@@ -67,7 +67,7 @@ namespace Wav2Vec2 {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             auto conv = std::dynamic_pointer_cast<Conv1d>(blocks["conv"]);
             x         = conv->forward(ctx, x);
-            return ggml_gelu_erf_inplace(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, x));
+            return ggml_gelu_erf_inplace(ctx->ggml_ctx, ggml_ext_cont(ctx, x));
         }
     };
 
@@ -85,7 +85,7 @@ namespace Wav2Vec2 {
             x = ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3);
             x = layer_norm->forward(ctx, x);
             x = ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3);
-            return ggml_gelu_erf_inplace(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, x));
+            return ggml_gelu_erf_inplace(ctx->ggml_ctx, ggml_ext_cont(ctx, x));
         }
     };
 
@@ -103,7 +103,7 @@ namespace Wav2Vec2 {
             x = ggml_reshape_4d(ctx->ggml_ctx, x, x->ne[0], 1, x->ne[1], x->ne[2]);
             x = layer_norm->forward(ctx, x);
             x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0], x->ne[2], x->ne[3]);
-            return ggml_gelu_erf_inplace(ctx->ggml_ctx, ggml_ext_cont(ctx->ggml_ctx, x));
+            return ggml_gelu_erf_inplace(ctx->ggml_ctx, ggml_ext_cont(ctx, x));
         }
     };
 
@@ -198,7 +198,7 @@ namespace Wav2Vec2 {
             auto w = weight(ctx);
             auto b = params.count("conv.bias") > 0 ? params["conv.bias"] : nullptr;
             x      = ggml_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
-            x      = ggml_ext_conv_1d(ctx->ggml_ctx, x, w, b, 1, kernel_size_ / 2, 1, groups_, true);
+            x      = ggml_ext_conv_1d(ctx, x, w, b, 1, kernel_size_ / 2, 1, groups_, true);
             // Apply GELU out of place before cropping to keep graph buffer reuse safe.
             x = ggml_gelu_erf(ctx->ggml_ctx, x);
             x = ggml_view_3d(ctx->ggml_ctx, x, x->ne[0] - 1, x->ne[1], x->ne[2], x->nb[1], x->nb[2], 0);
@@ -216,7 +216,7 @@ namespace Wav2Vec2 {
             auto intermediate_dense = std::dynamic_pointer_cast<Linear>(blocks["intermediate_dense"]);
             auto output_dense       = std::dynamic_pointer_cast<Linear>(blocks["output_dense"]);
             x                       = intermediate_dense->forward(ctx, x);
-            x                       = ggml_ext_gelu(ctx->ggml_ctx, x, true);
+            x                       = ggml_ext_gelu(ctx, x, true);
             x                       = output_dense->forward(ctx, x);
             return x;
         }

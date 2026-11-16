@@ -141,7 +141,7 @@ namespace IPAdapter {
                 }
                 auto proj_in_iter = tensor_storage_map.find(prefix + ".image_proj.proj_in.weight");
                 if (proj_in_iter != tensor_storage_map.end()) {
-                    embed_dim = proj_in_iter->second.ne[0];
+                    embed_dim = proj_in_iter->second.logical_ne0();
                 }
                 auto proj_out_iter = tensor_storage_map.find(prefix + ".image_proj.proj_out.weight");
                 if (proj_out_iter != tensor_storage_map.end()) {
@@ -168,7 +168,7 @@ namespace IPAdapter {
                 }
                 auto proj_iter = tensor_storage_map.find(prefix + ".image_proj.proj.weight");
                 if (proj_iter != tensor_storage_map.end()) {
-                    clip_dim = proj_iter->second.ne[0];
+                    clip_dim = proj_iter->second.logical_ne0();
                     out_dim  = proj_iter->second.ne[1];
                 }
                 num_tokens = out_dim / ctx_dim;

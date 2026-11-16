@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_graph_cut.h"
@@ -72,12 +73,13 @@ namespace Ideogram4 {
         }
     };
 
-    __STATIC_INLINE__ ggml_tensor* timestep_embedding_sin_cos(ggml_context* ctx,
+    __STATIC_INLINE__ ggml_tensor* timestep_embedding_sin_cos(GGMLRunnerContext* runner_ctx,
                                                               ggml_tensor* timesteps,
                                                               int dim) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(dim % 2 == 0);
-        auto embedding = ggml_ext_timestep_embedding(ctx, timesteps, dim, TIMESTEP_MAX_PERIOD, 10.f);
-        auto chunks    = ggml_ext_chunk(ctx, embedding, 2, 0);
+        auto embedding = ggml_ext_timestep_embedding(runner_ctx, timesteps, dim, TIMESTEP_MAX_PERIOD, 10.f);
+        auto chunks    = ggml_ext_chunk(runner_ctx, embedding, 2, 0);
         return ggml_concat(ctx, chunks[1], chunks[0], 0);
     }
 
@@ -102,12 +104,15 @@ namespace Ideogram4 {
         return ggml_reshape_3d(ctx, x, hidden_size * LLM_HIDDEN_STATE_LAYERS, token_count, batch_count);
     }
 
-    __STATIC_INLINE__ ggml_tensor* modulate(ggml_context* ctx, ggml_tensor* x, ggml_tensor* scale) {
-        scale = to_token_modulation(ctx, scale);
-        return ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+    __STATIC_INLINE__ ggml_tensor* modulate(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* scale) {
+        scale = to_token_modulation(ctx->ggml_ctx, scale);
+        return ggml_ext_modulate(ctx, x, nullptr, scale);
     }
 
-    __STATIC_INLINE__ ggml_tensor* patchify(ggml_context* ctx, ggml_tensor* x, const Ideogram4Config& config) {
+    __STATIC_INLINE__ ggml_tensor* patchify(GGMLRunnerContext* runner_ctx,
+                                            ggml_tensor* x,
+                                            const Ideogram4Config& config) {
+        auto ctx = runner_ctx->ggml_ctx;
         // x: [N, 128, H, W] with channel order [ae, ph, pw].
         // return: [N, H*W, 128] with token channel order [ph, pw, ae].
         const int64_t W = x->ne[0];
@@ -125,11 +130,12 @@ namespace Ideogram4 {
         return x;
     }
 
-    __STATIC_INLINE__ ggml_tensor* unpatchify(ggml_context* ctx,
+    __STATIC_INLINE__ ggml_tensor* unpatchify(GGMLRunnerContext* runner_ctx,
                                               ggml_tensor* x,
                                               int64_t H,
                                               int64_t W,
                                               const Ideogram4Config& config) {
+        auto ctx        = runner_ctx->ggml_ctx;
         const int64_t C = x->ne[0];
         const int64_t N = x->ne[2];
 
@@ -207,19 +213,20 @@ namespace Ideogram4 {
                              ggml_tensor* x,
                              ggml_tensor* pe,
                              ggml_tensor* mask = nullptr) {
-            int64_t n_token = x->ne[1];
-            int64_t N       = x->ne[2];
-
             auto qkv_proj = std::dynamic_pointer_cast<Linear>(blocks["qkv"]);
             auto norm_q   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_q"]);
             auto norm_k   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
             auto out_proj = std::dynamic_pointer_cast<Linear>(blocks["o"]);
 
-            auto qkv     = qkv_proj->forward(ctx, x);
-            auto qkv_vec = split_qkv(ctx->ggml_ctx, qkv);
-            auto q       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[0], head_dim, num_heads, n_token, N);
-            auto k       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[1], head_dim, num_heads, n_token, N);
-            auto v       = ggml_reshape_4d(ctx->ggml_ctx, qkv_vec[2], head_dim, num_heads, n_token, N);
+            auto qkv       = qkv_proj->forward(ctx, x);
+            auto qkv_dim   = qkv->ne[0] / 3;
+            auto split_qkv = [&](int i) {
+                return ggml_view_4d(ctx->ggml_ctx, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+            auto q = split_qkv(0);
+            auto k = split_qkv(1);
+            auto v = split_qkv(2);
 
             q = norm_q->forward(ctx, q);
             k = norm_k->forward(ctx, k);
@@ -243,9 +250,9 @@ namespace Ideogram4 {
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
 
-            auto x1 = ggml_silu(ctx->ggml_ctx, w1->forward(ctx, x));
+            auto x1 = w1->forward(ctx, x);
             auto x3 = w3->forward(ctx, x);
-            x       = ggml_mul(ctx->ggml_ctx, x1, x3);
+            x       = ggml_swiglu_split(ctx->ggml_ctx, x1, x3);
             x       = w2->forward(ctx, x);
             return x;
         }
@@ -277,20 +284,20 @@ namespace Ideogram4 {
             auto adaln_modulation = std::dynamic_pointer_cast<Linear>(blocks["adaln_modulation"]);
 
             auto mod       = adaln_modulation->forward(ctx, adaln_input);
-            auto mods      = ggml_ext_chunk(ctx->ggml_ctx, mod, 4, 0);
+            auto mods      = ggml_ext_chunk(ctx, mod, 4, 0);
             auto scale_msa = mods[0];
             auto gate_msa  = to_token_modulation(ctx->ggml_ctx, ggml_tanh(ctx->ggml_ctx, mods[1]));
             auto scale_mlp = mods[2];
             auto gate_mlp  = to_token_modulation(ctx->ggml_ctx, ggml_tanh(ctx->ggml_ctx, mods[3]));
 
             auto attn_out = attention_norm1->forward(ctx, x);
-            attn_out      = modulate(ctx->ggml_ctx, attn_out, scale_msa);
+            attn_out      = modulate(ctx, attn_out, scale_msa);
             attn_out      = attention->forward(ctx, attn_out, pe, mask);
             attn_out      = attention_norm2->forward(ctx, attn_out);
             x             = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, attn_out, gate_msa));
 
             auto ffn_out = ffn_norm1->forward(ctx, x);
-            ffn_out      = modulate(ctx->ggml_ctx, ffn_out, scale_mlp);
+            ffn_out      = modulate(ctx, ffn_out, scale_mlp);
             ffn_out      = feed_forward->forward(ctx, ffn_out);
             ffn_out      = ffn_norm2->forward(ctx, ffn_out);
             x            = ggml_add(ctx->ggml_ctx, x, ggml_mul(ctx->ggml_ctx, ffn_out, gate_mlp));
@@ -314,7 +321,7 @@ namespace Ideogram4 {
             auto mlp_in  = std::dynamic_pointer_cast<Linear>(blocks["mlp_in"]);
             auto mlp_out = std::dynamic_pointer_cast<Linear>(blocks["mlp_out"]);
 
-            x = timestep_embedding_sin_cos(ctx->ggml_ctx, x, static_cast<int>(dim));
+            x = timestep_embedding_sin_cos(ctx, x, static_cast<int>(dim));
             x = ggml_silu(ctx->ggml_ctx, mlp_in->forward(ctx, x));
             x = mlp_out->forward(ctx, x);
             return x;
@@ -336,7 +343,7 @@ namespace Ideogram4 {
 
             auto scale = adaln_modulation->forward(ctx, ggml_silu(ctx->ggml_ctx, c));
             x          = norm_final->forward(ctx, x);
-            x          = modulate(ctx->ggml_ctx, x, scale);
+            x          = modulate(ctx, x, scale);
             x          = linear->forward(ctx, x);
             return x;
         }
@@ -382,7 +389,7 @@ namespace Ideogram4 {
             auto embed_image_indicator = std::dynamic_pointer_cast<Embedding>(blocks["embed_image_indicator"]);
             auto final_layer           = std::dynamic_pointer_cast<Ideogram4FinalLayer>(blocks["final_layer"]);
 
-            auto img = patchify(ctx->ggml_ctx, x, config);
+            auto img = patchify(ctx, x, config);
             img      = input_proj->forward(ctx, img);
 
             ggml_tensor* h      = img;
@@ -412,16 +419,18 @@ namespace Ideogram4 {
 
             h = final_layer->forward(ctx, h, adaln_input);
             if (context_len > 0) {
-                h = ggml_ext_slice(ctx->ggml_ctx, h, 1, context_len, h->ne[1]);
+                h = ggml_ext_slice(ctx, h, 1, context_len, h->ne[1]);
             }
 
-            h = unpatchify(ctx->ggml_ctx, h, H, W, config);
-            h = ggml_ext_scale(ctx->ggml_ctx, h, -1.f);
+            h = unpatchify(ctx, h, H, W, config);
+            h = ggml_ext_scale(ctx, h, -1.f);
             return h;
         }
     };
 
     class Ideogram4Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
+
     protected:
         bool should_use_uncond_model(const DiffusionParams& diffusion_params) const {
             return has_uncond_model &&
@@ -436,7 +445,6 @@ namespace Ideogram4 {
         Ideogram4Transformer uncond_model;
         bool has_uncond_model = false;
         std::string uncond_prefix;
-        std::vector<float> pe_vec;
         std::vector<int32_t> image_indicator_vec;
 
         Ideogram4Runner(ggml_backend_t backend,
@@ -496,15 +504,19 @@ namespace Ideogram4 {
             int64_t head_dim = config.emb_dim / config.num_heads;
 
             auto runner_ctx = get_context();
-            pe_vec          = finish_rope_pe(gen_ideogram4_pe(static_cast<int>(grid_h),
+            sd::PECacheKey pe_key("ideogram4.pe");
+            pe_key.add(grid_h).add(grid_w).add(x->ne[3]).add(context_len).add(head_dim).add(pos_len).add(config.rope_theta);
+            pe_key.add(config.mrope_section).add(circular_x_enabled).add(circular_y_enabled);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(gen_ideogram4_pe(static_cast<int>(grid_h),
                                                               static_cast<int>(grid_w),
                                                               static_cast<int>(x->ne[3]),
                                                               static_cast<int>(context_len),
                                                               static_cast<int>(head_dim),
                                                               static_cast<int>(config.rope_theta),
                                                               config.mrope_section));
-            auto pe         = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, head_dim / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+                return sd::Tensor<float>({2, 2, head_dim / 2, pos_len}, std::move(pe_vec));
+            }));
 
             image_indicator_vec.assign(static_cast<size_t>(pos_len), 1);
             for (int64_t i = 0; i < context_len; ++i) {

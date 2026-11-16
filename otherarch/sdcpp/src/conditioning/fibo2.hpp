@@ -132,7 +132,12 @@ struct Fibo2Conditioner : public LLMEmbedder {
         return result;
     }
 
-    SDCondition get_learned_condition(int n_threads, const ConditionerParams& p) override {
+    SDCondition get_learned_condition(int n_threads, const ConditionerParams& params) override {
+        auto p = params;
+        sd::PromptInputTemplate input_template(p.prompt_input);
+        if (p.prompt_input != nullptr) {
+            p.text = input_template.text;
+        }
         int image_count = p.ref_images ? static_cast<int>(p.ref_images->size()) : 0;
         if (image_count && !llm->enable_vision) {
             LOG_ERROR("Fibo 2.0 editing requires vision weights");
@@ -169,7 +174,8 @@ struct Fibo2Conditioner : public LLMEmbedder {
             }
         }
         const std::set<int> layers = {5, 7, 9, 11, 13, 16, 18, 20, 22, 24, 27, 29, 31, 33, 35};
-        auto states                = encode_prompt(n_threads, prompt, {0, 0}, 0, 0, images, layers, 0, false, 4096, deepstack, grids);
+        auto states                = encode_prompt(n_threads, prompt, {0, 0}, 0, 0, images, layers, 0, false, 4096, deepstack, grids,
+                                                   "", nullptr, p.prompt_input == nullptr ? nullptr : &input_template);
         if (states.empty()) {
             return {};
         }

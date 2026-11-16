@@ -27,7 +27,7 @@ namespace WAN {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             // Replicate the first sample for causal left padding.
             if (kernel_size_ > 1) {
-                auto first = ggml_ext_slice(ctx->ggml_ctx, x, 0, 0, 1);
+                auto first = ggml_ext_slice(ctx, x, 0, 0, 1);
                 for (int i = 0; i < kernel_size_ - 1; i++) {
                     x = ggml_concat(ctx->ggml_ctx, first, x, 0);
                 }
@@ -57,7 +57,7 @@ namespace WAN {
             x = std::dynamic_pointer_cast<LayerNorm>(blocks[norm_key])->forward(ctx, x);
             x = ggml_silu(ctx->ggml_ctx, x);
             if (to_conv_layout) {
-                x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+                x = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
             }
             return x;
         }
@@ -87,11 +87,11 @@ namespace WAN {
             auto norm1 = std::dynamic_pointer_cast<LayerNorm>(blocks["norm1"]);
             std::vector<ggml_tensor*> tokens;
             // Each token group is normalized independently over channels.
-            for (auto& group : ggml_ext_chunk(ctx->ggml_ctx, local, num_token_, 1)) {
+            for (auto& group : ggml_ext_chunk(ctx, local, num_token_, 1)) {
                 ggml_tensor* s = ggml_permute(ctx->ggml_ctx, group, 1, 0, 2, 3);
                 s              = norm1->forward(ctx, s);
                 s              = ggml_silu(ctx->ggml_ctx, s);
-                s              = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, s, 1, 0, 2, 3));
+                s              = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, s, 1, 0, 2, 3));
                 s              = conv_norm_silu(ctx, s, "conv2", "norm2", true);
                 s              = conv_norm_silu(ctx, s, "conv3", "norm3", false);
                 tokens.push_back(ggml_reshape_3d(ctx->ggml_ctx, s, s->ne[0], 1, s->ne[1]));
@@ -99,7 +99,7 @@ namespace WAN {
             auto padding = ggml_reshape_3d(ctx->ggml_ctx, params["padding_tokens"], hidden_dim_, 1, 1);
             padding      = ggml_repeat(ctx->ggml_ctx, padding, tokens[0]);
             tokens.push_back(padding);
-            ggml_tensor* local_out = ggml_ext_vec_concat(ctx->ggml_ctx, tokens, 1);
+            ggml_tensor* local_out = ggml_ext_vec_concat(ctx, tokens, 1);
 
             if (!need_global_) {
                 return {local_out, nullptr};
@@ -141,10 +141,10 @@ namespace WAN {
             auto x       = ggml_mul(ctx->ggml_ctx, features, ggml_reshape_3d(ctx->ggml_ctx, weights, 1, 1, num_layers_));
             x            = ggml_div(ctx->ggml_ctx, x, ggml_sum(ctx->ggml_ctx, weights));
             // Move the layer axis to ggml dimension 0 for reduction.
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));
+            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));
             x = ggml_sum_rows(ctx->ggml_ctx, x);
             x = ggml_reshape_2d(ctx->ggml_ctx, x, x->ne[1], x->ne[2]);
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 0, 2, 3));
             return std::dynamic_pointer_cast<WanMotionEncoder>(blocks["encoder"])->forward(ctx, x);
         }
     };
@@ -187,12 +187,12 @@ namespace WAN {
 
             auto temb  = ggml_silu(ctx->ggml_ctx, audio_global);
             temb       = adain_linear->forward(ctx, temb);
-            auto shift = ggml_ext_slice(ctx->ggml_ctx, temb, 0, 0, dim_);
-            auto scale = ggml_ext_slice(ctx->ggml_ctx, temb, 0, dim_, dim_ * 2);
+            auto shift = ggml_ext_slice(ctx, temb, 0, 0, dim_);
+            auto scale = ggml_ext_slice(ctx, temb, 0, dim_, dim_ * 2);
             shift      = ggml_reshape_3d(ctx->ggml_ctx, shift, dim_, 1, T);
             scale      = ggml_reshape_3d(ctx->ggml_ctx, scale, dim_, 1, T);
 
-            auto x_vid = ggml_ext_slice(ctx->ggml_ctx, x, 1, 0, seq_len);
+            auto x_vid = ggml_ext_slice(ctx, x, 1, 0, seq_len);
             auto h     = ggml_reshape_3d(ctx->ggml_ctx, x_vid, dim_, n_tok, T);
             h          = adain_norm->forward(ctx, h);
             h          = ggml_add(ctx->ggml_ctx, h, ggml_mul(ctx->ggml_ctx, h, scale));
@@ -203,7 +203,7 @@ namespace WAN {
 
             auto x_head = ggml_add(ctx->ggml_ctx, x_vid, res);
             if (seq_len < n_token) {
-                auto x_tail = ggml_ext_slice(ctx->ggml_ctx, x, 1, seq_len, n_token);
+                auto x_tail = ggml_ext_slice(ctx, x, 1, seq_len, n_token);
                 return ggml_concat(ctx->ggml_ctx, x_head, x_tail, 1);
             }
             return x_head;

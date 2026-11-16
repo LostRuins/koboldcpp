@@ -4,11 +4,46 @@
 
 #include "core/ggml_extend.h"
 #include "core/ggml_extend_backend.h"
+#include "core/ggml_runner.h"
 
-ggml_tensor* ggml_ext_merge_lora(ggml_context* ctx,
+ggml_tensor* ggml_ext_mul_n_mode(GGMLRunnerContext* runner_ctx, ggml_tensor* a, ggml_tensor* b, int mode) {
+    auto ctx = runner_ctx->ggml_ctx;
+    // reshape A
+    // swap 0th and nth axis
+    a           = ggml_cont(ctx, ggml_permute(ctx, a, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0));
+    int64_t ne1 = a->ne[1];
+    int64_t ne2 = a->ne[2];
+    int64_t ne3 = a->ne[3];
+    // make 2D
+    a = ggml_cont(ctx, ggml_reshape_2d(ctx, a, a->ne[0], (ne3 * ne2 * ne1)));
+
+    ggml_tensor* result = ggml_cont(ctx, ggml_transpose(ctx, ggml_mul_mat(ctx, a, b)));
+
+    // reshape output (same shape as a after permutation except first dim)
+    result = ggml_reshape_4d(ctx, result, result->ne[0], ne1, ne2, ne3);
+    // swap back 0th and nth axis
+    result = ggml_permute(ctx, result, mode, mode != 1 ? 1 : 0, mode != 2 ? 2 : 0, mode != 3 ? 3 : 0);
+    return result;
+}
+
+ggml_tensor* ggml_ext_kronecker(GGMLRunnerContext* runner_ctx, ggml_tensor* a, ggml_tensor* b) {
+    auto ctx = runner_ctx->ggml_ctx;
+    return ggml_mul(ctx,
+                    ggml_interpolate(ctx,
+                                     a,
+                                     a->ne[0] * b->ne[0],
+                                     a->ne[1] * b->ne[1],
+                                     a->ne[2] * b->ne[2],
+                                     a->ne[3] * b->ne[3],
+                                     GGML_SCALE_MODE_NEAREST),
+                    b);
+}
+
+ggml_tensor* ggml_ext_merge_lora(GGMLRunnerContext* runner_ctx,
                                  ggml_tensor* lora_down,
                                  ggml_tensor* lora_up,
                                  ggml_tensor* lora_mid) {
+    auto ctx = runner_ctx->ggml_ctx;
     ggml_tensor* updown;
     // flat lora tensors to multiply it
     // ggml_n_dims drops the output dimension when a linear layer has one output.
@@ -32,25 +67,25 @@ ggml_tensor* ggml_ext_merge_lora(ggml_context* ctx,
         // lora_down has shape (Rank, In,  1,    1)
         // lora_up   has shape (Rank, Out, 1,    1)
         // conv layer shape is (3,    3,   Out,  In)
-        updown = ggml_ext_mul_n_mode(ctx, ggml_ext_mul_n_mode(ctx, lora_mid, lora_down, 3), lora_up, 2);
+        updown = ggml_ext_mul_n_mode(runner_ctx, ggml_ext_mul_n_mode(runner_ctx, lora_mid, lora_down, 3), lora_up, 2);
         updown = ggml_cont(ctx, updown);
     }
     return updown;
 }
 
-ggml_tensor* ggml_ext_lokr_forward(
-    ggml_context* ctx,
-    ggml_backend_t backend,
-    ggml_tensor* h,    // Input: [q, batch] or [W, H, q, batch]
-    ggml_tensor* w1,   // Outer C (Full rank)
-    ggml_tensor* w1a,  // Outer A (Low rank part 1)
-    ggml_tensor* w1b,  // Outer B (Low rank part 2)
-    ggml_tensor* w2,   // Inner BA (Full rank)
-    ggml_tensor* w2a,  // Inner A (Low rank part 1)
-    ggml_tensor* w2b,  // Inner B (Low rank part 2)
-    bool is_conv,
-    WeightAdapter::ForwardParams::conv2d_params_t conv_params,
-    float scale) {
+ggml_tensor* ggml_ext_lokr_forward(GGMLRunnerContext* runner_ctx,
+                                   ggml_tensor* h,    // Input: [q, batch] or [W, H, q, batch]
+                                   ggml_tensor* w1,   // Outer C (Full rank)
+                                   ggml_tensor* w1a,  // Outer A (Low rank part 1)
+                                   ggml_tensor* w1b,  // Outer B (Low rank part 2)
+                                   ggml_tensor* w2,   // Inner BA (Full rank)
+                                   ggml_tensor* w2a,  // Inner A (Low rank part 1)
+                                   ggml_tensor* w2b,  // Inner B (Low rank part 2)
+                                   bool is_conv,
+                                   WeightAdapter::ForwardParams::conv2d_params_t conv_params,
+                                   float scale) {
+    auto ctx     = runner_ctx->ggml_ctx;
+    auto backend = runner_ctx->backend;
     GGML_ASSERT((w1 != nullptr || (w1a != nullptr && w1b != nullptr)));
     GGML_ASSERT((w2 != nullptr || (w2a != nullptr && w2b != nullptr)));
 
@@ -73,7 +108,6 @@ ggml_tensor* ggml_ext_lokr_forward(
 
         if (sd_backend_is(backend, "Vulkan")) {
             if (batch > 1) {
-                // no access to backend here, worst case is slightly worse perfs for other backends when built alongside Vulkan backend
                 int max_batch    = 65535;
                 int max_batch_uq = max_batch / uq;
                 merge_batch_uq   = 1;
@@ -121,14 +155,14 @@ ggml_tensor* ggml_ext_lokr_forward(
 
         ggml_tensor* hc  = ggml_transpose(ctx, hc_t);
         ggml_tensor* out = ggml_reshape_2d(ctx, ggml_cont(ctx, hc), up * vp, batch);
-        return ggml_ext_scale(ctx, out, scale);
+        return ggml_ext_scale(runner_ctx, out, scale);
     } else {
         int batch = (int)h->ne[3];
         // 1. Reshape input: [W, H, vq*uq, batch] -> [W, H, vq, uq * batch]
         ggml_tensor* h_split = ggml_reshape_4d(ctx, h, h->ne[0], h->ne[1], vq, uq * batch);
 
         if (w2 != nullptr) {
-            hb = ggml_ext_conv_2d(ctx, h_split, w2, nullptr,
+            hb = ggml_ext_conv_2d(runner_ctx, h_split, w2, nullptr,
                                   conv_params.s0,
                                   conv_params.s1,
                                   conv_params.p0,
@@ -154,7 +188,7 @@ ggml_tensor* ggml_ext_lokr_forward(
                 GGML_ASSERT(k * k * h_split->ne[2] == a->ne[2]);
                 a = ggml_reshape_4d(ctx, a, a->ne[0] * k, a->ne[1] * k, a->ne[2] / (k * k), a->ne[3]);
             }
-            ggml_tensor* ha = ggml_ext_conv_2d(ctx, h_split, a, nullptr,
+            ggml_tensor* ha = ggml_ext_conv_2d(runner_ctx, h_split, a, nullptr,
                                                conv_params.s0,
                                                conv_params.s1,
                                                conv_params.p0,
@@ -167,8 +201,7 @@ ggml_tensor* ggml_ext_lokr_forward(
                                                conv_params.scale);
 
             // not supporting lora_mid here
-            hb = ggml_ext_conv_2d(ctx,
-                                  ha,
+            hb = ggml_ext_conv_2d(runner_ctx, ha,
                                   b,
                                   nullptr,
                                   1,
@@ -204,6 +237,6 @@ ggml_tensor* ggml_ext_lokr_forward(
         ggml_tensor* hc = ggml_transpose(ctx, hc_t);
         // ungroup
         ggml_tensor* out = ggml_reshape_4d(ctx, ggml_cont(ctx, hc), w_out, h_out, up * vp, batch);
-        return ggml_ext_scale(ctx, out, scale);
+        return ggml_ext_scale(runner_ctx, out, scale);
     }
 }

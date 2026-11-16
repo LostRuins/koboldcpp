@@ -4,6 +4,7 @@
 #include <cinttypes>
 #include <memory>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "model/common/block.hpp"
 #include "model/common/rope.hpp"
@@ -35,13 +36,13 @@ namespace Lens {
                     continue;
                 }
                 if (ends_with(name, "img_in.weight") && tensor_storage.n_dims == 2) {
-                    config.in_channels = tensor_storage.ne[0];
+                    config.in_channels = tensor_storage.logical_ne0();
                     int64_t inner_dim  = tensor_storage.ne[1];
                     if (config.attention_head_dim > 0) {
                         config.num_attention_heads = inner_dim / config.attention_head_dim;
                     }
                 } else if (ends_with(name, "txt_in.weight") && tensor_storage.n_dims == 2) {
-                    config.selected_layer_count = static_cast<int>(tensor_storage.ne[0] / config.joint_attention_dim);
+                    config.selected_layer_count = static_cast<int>(tensor_storage.logical_ne0() / config.joint_attention_dim);
                 } else if (ends_with(name, "proj_out.weight") && tensor_storage.n_dims == 2) {
                     int64_t patch_area  = config.patch_size * config.patch_size;
                     config.out_channels = tensor_storage.ne[1] / patch_area;
@@ -86,7 +87,7 @@ namespace Lens {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* timesteps) {
             auto timestep_embedder = std::dynamic_pointer_cast<Qwen::TimestepEmbedding>(blocks["timestep_embedder"]);
-            auto timesteps_proj    = ggml_ext_timestep_embedding(ctx->ggml_ctx, timesteps, 256, 10000, 1000.f);
+            auto timesteps_proj    = ggml_ext_timestep_embedding(ctx, timesteps, 256, 10000, 1000.f);
             return timestep_embedder->forward(ctx, timesteps_proj);
         }
     };
@@ -103,9 +104,9 @@ namespace Lens {
             auto w2 = std::dynamic_pointer_cast<Linear>(blocks["w2"]);
             auto w3 = std::dynamic_pointer_cast<Linear>(blocks["w3"]);
 
-            auto gate = ggml_silu(ctx->ggml_ctx, w1->forward(ctx, x));
+            auto gate = w1->forward(ctx, x);
             auto up   = w3->forward(ctx, x);
-            x         = ggml_mul(ctx->ggml_ctx, gate, up);
+            x         = ggml_swiglu_split(ctx->ggml_ctx, gate, up);
             return w2->forward(ctx, x);
         }
     };
@@ -150,22 +151,24 @@ namespace Lens {
             int64_t N       = img->ne[2];
             int64_t inner   = dim_head * num_heads;
 
-            auto img_qkv_vec = split_qkv(ctx->ggml_ctx, img_qkv->forward(ctx, img));
-            auto txt_qkv_vec = split_qkv(ctx->ggml_ctx, txt_qkv->forward(ctx, txt));
+            auto img_qkv_f = img_qkv->forward(ctx, img);
+            auto txt_qkv_f = txt_qkv->forward(ctx, txt);
+            auto split_qkv = [&](ggml_tensor* qkv, int i) {
+                int64_t qkv_dim = qkv->ne[0] / 3;
+                return ggml_view_4d(ctx->ggml_ctx, qkv, dim_head, qkv_dim / dim_head, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    dim_head * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+            auto img_q = split_qkv(img_qkv_f, 0);
+            auto img_k = split_qkv(img_qkv_f, 1);
+            auto img_v = split_qkv(img_qkv_f, 2);
+            img_q      = norm_q->forward(ctx, img_q);
+            img_k      = norm_k->forward(ctx, img_k);
 
-            auto img_q = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[0], dim_head, num_heads, n_img, N);
-            auto img_k = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[1], dim_head, num_heads, n_img, N);
-            auto img_v = ggml_reshape_4d(ctx->ggml_ctx, img_qkv_vec[2], dim_head, num_heads, n_img, N);
-
-            img_q = norm_q->forward(ctx, img_q);
-            img_k = norm_k->forward(ctx, img_k);
-
-            auto txt_q = ggml_reshape_4d(ctx->ggml_ctx, txt_qkv_vec[0], dim_head, num_heads, n_txt, N);
-            auto txt_k = ggml_reshape_4d(ctx->ggml_ctx, txt_qkv_vec[1], dim_head, num_heads, n_txt, N);
-            auto txt_v = ggml_reshape_4d(ctx->ggml_ctx, txt_qkv_vec[2], dim_head, num_heads, n_txt, N);
-
-            txt_q = norm_add_q->forward(ctx, txt_q);
-            txt_k = norm_add_k->forward(ctx, txt_k);
+            auto txt_q = split_qkv(txt_qkv_f, 0);
+            auto txt_k = split_qkv(txt_qkv_f, 1);
+            auto txt_v = split_qkv(txt_qkv_f, 2);
+            txt_q      = norm_add_q->forward(ctx, txt_q);
+            txt_k      = norm_add_k->forward(ctx, txt_k);
 
             auto q = ggml_concat(ctx->ggml_ctx, img_q, txt_q, 2);
             auto k = ggml_concat(ctx->ggml_ctx, img_k, txt_k, 2);
@@ -231,14 +234,14 @@ namespace Lens {
             auto temb = ggml_silu(ctx->ggml_ctx, t_emb);
 
             auto img_mod_params = img_mod_1->forward(ctx, temb);
-            auto img_mod_vec    = ggml_ext_chunk(ctx->ggml_ctx, img_mod_params, 6, 0);
+            auto img_mod_vec    = ggml_ext_chunk(ctx, img_mod_params, 6, 0);
             auto txt_mod_params = txt_mod_1->forward(ctx, temb);
-            auto txt_mod_vec    = ggml_ext_chunk(ctx->ggml_ctx, txt_mod_params, 6, 0);
+            auto txt_mod_vec    = ggml_ext_chunk(ctx, txt_mod_params, 6, 0);
 
             auto img_normed    = img_norm1->forward(ctx, img);
-            auto img_modulated = Flux::modulate(ctx->ggml_ctx, img_normed, img_mod_vec[0], img_mod_vec[1]);
+            auto img_modulated = Flux::modulate(ctx, img_normed, img_mod_vec[0], img_mod_vec[1]);
             auto txt_normed    = txt_norm1->forward(ctx, txt);
-            auto txt_modulated = Flux::modulate(ctx->ggml_ctx, txt_normed, txt_mod_vec[0], txt_mod_vec[1]);
+            auto txt_modulated = Flux::modulate(ctx, txt_normed, txt_mod_vec[0], txt_mod_vec[1]);
 
             auto [img_attn_output, txt_attn_output] = attn->forward(ctx, img_modulated, txt_modulated, pe);
 
@@ -246,9 +249,9 @@ namespace Lens {
             txt = ggml_add(ctx->ggml_ctx, txt, ggml_mul(ctx->ggml_ctx, txt_attn_output, txt_mod_vec[2]));
 
             auto img_normed2    = img_norm2->forward(ctx, img);
-            auto img_modulated2 = Flux::modulate(ctx->ggml_ctx, img_normed2, img_mod_vec[3], img_mod_vec[4]);
+            auto img_modulated2 = Flux::modulate(ctx, img_normed2, img_mod_vec[3], img_mod_vec[4]);
             auto txt_normed2    = txt_norm2->forward(ctx, txt);
-            auto txt_modulated2 = Flux::modulate(ctx->ggml_ctx, txt_normed2, txt_mod_vec[3], txt_mod_vec[4]);
+            auto txt_modulated2 = Flux::modulate(ctx, txt_normed2, txt_mod_vec[3], txt_mod_vec[4]);
 
             img = ggml_add(ctx->ggml_ctx, img, ggml_mul(ctx->ggml_ctx, img_mlp->forward(ctx, img_modulated2), img_mod_vec[5]));
             txt = ggml_add(ctx->ggml_ctx, txt, ggml_mul(ctx->ggml_ctx, txt_mlp->forward(ctx, txt_modulated2), txt_mod_vec[5]));
@@ -267,11 +270,11 @@ namespace Lens {
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* conditioning) {
             auto linear = std::dynamic_pointer_cast<Linear>(blocks["linear"]);
-            auto mods   = ggml_ext_chunk(ctx->ggml_ctx, linear->forward(ctx, ggml_silu(ctx->ggml_ctx, conditioning)), 2, 0);
+            auto mods   = ggml_ext_chunk(ctx, linear->forward(ctx, ggml_silu(ctx->ggml_ctx, conditioning)), 2, 0);
             auto scale  = mods[0];
             auto shift  = mods[1];
             x           = ggml_norm(ctx->ggml_ctx, x, eps);
-            return Flux::modulate(ctx->ggml_ctx, x, shift, scale);
+            return Flux::modulate(ctx, x, shift, scale);
         }
     };
 
@@ -318,10 +321,10 @@ namespace Lens {
             auto t_emb = time_text_embed->forward(ctx, timestep);
 
             auto img = ggml_reshape_3d(ctx->ggml_ctx, x, W * H, C, N);
-            img      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img, 1, 0, 2, 3));
+            img      = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, img, 1, 0, 2, 3));
             img      = img_in->forward(ctx, img);
 
-            std::vector<ggml_tensor*> txt_chunks = ggml_ext_chunk(ctx->ggml_ctx, context, config.selected_layer_count, 0);
+            std::vector<ggml_tensor*> txt_chunks = ggml_ext_chunk(ctx, context, config.selected_layer_count, 0);
             ggml_tensor* txt                     = nullptr;
             for (int i = 0; i < config.selected_layer_count; ++i) {
                 auto txt_norm = std::dynamic_pointer_cast<RMSNorm>(blocks["txt_norm." + std::to_string(i)]);
@@ -345,16 +348,16 @@ namespace Lens {
             img = norm_out->forward(ctx, img, t_emb);
             img = proj_out->forward(ctx, img);
 
-            auto out = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, img, 1, 0, 2, 3));
+            auto out = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, img, 1, 0, 2, 3));
             out      = ggml_reshape_4d(ctx->ggml_ctx, out, W, H, config.patch_size * config.patch_size * config.out_channels, N);
             return out;
         }
     };
 
     struct LensRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         LensConfig config;
         LensModel lens;
-        std::vector<float> pe_vec;
 
         LensRunner(ggml_backend_t backend,
                    const String2TensorStorage& tensor_storage_map      = {},
@@ -384,15 +387,19 @@ namespace Lens {
             GGML_ASSERT(!context_tensor.empty());
             ggml_tensor* context = make_input(context_tensor);
 
-            pe_vec      = finish_rope_pe(Rope::gen_lens_pe(static_cast<int>(x->ne[1]),
-                                                           static_cast<int>(x->ne[0]),
-                                                           static_cast<int>(x->ne[3]),
-                                                           static_cast<int>(context->ne[1]),
-                                                           config.theta,
-                                                           config.axes_dim));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("lens.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(Rope::gen_lens_pe(static_cast<int>(x->ne[1]),
+                                                               static_cast<int>(x->ne[0]),
+                                                               static_cast<int>(x->ne[3]),
+                                                               static_cast<int>(context->ne[1]),
+                                                               config.theta,
+                                                               config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = lens.forward(&runner_ctx, x, timesteps, context, pe);

@@ -463,11 +463,15 @@ static bool load_model_into_memory(ModelLoader& model_loader,
         const ggml_type export_type = get_export_tensor_type(model_loader, storage, output_type, type_rules);
         const bool quant_src        = ggml_is_quantized(storage.type);
         const bool quant_dst        = ggml_is_quantized(export_type);
+        const bool half_src         = storage.type == GGML_TYPE_F16 || storage.type == GGML_TYPE_BF16;
         if (quant_src && quant_dst) {
             load_type = GGML_TYPE_F16;
-        } else if (quant_src || quant_dst) {
-            load_type = quant_src ? export_type : storage.type;
-        } else if (storage.type == GGML_TYPE_F32 || export_type == GGML_TYPE_F32) {
+        } else if (quant_src) {
+            load_type = export_type;
+        } else if (storage.type == GGML_TYPE_F32 || export_type == GGML_TYPE_F32 ||
+                   (half_src && export_type != storage.type)) {
+            // LoRA deltas can be smaller than half an F16/BF16 ulp of the weight. Merge in F32
+            // when the export converts the tensor again, so the merged weight is rounded once.
             load_type = GGML_TYPE_F32;
         }
         ggml_tensor* tensor = ggml_new_tensor(ctx, load_type, storage.n_dims, storage.ne);

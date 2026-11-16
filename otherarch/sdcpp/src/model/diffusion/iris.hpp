@@ -3,6 +3,7 @@
 
 #include <array>
 #include <stdexcept>
+#include "core/pe_cache.h"
 #include "model/diffusion/pid.hpp"
 
 namespace Iris {
@@ -90,11 +91,17 @@ namespace Iris {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* pe = nullptr, ggml_tensor* mask = nullptr) {
-            auto c   = ctx->ggml_ctx;
-            auto qkv = split_qkv(c, std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x));
-            auto q   = ggml_reshape_4d(c, qkv[0], dim / heads, heads, x->ne[1], x->ne[2]);
-            auto k   = ggml_reshape_4d(c, qkv[1], dim / heads, heads, x->ne[1], x->ne[2]);
-            auto v   = ggml_reshape_4d(c, qkv[2], dim / heads, heads, x->ne[1], x->ne[2]);
+            auto c         = ctx->ggml_ctx;
+            auto head_dim  = dim / heads;
+            auto qkv       = std::dynamic_pointer_cast<Linear>(blocks["qkv"])->forward(ctx, x);
+            auto qkv_dim   = qkv->ne[0] / 3;
+            auto split_qkv = [&](int i) {
+                return ggml_view_4d(c, qkv, head_dim, qkv_dim / head_dim, qkv->ne[1], qkv->ne[2] * qkv->ne[3],
+                                    head_dim * qkv->nb[0], qkv->nb[1], qkv->nb[2], i * qkv_dim * qkv->nb[0]);
+            };
+            auto q = split_qkv(0);
+            auto k = split_qkv(1);
+            auto v = split_qkv(2);
             if (qk_norm) {
                 q = std::dynamic_pointer_cast<RMSNorm>(blocks["q_norm"])->forward(ctx, q);
                 k = std::dynamic_pointer_cast<RMSNorm>(blocks["k_norm"])->forward(ctx, k);
@@ -102,10 +109,9 @@ namespace Iris {
             if (pe) {
                 x = Rope::attention(ctx, q, k, v, pe, mask);
             } else {
-                q = ggml_reshape_3d(c, q, dim, x->ne[1], x->ne[2]);
-                k = ggml_reshape_3d(c, k, dim, x->ne[1], x->ne[2]);
-                v = ggml_reshape_3d(c, v, dim, x->ne[1], x->ne[2]);
-                x = ggml_ext_attention_ext(ctx, q, k, v, heads, mask, false, ctx->flash_attn_enabled);
+                q = ggml_reshape_3d(c, ggml_cont(c, ggml_permute(c, q, 0, 2, 1, 3)), head_dim, x->ne[1], heads * x->ne[2]);
+                k = ggml_reshape_3d(c, ggml_cont(c, ggml_permute(c, k, 0, 2, 1, 3)), head_dim, x->ne[1], heads * x->ne[2]);
+                x = ggml_ext_attention_ext(ctx, q, k, v, heads, mask, true, ctx->flash_attn_enabled);
             }
             return std::dynamic_pointer_cast<Linear>(blocks["proj"])->forward(ctx, x);
         }
@@ -246,24 +252,24 @@ namespace Iris {
         std::pair<ggml_tensor*, ggml_tensor*> forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* y, ggml_tensor* img_mod, ggml_tensor* txt_mod, ggml_tensor* pe) {
             auto c     = ctx->ggml_ctx;
             int64_t nt = y->ne[1];
-            auto mx    = ggml_ext_chunk(c, ggml_add(c, img_mod, params[dual ? "adaln_img.bias" : "adaln.bias"]), 6, 0);
+            auto mx    = ggml_ext_chunk(ctx, ggml_add(c, img_mod, params[dual ? "adaln_img.bias" : "adaln.bias"]), 6, 0);
             if (!dual) {
                 auto tokens = ggml_concat(c, y, x, 1);
                 auto h      = Pid::apply_adaln(c, norm(ctx, "norm1", tokens), mx[0], mx[1]);
                 auto qkv    = project(ctx, h, "");
                 auto out    = Rope::attention(ctx, qkv[0], qkv[1], qkv[2], pe, nullptr);
                 tokens      = finish(ctx, tokens, h, out, mx, "");
-                return {ggml_ext_slice(c, tokens, 1, nt, tokens->ne[1]), ggml_ext_slice(c, tokens, 1, 0, nt)};
+                return {ggml_ext_slice(ctx, tokens, 1, nt, tokens->ne[1]), ggml_ext_slice(ctx, tokens, 1, 0, nt)};
             }
-            auto my  = ggml_ext_chunk(c, ggml_add(c, txt_mod, params["adaln_txt.bias"]), 6, 0);
+            auto my  = ggml_ext_chunk(ctx, ggml_add(c, txt_mod, params["adaln_txt.bias"]), 6, 0);
             auto hx  = Pid::apply_adaln(c, norm(ctx, "norm_x1", x), mx[0], mx[1]);
             auto hy  = Pid::apply_adaln(c, norm(ctx, "norm_y1", y), my[0], my[1]);
             auto qx  = project(ctx, hx, "_x");
             auto qy  = project(ctx, hy, "_y");
             auto out = Rope::attention(ctx, ggml_concat(c, qy[0], qx[0], 2), ggml_concat(c, qy[1], qx[1], 2),
                                        ggml_concat(c, qy[2], qx[2], 2), pe, nullptr);
-            x        = finish(ctx, x, hx, ggml_ext_slice(c, out, 1, nt, out->ne[1]), mx, "_x");
-            y        = finish(ctx, y, hy, ggml_ext_slice(c, out, 1, 0, nt), my, "_y");
+            x        = finish(ctx, x, hx, ggml_ext_slice(ctx, out, 1, nt, out->ne[1]), mx, "_x");
+            y        = finish(ctx, y, hy, ggml_ext_slice(ctx, out, 1, 0, nt), my, "_y");
             return {x, y};
         }
     };
@@ -293,7 +299,7 @@ namespace Iris {
             auto batch   = cond->ne[2];
             auto mods    = std::dynamic_pointer_cast<Linear>(blocks["adaln"])->forward(ctx, cond);
             mods         = ggml_reshape_3d(c, mods, 4 * d, p2, patches * batch);
-            auto m       = ggml_ext_chunk(c, mods, 4, 0);
+            auto m       = ggml_ext_chunk(ctx, mods, 4, 0);
             auto h       = std::dynamic_pointer_cast<RMSNorm>(blocks["norm1"])->forward(ctx, x);
             h            = ggml_reshape_3d(c, h, d * p2, patches, batch);
             h            = std::dynamic_pointer_cast<Linear>(blocks["compress"])->forward(ctx, h);
@@ -336,7 +342,7 @@ namespace Iris {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* image, ggml_tensor* t, ggml_tensor* text, ggml_tensor* mask, ggml_tensor* joint_pe, ggml_tensor* pixel_pe, ggml_tensor* pixel_pos) {
             auto c    = ctx->ggml_ctx;
             int p     = static_cast<int>(config.patch_size);
-            auto x    = DiT::patchify(c, image, p, p, true);
+            auto x    = DiT::patchify(ctx, image, p, p, true);
             x         = std::dynamic_pointer_cast<Pid::PatchTokenEmbedder>(blocks["s_embedder"])->forward(ctx, x);
             auto te   = std::dynamic_pointer_cast<Pid::PixelDiTTimestepEmbedder>(blocks["t_embedder"])->forward(ctx, t);
             te        = ggml_reshape_3d(c, te, config.hidden_size, 1, image->ne[3]);
@@ -359,7 +365,7 @@ namespace Iris {
             }
             x = std::dynamic_pointer_cast<Pid::FinalLayer>(blocks["final_layer"])->forward(ctx, x);
             x = ggml_reshape_3d(c, x, 3 * p * p, cond->ne[1], image->ne[3]);
-            return DiT::unpatchify(c, x, image->ne[1] / p, image->ne[0] / p, p, p, false);
+            return DiT::unpatchify(ctx, x, image->ne[1] / p, image->ne[0] / p, p, p, false);
         }
     };
 
@@ -382,11 +388,9 @@ namespace Iris {
     }
 
     struct IrisRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         IrisConfig config;
         IrisModel model;
-        std::vector<float> joint_pe_data;
-        std::vector<float> pixel_pe_data;
-        std::vector<float> pixel_pos_data;
         std::vector<float> text_mask_data;
 
         IrisRunner(ggml_backend_t backend, const String2TensorStorage& weights, const std::string& prefix, std::shared_ptr<RunnerWeightManager> weight_manager = nullptr)
@@ -418,24 +422,35 @@ namespace Iris {
                 GGML_ASSERT(h % config.patch_size == 0 && w % config.patch_size == 0);
                 GGML_ASSERT(text->ne[0] == config.text_dim * config.text_layers && text->ne[1] == nt);
                 GGML_ASSERT(inputs.y->numel() == nt && x->ne[3] == 1);
-                joint_pe_data = Pid::make_rope_1d(nt, static_cast<int>(config.head_dim), 10000.f);
-                auto img      = image_rope(h / config.patch_size, w / config.patch_size, config.head_dim);
-                joint_pe_data.insert(joint_pe_data.end(), img.begin(), img.end());
-                pixel_pe_data  = image_rope(h / config.patch_size, w / config.patch_size, config.pixel_attn_dim / config.pixel_heads);
-                pixel_pos_data = Pid::make_pixel_abs_pos(h, w, static_cast<int>(config.pixel_dim));
+                sd::PECacheKey joint_key("iris.joint_pe");
+                joint_key.add(h).add(w).add(nt).add(config.patch_size).add(config.head_dim);
+                auto pe = make_input(pe_cache_.get_or_create(joint_key, [&]() {
+                    auto values = Pid::make_rope_1d(nt, static_cast<int>(config.head_dim), 10000.f);
+                    auto img    = image_rope(h / config.patch_size, w / config.patch_size, config.head_dim);
+                    values.insert(values.end(), img.begin(), img.end());
+                    const int64_t tokens = nt + static_cast<int64_t>(img.size() / (2 * config.head_dim));
+                    return sd::Tensor<float>({2, 2, config.head_dim / 2, tokens}, std::move(values));
+                }));
+                sd::PECacheKey pixel_key("iris.pixel_pe");
+                pixel_key.add(h).add(w).add(config.patch_size).add(config.pixel_attn_dim).add(config.pixel_heads);
+                auto pp = make_input(pe_cache_.get_or_create(pixel_key, [&]() {
+                    return sd::Tensor<float>({2, 2, config.pixel_attn_dim / config.pixel_heads / 2,
+                                              (h / config.patch_size) * (w / config.patch_size)},
+                                             image_rope(h / config.patch_size, w / config.patch_size, config.pixel_attn_dim / config.pixel_heads));
+                }));
+                sd::PECacheKey pos_key("iris.pixel_pos");
+                pos_key.add(h).add(w).add(config.pixel_dim);
+                auto pos = make_input(pe_cache_.get_or_create(pos_key, [&]() {
+                    return sd::Tensor<float>({config.pixel_dim, h * w, 1},
+                                             Pid::make_pixel_abs_pos(h, w, static_cast<int>(config.pixel_dim)));
+                }));
                 text_mask_data.resize(nt * nt);
                 for (int q = 0; q < nt; ++q) {
                     for (int k = 0; k < nt; ++k) {
                         text_mask_data[q * nt + k] = inputs.y->values()[k] != 0.f || q == k ? 0.f : -INFINITY;
                     }
                 }
-                auto pe   = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2, nt + img.size() / (2 * config.head_dim));
-                auto pp   = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.pixel_attn_dim / config.pixel_heads / 2, (h / config.patch_size) * (w / config.patch_size));
-                auto pos  = ggml_new_tensor_3d(compute_ctx, GGML_TYPE_F32, config.pixel_dim, h * w, 1);
                 auto mask = ggml_new_tensor_2d(compute_ctx, GGML_TYPE_F32, nt, nt);
-                set_backend_tensor_data(pe, joint_pe_data.data());
-                set_backend_tensor_data(pp, pixel_pe_data.data());
-                set_backend_tensor_data(pos, pixel_pos_data.data());
                 set_backend_tensor_data(mask, text_mask_data.data());
                 auto ctx = get_context();
                 auto out = model.forward(&ctx, x, t, text, mask, pe, pp, pos);
