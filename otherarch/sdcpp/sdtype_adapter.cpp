@@ -1905,7 +1905,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     if (!remove_limits && info.is_flux1)
     {
-        if (!sd_params->cfg_scale != 1.0f) {
+        if (sd_params->cfg_scale != 1.0f) {
             // clamp cfg scale
             if (!sd_is_quiet && sddebugmode) {
                 printf("Flux: clamping CFG Scale to 1\n");
