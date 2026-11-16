@@ -2756,16 +2756,18 @@ def sd_sdapi_samplers():
 
 def sd_build_custom_sigmas():
     """Build the canonical custom sigma lists from the gendefaults field
-    `custom_sigmas` (a map of scheduler name -> list of sigma values).
+    `custom_sigma_aliases` (a map of scheduler name -> list of sigma values).
     Returns a dict mapping lowercase name -> list of float sigmas.
     Entries that are short/invalid, collide with a built-in scheduler, or
     duplicate an earlier entry (case-insensitively) are ignored."""
     global cached_sd_info, args
     result = {}
     gend = gendefaults_parse_meta_field(args.gendefaults or '')
-    custom = gend.get('custom_sigmas', {})
+    # legacy: the field used to be named 'custom_sigmas', which collides with the
+    # flat sigma list accepted on the API; a dict under that name is the alias map
+    custom = gend.get('custom_sigma_aliases', gend.get('custom_sigmas'))
     if not isinstance(custom, dict):
-        print("Warning: gendefaults custom_sigmas is not a dictionary, ignoring")
+        print("Warning: gendefaults custom_sigma_aliases is not a dictionary, ignoring")
         return result
     builtin = {str(s).lower() for s in cached_sd_info.get('available_schedulers', [])}
     for name, values in custom.items():
@@ -13270,6 +13272,13 @@ def convert_invalid_args(args):
         dict["jinja"] = True
     if "sdgendefaults" in dict and "gendefaults" not in dict:
         dict["gendefaults"] = dict["sdgendefaults"]
+    if "gendefaults" in dict and dict["gendefaults"]:
+        # legacy: the gendefaults field for custom sigma list aliases was named
+        # 'custom_sigmas', which collides with the flat sigma list accepted on the API
+        gend = parse_json_object(dict["gendefaults"], "gendefaults", silent=True)
+        if isinstance(gend, type({})) and isinstance(gend.get("custom_sigmas"), type({})) and "custom_sigma_aliases" not in gend:
+            gend["custom_sigma_aliases"] = gend.pop("custom_sigmas")
+            dict["gendefaults"] = json.dumps(gend)
     if "flashattention" in dict and "noflashattention" not in dict:
         dict["noflashattention"] = not dict["flashattention"]
     if "useswa" in dict and "noswa" not in dict:
