@@ -1156,7 +1156,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     }
     if(t5xxl_filename!="")
     {
-        printf("With Custom T5-XXL Model: %s\n",t5xxl_filename.c_str());
+        printf("With Custom Text Encoder LLM Model: %s\n",t5xxl_filename.c_str());
     }
     if(clip1_filename!="")
     {

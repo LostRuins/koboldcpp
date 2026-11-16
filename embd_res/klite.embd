@@ -15003,12 +15003,18 @@ Current version indicated by LITEVER below.
 	var onInputboxOk = null;
 	var onInputboxCancel = null;
 	var inputboxIsPassword = false;
-	// Note: `isPassword` is ignored when `isTextArea` is true
-	function inputBox(text,title,inputVal,inputPlaceholder,onDone,isHtml=false,isTextArea=false,isPassword=false)
+	// Note: `isPassword` is ignored when `isTextArea` is true. `options` supports checkboxText and checkboxChecked.
+	function inputBox(text,title,inputVal,inputPlaceholder,onDone,isHtml=false,isTextArea=false,isPassword=false,options=null)
 	{
 		inputboxIsPassword = false;
 		if (!text) { text = ""; }
 		if (!title) { title = "User Input"; }
+		let checkboxText = (options && typeof options.checkboxText === "string") ? options.checkboxText : "";
+		let checkboxDiv = document.getElementById("inputboxcontainercheckboxdiv");
+		let checkbox = document.getElementById("inputboxcontainercheckbox");
+		checkboxDiv.classList.toggle("hidden", checkboxText == "");
+		document.getElementById("inputboxcontainercheckboxtext").innerText = checkboxText;
+		checkbox.checked = Boolean(options && options.checkboxChecked);
 		document.getElementById("inputboxcontainer").classList.remove("hidden");
 		document.getElementById("inputboxcontainertitle").innerText = title;
 		if(isHtml)
@@ -15048,9 +15054,9 @@ Current version indicated by LITEVER below.
 		onInputboxCancel = null;
 		document.getElementById("inputboxcancel").classList.add("hidden");
 	}
-	function inputBoxOkCancel(text,title,inputVal,inputPlaceholder,onDone,onCancel,isHtml=false,isTextArea=false,isPassword=false)
+	function inputBoxOkCancel(text,title,inputVal,inputPlaceholder,onDone,onCancel,isHtml=false,isTextArea=false,isPassword=false,options=null)
 	{
-		inputBox(text,title,inputVal,inputPlaceholder,onDone,isHtml,isTextArea,isPassword);
+		inputBox(text,title,inputVal,inputPlaceholder,onDone,isHtml,isTextArea,isPassword,options);
 		document.getElementById("inputboxcancel").classList.remove("hidden");
 		onInputboxCancel = function(){document.getElementById("inputboxcontainer").classList.add("hidden");onCancel();};
 	}
@@ -15065,6 +15071,10 @@ Current version indicated by LITEVER below.
 			return document.getElementById("inputboxcontainerinputarea").value;
 		}
 
+	}
+	function getInputBoxCheckboxValue()
+	{
+		return document.getElementById("inputboxcontainercheckbox").checked;
 	}
 
 	/* split: src/horde/models.js */
@@ -15299,24 +15309,30 @@ Current version indicated by LITEVER below.
 		inputBox("Find model by name (case insensitive)\nBest match will be selected.","Find model by name","","", ()=>{
 			let coai = getInputBoxValue().trim();
 			let dropdown = get_custom_ep_model_dropdown();
-			var mdlopt = dropdown.querySelector('option.custom_model_option');
+			clear_oai_model_filter(dropdown);
 			if(coai!="")
 			{
 				coai = coai.toLowerCase();
-				let findparts = coai.split(" ").filter(x => (x && x != ""));
-				//first search for all matches
+				let findparts = coai.split(/\s+/);
 				let foundidx = -1;
 				let bestmatches = 0;
+				let matches = [];
 				for (var i = 0; i < dropdown.options.length; i++)
 				{
+					let option = dropdown.options[i];
+					if(option.classList.contains("custom_model_option"))
+					{
+						continue;
+					}
 					let matchcount = 0;
 					for(let x=0;x<findparts.length;++x)
 					{
 						let part = findparts[x];
-						if (dropdown.options[i].text.toLowerCase().indexOf(part) !== -1) {
+						if (option.text.toLowerCase().indexOf(part) !== -1) {
 							++matchcount;
 						}
 					}
+					matches.push({option:option, matchcount:matchcount});
 					if (matchcount > bestmatches)
 					{
 						foundidx = i;
@@ -15327,9 +15343,33 @@ Current version indicated by LITEVER below.
 				{
 					dropdown.selectedIndex = foundidx;
 				}
+				if(getInputBoxCheckboxValue() && bestmatches > 0)
+				{
+					let hasFullMatch = matches.some(match => match.matchcount == findparts.length);
+					let minimumMatches = hasFullMatch ? findparts.length : bestmatches;
+					for(let match of matches)
+					{
+						if(match.matchcount < minimumMatches)
+						{
+							match.option.classList.add("oai_model_filtered");
+							match.option.hidden = true;
+						}
+					}
+				}
 			}
 			oai_model_change(ep_should_always_use_chat_completions());
-		},false);
+		},false,false,false,{checkboxText:"Filter non-matching entries",checkboxChecked:false});
+	}
+	function clear_oai_model_filter(dropdown=null)
+	{
+		let filteredOptions = dropdown
+			? dropdown.querySelectorAll("option.oai_model_filtered")
+			: document.querySelectorAll("option.oai_model_filtered");
+		for(let option of filteredOptions)
+		{
+			option.classList.remove("oai_model_filtered");
+			option.hidden = false;
+		}
 	}
 	function select_custom_oai_model()
 	{
@@ -15911,6 +15951,7 @@ Current version indicated by LITEVER below.
 	/* split: src/api/endpoint-selector.js */
 	function customapi_dropdown(force_autotoggle_chatcompl = false)
 	{
+		clear_oai_model_filter();
 		let epchoice = document.getElementById("customapidropdown").value;
 		document.getElementById("custom_oai_favorites_container").classList.add("hidden");
 		document.getElementById("oaicustom").classList.add("hidden");
@@ -36138,6 +36179,7 @@ Current version indicated by LITEVER below.
 			<input class="form-control" type="text" placeholder="" value=""
 			id="inputboxcontainerinput" onfocus="inputboxfocus()" onblur="inputboxblur()">
 			<textarea class="form-control hidden" style="line-height:1.1; resize:vertical;" id="inputboxcontainerinputarea" placeholder="" rows="5"></textarea>
+			<div class="menutext hidden" id="inputboxcontainercheckboxdiv"><label><span style="vertical-align: middle; margin:4px" id="inputboxcontainercheckboxtext"></span><input type="checkbox" id="inputboxcontainercheckbox" style="vertical-align: top;"></label></div>
 
 			<div class="popupfooter">
 				<button type="button" class="btn btn-primary" onclick="onInputboxOk()">OK</button>
