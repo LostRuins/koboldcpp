@@ -4401,8 +4401,8 @@ Current version indicated by LITEVER below.
 	var NO_HD_RES_PX = 512;
 	var PREVIEW_RES_PX = 200;
 	var AVATAR_PX = 384;
-	var SAVE_SLOTS = 16;
-	var SCENARIO_SLOTS = 8;
+	var SAVE_SLOTS = 20;
+	var SCENARIO_SLOTS = 10;
 	const SAVE_LOCATION_LOCAL = 1;
 	const SAVE_LOCATION_SERVER = 2;
 	const SAVE_LOCATION_SCENARIO = 3;
