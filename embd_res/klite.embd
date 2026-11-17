@@ -13,7 +13,7 @@ Current version indicated by LITEVER below.
 <head>
 	<script id="init-config">
 	/* split: src/config/init-config.js */
-	const LITEVER = 356;
+	const LITEVER = 357;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -4246,7 +4246,7 @@ Current version indicated by LITEVER below.
 	var poll_interval_idle = 1000;
 	var poll_interval_multiplayer = 1000; //every 1s
 	var poll_interval_chunked_tts = 300;
-	var max_branches = 8;
+	var max_branches = 10;
 	var randomness_max_size = 500;
 	var randomness_allow_newlines = false;
 
@@ -4401,8 +4401,8 @@ Current version indicated by LITEVER below.
 	var NO_HD_RES_PX = 512;
 	var PREVIEW_RES_PX = 200;
 	var AVATAR_PX = 384;
-	var SAVE_SLOTS = 12;
-	var SCENARIO_SLOTS = 6;
+	var SAVE_SLOTS = 16;
+	var SCENARIO_SLOTS = 8;
 	const SAVE_LOCATION_LOCAL = 1;
 	const SAVE_LOCATION_SERVER = 2;
 	const SAVE_LOCATION_SCENARIO = 3;
@@ -15526,12 +15526,17 @@ Current version indicated by LITEVER below.
 		}
 		let sortedarr = [];
 		let key_required_models = Object.create(null);
+		let vision_verified_models = Object.create(null);
 		for(var i = 0; i < data.data.length; i++) {
 			var opt = data.data[i];
 			sortedarr.push(opt.id);
 			if(epchoice==12 && opt.allow_anonymous===false)
 			{
 				key_required_models[opt.id] = true;
+			}
+			if(epchoice==12 && opt.capabilities && opt.capabilities.vision==="verified")
+			{
+				vision_verified_models[opt.id] = true;
 			}
 			if(opt.pricing)
 			{
@@ -15542,11 +15547,23 @@ Current version indicated by LITEVER below.
 		for(var i=0;i<sortedarr.length;++i)
 		{
 			var el = document.createElement("option");
-			el.textContent = (key_required_models[sortedarr[i]]?"🔑 ":"") + sortedarr[i];
-			el.value = sortedarr[i];
+			let option_icons = [];
+			let option_features = [];
 			if(key_required_models[sortedarr[i]])
 			{
-				el.title = "API key required";
+				option_icons.push("🔑");
+				option_features.push("API key required");
+			}
+			if(vision_verified_models[sortedarr[i]])
+			{
+				option_icons.push("👁️");
+				option_features.push("Vision verified");
+			}
+			el.textContent = (option_icons.length?option_icons.join(" ")+" ":"") + sortedarr[i];
+			el.value = sortedarr[i];
+			if(option_features.length)
+			{
+				el.title = option_features.join("; ");
 			}
 			dropdown.appendChild(el);
 		}
@@ -15791,7 +15808,7 @@ Current version indicated by LITEVER below.
 		}
 
 		let favorites = get_oai_favorites();
-		dropdown.replaceChildren();
+		dropdown.innerHTML = "";
 		let placeholder = document.createElement("option");
 		placeholder.value = "";
 		placeholder.textContent = "[Custom]";
@@ -17012,74 +17029,117 @@ Current version indicated by LITEVER below.
 	var cachedsaveslotlabels = [];
 	var netsaveslotlabels = [];
 	var cachedsavescenariolabels = [];
+	function get_saveslot_labels_for_location(location)
+	{
+		if(location===SAVE_LOCATION_SERVER) return netsaveslotlabels;
+		if(location===SAVE_LOCATION_SCENARIO) return cachedsavescenariolabels;
+		return cachedsaveslotlabels;
+	}
+	function get_unique_save_display_labels(slotlabels)
+	{
+		let displaylabels = Array(slotlabels.length).fill("");
+		let usedlabels = new Set();
+		let reservedlabels = new Set(slotlabels.filter(label=>label).map(label=>(String(label).trim() || "[Unnamed]").toLowerCase()));
+		for(let i=0;i<slotlabels.length;++i)
+		{
+			if(!slotlabels[i]) continue;
+			let baselabel = String(slotlabels[i]).trim() || "[Unnamed]";
+			let displaylabel = baselabel;
+			let suffix = 2;
+			while(usedlabels.has(displaylabel.toLowerCase()))
+			{
+				displaylabel = `${baselabel} (${suffix++})`;
+				while(reservedlabels.has(displaylabel.toLowerCase()) && !usedlabels.has(displaylabel.toLowerCase()))
+				{
+					displaylabel = `${baselabel} (${suffix++})`;
+				}
+			}
+			usedlabels.add(displaylabel.toLowerCase());
+			displaylabels[i] = displaylabel;
+		}
+		return displaylabels;
+	}
+	function get_sorted_save_display_slots(displaylabels)
+	{
+		return displaylabels.map((label,slot)=>({label,slot})).filter(entry=>entry.label).sort((a,b)=>
+			a.label.localeCompare(b.label,undefined,{sensitivity:"base",numeric:true}) || a.slot-b.slot
+		);
+	}
+	function get_save_display_label(location,slot,fallback="")
+	{
+		let labels = get_saveslot_labels_for_location(location);
+		let displaylabels = get_unique_save_display_labels(labels);
+		return displaylabels[slot] || fallback;
+	}
 	function saveloadchangeslot(updatelist=false)
 	{
-		let selectedslot = document.getElementById("saveslotselecteddropdown").value;
-		let selectedlocation = document.getElementById("saveslotlocationdropdown").value;
-		let selectedslotlabel = null;
-		let choices = "";
-		let foundoption = false;
+		let slotdropdown = document.getElementById("saveslotselecteddropdown");
+		let selectedslot = slotdropdown.value;
+		let selectedlocation = Number(document.getElementById("saveslotlocationdropdown").value);
+		let slotlabels = get_saveslot_labels_for_location(selectedlocation);
+		let displaylabels = get_unique_save_display_labels(slotlabels);
+		let emptyslot = slotlabels.findIndex(slotlabel=>!slotlabel);
+		let itemname = (selectedlocation===SAVE_LOCATION_SCENARIO?"Scenario":"Save");
 		let locationdesc = document.getElementById("saveslotlocationtext");
-		if(selectedlocation=="1") //local save
+		if(selectedlocation===SAVE_LOCATION_LOCAL)
 		{
 			locationdesc.innerText = "Local Browser Storage stores the story and all settings.\nData is saved to a temporary cache and can be deleted by your browser. To avoid losing data, use the download save button.";
-			for(let i=0;i<cachedsaveslotlabels.length;++i)
-			{
-				let testslot = cachedsaveslotlabels[i];
-				if(selectedslot==i)
-				{
-					selectedslotlabel = testslot;
-					foundoption = true;
-				}
-				let lbl = (i+1);
-				let tsdesc = (testslot.length>50)?testslot.substring(0,50)+"...":testslot;
-				let slotname = (testslot?`Local Slot `+(lbl)+` - `+tsdesc+``:`Local Slot `+(lbl)+` - [ Empty ]`);
-				choices += `<option value=${i}${(selectedslot==i)?" selected":""}>${slotname}</option>`;
-			}
-		} else if(selectedlocation=="2") { //remote saves
+		} else if(selectedlocation===SAVE_LOCATION_SERVER) {
 			locationdesc.innerText = "KoboldCpp Remote Storage stores the story and all settings.\nData is saved to a database file in your KoboldCpp server.";
-			for(let i=0;i<netsaveslotlabels.length;++i)
-			{
-				let testslot = netsaveslotlabels[i];
-				if(selectedslot==i)
-				{
-					selectedslotlabel = testslot;
-					foundoption = true;
-				}
-				let lbl = (i+1);
-				let tsdesc = (testslot.length>50)?testslot.substring(0,50)+"...":testslot;
-				let slotname = (testslot?`Server Slot `+(lbl)+` - `+tsdesc+``:`Server Slot `+(lbl)+` - [ Empty ]`);
-				choices += `<option value=${i}${(selectedslot==i)?" selected":""}>${slotname}</option>`;
-			}
 		}
-		else if(selectedlocation=="3") //local scenario
+		else if(selectedlocation===SAVE_LOCATION_SCENARIO)
 		{
 			locationdesc.innerText = "Local Scenario Library stores your story as a Custom Scenario, without any generation settings.\nData is saved to a temporary cache and can be deleted by your browser. To avoid losing data, use the download save button.";
-			for(let i=0;i<cachedsavescenariolabels.length;++i)
-			{
-				let testslot = cachedsavescenariolabels[i];
-				if(selectedslot==i)
-				{
-					selectedslotlabel = testslot;
-					foundoption = true;
-				}
-				let lbl = (i+1);
-				let tsdesc = (testslot.length>50)?testslot.substring(0,50)+"...":testslot;
-				let slotname = (testslot?`Local Scenario `+(lbl)+` - `+tsdesc+``:`Local Scenario `+(lbl)+` - [ Empty ]`);
-				choices += `<option value=${i}${(selectedslot==i)?" selected":""}>${slotname}</option>`;
-			}
-		}
-		document.getElementById("loadfromslot").disabled = (selectedslotlabel?false:true);
-		document.getElementById("downloadslot").disabled = (selectedslotlabel?false:true);
-		document.getElementById("deleteslot").disabled = (selectedslotlabel?false:true);
-		if(!foundoption)
-		{
-			document.getElementById("saveslotselecteddropdown").selectedIndex = 0;
 		}
 		if(updatelist)
 		{
-			document.getElementById("saveslotselecteddropdown").innerHTML = choices;
+			slotdropdown.innerHTML = "";
+			for(let entry of get_sorted_save_display_slots(displaylabels))
+			{
+				let option = document.createElement("option");
+				option.value = entry.slot;
+				option.textContent = entry.label;
+				option.title = entry.label;
+				slotdropdown.appendChild(option);
+			}
+			if(emptyslot!==-1)
+			{
+				let option = document.createElement("option");
+				option.value = emptyslot;
+				option.textContent = `[ Create New ${itemname} ]`;
+				slotdropdown.appendChild(option);
+			}
+			if(Array.from(slotdropdown.options).some(option=>option.value===selectedslot))
+			{
+				slotdropdown.value = selectedslot;
+			}
+			if(slotdropdown.options.length===0)
+			{
+				let option = document.createElement("option");
+				option.value = "";
+				option.textContent = `No ${itemname.toLocaleLowerCase()}s yet`;
+				option.disabled = true;
+				slotdropdown.appendChild(option);
+				slotdropdown.selectedIndex = 0;
+			}
 		}
+		selectedslot = slotdropdown.value;
+		let isnewslot = (selectedslot!=="" && !slotlabels[selectedslot]);
+		let hasselection = (selectedslot!=="" && !isnewslot);
+		let saveaction = (isnewslot?(selectedlocation===SAVE_LOCATION_SCENARIO?"Save New Scenario":"Save to New Slot"):`Overwrite ${itemname}`);
+		slotdropdown.title = `Select ${itemname}`;
+		document.getElementById("saveslotselectedlabel").innerText = `Select ${itemname}`;
+		document.getElementById("savetoslottext").innerText = saveaction;
+		document.getElementById("loadfromslottext").innerText = `Load ${itemname}`;
+		document.getElementById("deleteslottext").innerText = `Delete ${itemname}`;
+		document.getElementById("savetoslot").title = saveaction;
+		document.getElementById("loadfromslot").title = `Load ${itemname}`;
+		document.getElementById("downloadslot").title = `Download ${itemname}`;
+		document.getElementById("deleteslot").title = `Delete ${itemname}`;
+		document.getElementById("savetoslot").disabled = (selectedslot==="");
+		document.getElementById("loadfromslot").disabled = !hasselection;
+		document.getElementById("downloadslot").disabled = !hasselection;
+		document.getElementById("deleteslot").disabled = !hasselection;
 	}
 	function get_corpo_saveslot_labels(location)
 	{
@@ -17123,7 +17183,7 @@ Current version indicated by LITEVER below.
 		}).catch((error)=>
 		{
 			console.error('Error:', error);
-			msgbox(`Unable to read save slots: ${error}`,"Save Failed");
+			msgbox(`Unable to read saved data: ${error}`,"Save Failed");
 		});
 	}
 	function corpo_save_location_changed()
@@ -17196,8 +17256,12 @@ Current version indicated by LITEVER below.
 			method: 'POST', // or 'PUT'
 			headers: get_kobold_header(),
 			})
-			.then((response) => response.json())
+			.then((response) => {
+				if(!response.ok) throw new Error(`Server returned HTTP ${response.status}`);
+				return response.json();
+			})
 			.then((data) => {
+				if(!Array.isArray(data)) throw new Error("Invalid server save slot list.");
 				netsaveslotlabels = data;
 				saveloadchangeslot(true);
 				if(corpo_save_location===SAVE_LOCATION_SERVER)
@@ -17225,7 +17289,7 @@ Current version indicated by LITEVER below.
 						save_to_slot(slot,islocal,isscenario,false);
 					}else
 					{
-						msgbox("Unable to Save - No Available New Slots.","Storage Slots Full");
+						msgbox("Unable to save - no space is available for a new save.","Save Storage Full");
 					}
 				});
 			}
@@ -17248,7 +17312,7 @@ Current version indicated by LITEVER below.
 			delete_from_slot(corpo_selected_saveslot,islocal,isscenario,false);
 		}else
 		{
-			msgbox("Nothing to delete - Select a slot first.","No Action Taken");
+			msgbox("Nothing to delete - Select a save first.","No Action Taken");
 		}
 	}
 	function save_to_slot(slot,islocal,isscenario,showcontainer)
@@ -17262,26 +17326,26 @@ Current version indicated by LITEVER below.
 		let location = isscenario?SAVE_LOCATION_SCENARIO:(islocal?SAVE_LOCATION_LOCAL:SAVE_LOCATION_SERVER);
 		let defaultsavename = (localsettings.opmode==1?"Untitled Story":(localsettings.opmode==2?"Untitled Adventure":(localsettings.opmode==3?"Untitled Chat":"Untitled Instruct")));
 		let savename = defaultsavename + " " + new Date().toLocaleString();
-		let slotnumshown = (parseInt(slot)+1);
 		let newcompressedstory = generate_compressed_story(true, true, true);
 		if(islocal || isscenario)
 		{
 			if(isscenario)
 			{
-				savename = `Custom Scenario ${slotnumshown}`;
+				savename = "Custom Scenario " + new Date().toLocaleString();
 			}
 			let metakey = (isscenario?"scenario_"+slot+"_meta":"slot_"+slot+"_meta");
 			let datakey = (isscenario?"scenario_"+slot+"_data":"slot_"+slot+"_data");
-			let lbltype = (isscenario?"Scenario":"Browser Storage Slot");
+			let itemname = (isscenario?"Scenario":"Save");
 			indexeddb_load(metakey,"").then(testslot=>{
 				if (testslot) {
 					savename = testslot;
 				}
 				const slotwrite = function () {
-					inputBox(`Enter a label for this ${lbltype} data`, "Enter a label", savename, defaultsavename, () => {
+					let fallbackname = (isscenario?"Custom Scenario":defaultsavename);
+					inputBox(`Enter a name for this ${itemname.toLocaleLowerCase()}`, `${itemname} Name`, savename, fallbackname, () => {
 						let userinput = getInputBoxValue();
 						if (userinput.trim() == "") {
-							userinput = defaultsavename;
+							userinput = fallbackname;
 						}
 						indexeddb_save(datakey, newcompressedstory, true).then(()=>indexeddb_save(metakey, userinput, true)).then(()=>{
 							finish_save();
@@ -17301,7 +17365,8 @@ Current version indicated by LITEVER below.
 				}
 
 				if (testslot) {
-					msgboxYesNo(`Overwrite existing data in ${lbltype} ${slotnumshown}?`, `Overwrite ${lbltype} ${slotnumshown}`, () => {
+					let displayname = get_save_display_label(location,slot,testslot);
+					msgboxYesNo(`Overwrite "${displayname}"?`, `Overwrite ${itemname}`, () => {
 						slotwrite();
 					}, null);
 				}
@@ -17315,7 +17380,7 @@ Current version indicated by LITEVER below.
 				savename = testslot;
 			}
 			const slotwrite = function () {
-				inputBox("Enter a label for this Server Storage Slot data", "Enter a label", savename, defaultsavename, () => {
+				inputBox("Enter a name for this save", "Save Name", savename, defaultsavename, () => {
 					let userinput = getInputBoxValue();
 					if (userinput.trim() == "") {
 						userinput = defaultsavename;
@@ -17355,7 +17420,8 @@ Current version indicated by LITEVER below.
 				});
 			}
 			if (testslot) {
-				msgboxYesNo("Overwrite existing story in Server Storage Slot " + slotnumshown + "?", "Overwrite Server Storage Slot " + slotnumshown, () => {
+				let displayname = get_save_display_label(location,slot,testslot);
+				msgboxYesNo(`Overwrite "${displayname}"?`, "Overwrite Save", () => {
 					slotwrite();
 				}, null);
 			}
@@ -17430,7 +17496,7 @@ Current version indicated by LITEVER below.
 			}
 		}
 		if (!safe_to_overwrite() && warn_unsaved) {
-			msgboxYesNo("Unsaved changes will be lost, proceed?", "Confirm Load Slot", () => {
+			msgboxYesNo("Unsaved changes will be lost, proceed?", "Confirm Load", () => {
 				proceed_load_from_slot();
 			}, null);
 		}
@@ -17440,28 +17506,8 @@ Current version indicated by LITEVER below.
 	}
 	function download_from_slot(slot,islocal,isscenario)
 	{
-		let slotlabel = "";
-		if(isscenario)
-		{
-			if(cachedsavescenariolabels && slot<cachedsavescenariolabels.length)
-			{
-				slotlabel = cachedsavescenariolabels[slot];
-			}
-		}
-		else if(islocal)
-		{
-			if(cachedsaveslotlabels && slot<cachedsaveslotlabels.length)
-			{
-				slotlabel = cachedsaveslotlabels[slot];
-			}
-		}
-		else
-		{
-			if(netsaveslotlabels && slot<netsaveslotlabels.length)
-			{
-				slotlabel = netsaveslotlabels[slot];
-			}
-		}
+		let location = isscenario?SAVE_LOCATION_SCENARIO:(islocal?SAVE_LOCATION_LOCAL:SAVE_LOCATION_SERVER);
+		let slotlabel = get_save_display_label(location,slot);
 		let ondl = function (loadedstorycompressed) {
 			if (loadedstorycompressed) {
 				let storyobj = decompress_story(loadedstorycompressed);
@@ -17512,11 +17558,11 @@ Current version indicated by LITEVER below.
 	function delete_from_slot(slot,islocal,isscenario,showcontainer)
 	{
 		let location = isscenario?SAVE_LOCATION_SCENARIO:(islocal?SAVE_LOCATION_LOCAL:SAVE_LOCATION_SERVER);
-		let slotnumshown = (parseInt(slot)+1);
+		let itemname = (isscenario?"Scenario":"Save");
 		if (islocal || isscenario) {
 			let metakey = (isscenario?"scenario_"+slot+"_meta":"slot_"+slot+"_meta");
 			let datakey = (isscenario?"scenario_"+slot+"_data":"slot_"+slot+"_data");
-			let lbltype = (isscenario?"Scenario":"Browser Storage Slot");
+			let displayname = get_save_display_label(location,slot,itemname);
 			let postdel = function(){
 				if(showcontainer)
 				{
@@ -17528,7 +17574,7 @@ Current version indicated by LITEVER below.
 					populate_corpo_leftpanel();
 				}
 			};
-			msgboxYesNo(`Delete data in ${lbltype} ${slotnumshown}?`, `Delete ${lbltype} ${slotnumshown}`, () => {
+			msgboxYesNo(`Delete "${displayname}"?`, `Delete ${itemname}`, () => {
 				indexeddb_save(datakey, "", true).then(()=>indexeddb_save(metakey, "", true)).then(() => {
 					clear_corpo_saveslot(location,slot);
 					postdel();
@@ -17539,7 +17585,8 @@ Current version indicated by LITEVER below.
 				postdel();
 			});
 		} else {
-			msgboxYesNo("Delete story in Server Storage Slot " + slotnumshown + "?", "Delete Server Storage Slot " + slotnumshown, () => {
+			let displayname = get_save_display_label(location,slot,"Save");
+			msgboxYesNo(`Delete "${displayname}"?`, "Delete Save", () => {
 				fetch(apply_proxy_url(custom_kobold_endpoint + koboldcpp_savedata_save_endpoint), {
 				method: 'POST', // or 'PUT'
 				headers: get_kobold_header(),
@@ -17580,10 +17627,10 @@ Current version indicated by LITEVER below.
 	function save_to_curr_slot()
 	{
 		let selectedslot = document.getElementById("saveslotselecteddropdown").value;
-		let selectedlocation = document.getElementById("saveslotlocationdropdown").value;
-		let islocal = (selectedlocation=="1");
-		let isscenario = (selectedlocation=="3");
-		save_to_slot(selectedslot,islocal,isscenario,true);
+		let selectedlocation = Number(document.getElementById("saveslotlocationdropdown").value);
+		let islocal = (selectedlocation===SAVE_LOCATION_LOCAL);
+		let isscenario = (selectedlocation===SAVE_LOCATION_SCENARIO);
+		if(selectedslot!=="") save_to_slot(selectedslot,islocal,isscenario,true);
 	}
 	function load_from_curr_slot()
 	{
@@ -29524,28 +29571,28 @@ Current version indicated by LITEVER below.
 		}
 		locationdropdown.value = corpo_save_location;
 		populate_corpo_leftpanel_topper();
-		panel.innerHTML = `<div class="color_gray" style="padding:6px;">Loading slots...</div>`;
+		let itemname = (corpo_save_location===SAVE_LOCATION_SCENARIO?"scenario":"save");
+		panel.innerHTML = `<div class="color_gray" style="padding:6px;">Loading ${itemname}s...</div>`;
 
 		let request = ++corpo_slotlist_request;
 		let render_slotlabels = function(labels)
 		{
 			if(request!==corpo_slotlist_request) return;
 			panel.innerHTML = "";
-			for(let i=0;i<labels.length;++i)
+			let displaylabels = get_unique_save_display_labels(labels);
+			for(let displayentry of get_sorted_save_display_slots(displaylabels))
 			{
-				if(labels[i])
-				{
-					let entry = document.createElement("div");
-					entry.className = "corpo_leftpanel_btn";
-					entry.setAttribute("role", "button");
-					entry.textContent = labels[i];
-					entry.onclick = ()=>load_corpo_saveslot(i);
-					panel.appendChild(entry);
-				}
+				let entry = document.createElement("div");
+				entry.className = "corpo_leftpanel_btn";
+				entry.setAttribute("role", "button");
+				entry.textContent = displayentry.label;
+				entry.title = displayentry.label;
+				entry.onclick = ()=>load_corpo_saveslot(displayentry.slot);
+				panel.appendChild(entry);
 			}
 			if(panel.childElementCount==0)
 			{
-				panel.innerHTML = `<div class="color_gray" style="padding:6px;">No saved slots.</div>`;
+				panel.innerHTML = `<div class="color_gray" style="padding:6px;">No ${itemname}s.</div>`;
 			}
 		};
 		if(slotlabels!==null)
@@ -29557,7 +29604,7 @@ Current version indicated by LITEVER below.
 		{
 			if(request!==corpo_slotlist_request) return;
 			console.error('Error:', error);
-			panel.innerHTML = `<div class="color_red" style="padding:6px;">Unable to load slots.</div>`;
+			panel.innerHTML = `<div class="color_red" style="padding:6px;">Unable to load ${itemname}s.</div>`;
 		});
 	}
 
@@ -33041,12 +33088,13 @@ Current version indicated by LITEVER below.
 					<div id="corpoleftpanelitems" class="corpoleftpanelitems">
 					<div class="corpoleftpanelitemstopper" id="corpoleftpanelitemstopper"></div>
 					<div style="display:flex;align-items:center;gap:6px;margin:12px 4px 2px 8px;">
-						<div style="font-size:var(--main_font_size);font-weight:600;line-height:1.1;white-space:nowrap;">Quick Slot Load</div>
-						<select title="Select Quick Slot Location" class="form-control" id="corposavelocationdropdown" onchange="corpo_save_location_changed()" style="width:auto;height:24px;margin-left:auto;font-size:var(--main_font_size);padding:1px 4px;">
+						<div style="font-size:var(--main_font_size);font-weight:600;line-height:1.1;white-space:nowrap;">Save / Load</div>
+						<select title="Select Save Location" class="form-control" id="corposavelocationdropdown" onchange="corpo_save_location_changed()" style="width:auto;height:24px;margin-left:auto;font-size:var(--main_font_size);padding:1px 4px;">
 							<option value="1">Local</option>
 							<option value="2" id="corpokcppsaveavailable" hidden disabled>Server</option>
 							<option value="3">Scenario</option>
 						</select>
+						<button type="button" title="Start New Session" aria-label="Start New Session" class="btn btn-primary bg_green mainnav" onclick="closeTopNav();display_newgame()" style="width:24px;height:24px;padding:0;margin-left:6px;font-size:18px;font-weight:bold;line-height:20px;flex:0 0 24px;">+</button>
 					</div>
 					<hr style="margin-top:4px;margin-bottom:6px" />
 					<div class="corpoleftpanelitemsinner" id="corpoleftpanelitemsinner"></div>
@@ -35130,15 +35178,15 @@ Current version indicated by LITEVER below.
 					</div>
 
 					<div style="margin-top:3px; text-align: center; align-self: center; width: 100%">
-						<span style="font-weight:bold;text-decoration: underline;">Slot Storage Option</span>
+						<span style="font-weight:bold;text-decoration: underline;">Save Storage</span>
 						<span style="float:right; text-align: right;">
 							<button type="button" class="btn btn-primary" style="font-size:10px;padding:2px 5px;margin-left:4px;margin:2px;" onclick="hide_popups();display_settings();display_settings_tab(6);">Configure</button>
 						</span>
 					</div>
 					<div style="display:flex;">
-						<div style="width: 92px; margin:8px; margin-left: 4px; margin-right: 4px; font-size: 14px;">Data Location</div>
-						<div style="margin:3px; text-align: center; align-self: center; width: calc(100% - 94px);">
-						<select title="Select Slot Location" style="padding:4px;" class="form-control" id="saveslotlocationdropdown" onchange="saveloadchangeslot(true)">
+						<div style="width: 112px; margin:8px; margin-left: 4px; margin-right: 4px; font-size: 14px;">Data Location</div>
+						<div style="margin:3px; text-align: center; align-self: center; width: calc(100% - 114px);">
+						<select title="Select Storage Location" style="padding:4px;" class="form-control" id="saveslotlocationdropdown" onchange="saveloadchangeslot(true)">
 						<option value="1">Local Browser Storage</option>
 						<option value="2" id="kcppsaveavailable" class="hidden">KoboldCpp Server Storage</option>
 						<option value="3">Local Scenario Library</option>
@@ -35146,17 +35194,17 @@ Current version indicated by LITEVER below.
 						</div>
 					</div>
 					<div style="display:flex;">
-						<div style="width: 92px; margin:8px; margin-left: 4px; margin-right: 4px; font-size: 14px;">Selected Slot</div>
-						<div style="margin:3px; text-align: center; align-self: center; width: calc(100% - 94px);">
-						<select title="Select Save Slot" style="padding:4px;" class="form-control" id="saveslotselecteddropdown" onchange="saveloadchangeslot(false)">
+						<div id="saveslotselectedlabel" style="width: 112px; margin:8px; margin-left: 4px; margin-right: 4px; font-size: 14px;">Selected Save</div>
+						<div style="margin:3px; text-align: center; align-self: center; width: calc(100% - 114px);">
+						<select title="Select Save" style="padding:4px;" class="form-control" id="saveslotselecteddropdown" onchange="saveloadchangeslot(false)">
 						</select>
 						</div>
 					</div>
 					<div style="width:100%;align-self: center;">
-						<button type="button" id="savetoslot" title="Save To Slot" class="btn btn-primary" onclick="save_to_curr_slot()"><span class="btnicon-save"></span> Save Slot</button>
-						<button type="button" id="loadfromslot" title="Load From Slot" class="btn btn-primary" onclick="load_from_curr_slot()"><span class="btnicon-load"></span> Load Slot</button>
-						<button type="button" id="downloadslot" title="Download Slot" class="btn btn-primary" onclick="download_from_curr_slot()"><span class="btnicon-download"></span> Download</button>
-						<button type="button" id="deleteslot" title="Delete Slot" class="btn btn-primary" onclick="delete_from_curr_slot()"><span class="btnicon-delete"></span> Delete Slot</button>
+						<button type="button" id="savetoslot" title="Save" class="btn btn-primary" onclick="save_to_curr_slot()"><span class="btnicon-save"></span> <span id="savetoslottext">Save to New Slot</span></button>
+						<button type="button" id="loadfromslot" title="Load" class="btn btn-primary" onclick="load_from_curr_slot()"><span class="btnicon-load"></span> <span id="loadfromslottext">Load Save</span></button>
+						<button type="button" id="downloadslot" title="Download" class="btn btn-primary" onclick="download_from_curr_slot()"><span class="btnicon-download"></span> Download</button>
+						<button type="button" id="deleteslot" title="Delete" class="btn btn-primary" onclick="delete_from_curr_slot()"><span class="btnicon-delete"></span> <span id="deleteslottext">Delete Save</span></button>
 					</div>
 				</div>
 				<div class="menutext"><p style="padding:6px;font-size: 10px;" id="saveslotlocationtext"></p></div>

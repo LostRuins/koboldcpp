@@ -60,7 +60,7 @@ default_ttsmaxlen = 8192
 default_embeddingsmaxctx = 4096
 default_visionmaxres = 1024
 tools_max_temperature = 1.0 #chat requests with tools are clamped to this temperature; the horde worker declares it as a limit
-net_save_slots = 12
+net_save_slots = 16
 savestate_limit_default = 5
 savestate_limit = 0 #savestate slots start at 0, only set when load model
 default_vae_tile_threshold = 512
@@ -8445,9 +8445,11 @@ Change Mode<br>
                     storybody = incoming_story.get('data', None) #should be a compressed string
                     if slotid >= 0 and slotid < net_save_slots:  # we shall provide some fixed network save slots
                         saveneeded = False
+                        saveaccepted = True
                         if storybody and storybody!="":
                             storybody = str(storybody)
-                            if len(storybody) > (1024*1024*10): #limit each story to 10mb
+                            if len(storybody) > (1024*1024*16): #limit each story to 16mb
+                                saveaccepted = False
                                 response_code = 400
                                 response_body = (json.dumps({"success":False, "error":"Story is too long!"}).encode())
                             else:
@@ -8466,7 +8468,7 @@ Change Mode<br>
                             else:
                                 response_code = 400
                                 response_body = (json.dumps({"success":False, "error":"SaveDataFile is missing!"}).encode())
-                        else:
+                        elif saveaccepted:
                             response_body = (json.dumps({"success":True, "error":""}).encode())
                     else:
                         response_code = 400
