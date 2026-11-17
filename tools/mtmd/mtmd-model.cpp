@@ -57,6 +57,7 @@
 #include "models/granite4-vision.cpp"
 #include "models/hunyuanvl.cpp"
 #include "models/internvl.cpp"
+#include "models/inkling2v.cpp"
 #include "models/kimik25.cpp"
 #include "models/kimivl.cpp"
 #include "models/lfm3a.cpp"
@@ -882,6 +883,15 @@ struct mtmd_model_loader {
                             throw std::runtime_error(mtmd_format("%s: sum of audio depths (%" PRId64 ") does not match n_layer (%d)\n", __func__, n_blocks, hparams.n_layer));
                         }
                         hparams.warmup_audio_size = hparams.audio_samples_per_token();
+                    } break;
+                case PROJECTOR_TYPE_INKLING2V:
+                    {
+                        hparams.ffn_op = FFN_GELU_ERF;
+                        log_ffn_op = "gelu_erf";
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
+                        hparams.rope_theta = 10000.0f;
+                        hparams.set_limit_image_tokens(1, 4096);
+                        hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_MUSE_GLIMMER:
                     {
@@ -2007,6 +2017,18 @@ struct mtmd_model_loader {
                     }
                     model.mm_fc_w   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                     model.mm_fc_b   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
+                } break;
+            case PROJECTOR_TYPE_INKLING2V:
+                {
+                    // these come from the generic path above, where they are optional
+                    if (!model.class_embedding || !model.position_embeddings || !model.pre_ln_w || !model.pre_ln_b) {
+                        throw std::runtime_error(mtmd_format("%s: missing class_embd, position_embd or pre_ln\n", __func__));
+                    }
+                    model.class_position_embedding = get_tensor(TN_CLASS_POS_EMBD);
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
@@ -3910,6 +3932,7 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLING2V:
             return img->nx() / (params.patch_size * params.n_merge);
         case PROJECTOR_TYPE_DEEPSEEKOCR:
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
@@ -3944,6 +3967,7 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLING2V:
             return img->ny() / (params.patch_size * params.n_merge);
         default:
             break;
@@ -4035,6 +4059,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_STEP3VL:
+        case PROJECTOR_TYPE_INKLING2V:
             {
                 int x_patch = img->nx() / (params.patch_size * params.n_merge);
                 int y_patch = img->ny() / (params.patch_size * params.n_merge);
@@ -4351,6 +4376,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_MINIMAX_M3:
             return mm_merger_fc2_b->ne[0];
         case PROJECTOR_TYPE_MUSE_GLIMMER:
+        case PROJECTOR_TYPE_INKLING2V:
             return mm_2_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:

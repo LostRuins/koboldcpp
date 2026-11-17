@@ -23,6 +23,7 @@
 #include "parsers/gigachat-v3.cpp"
 #include "parsers/gpt-oss.cpp"
 #include "parsers/harmony-xml.cpp"
+#include "parsers/inkling2.cpp"
 #include "parsers/k2-horizon.cpp"
 #include "parsers/kimi-k2.cpp"
 #include "parsers/kimi-k3.cpp"
@@ -992,18 +993,6 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
                            "{%- if false %}");
     }
 
-    // TODO @aldehir : this is a temporary fix, pending Minja changes
-    // Ref: https://github.com/ggml-org/llama.cpp/pull/17713#issuecomment-3631342664
-    if (default_template_src.find("[TOOL_CALLS]") != std::string::npos
-        // search for the error message and patch it
-        && default_template_src.find("if (message['content'] is none or") != std::string::npos) {
-        string_replace_all(default_template_src,
-                           "{%- if (message['content'] is none or message['content'] == '' or "
-                           "message['content']|length == 0) and (message['tool_calls'] is not defined or "
-                           "message['tool_calls'] is none or message['tool_calls']|length == 0) %}",
-                           "{%- if false %}");
-    }
-
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
     bool        add_bos   = false;
@@ -1657,6 +1646,9 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             if (!end_tag.empty()) {
                 auto_params.thinking_end_tags = {std::move(end_tag)};
             }
+        }
+        if (is_inkling2_template(src)) {
+            common_chat_inkling2_split_media(auto_params.prompt);
         }
         const auto & arena = auto_params.parser;
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
