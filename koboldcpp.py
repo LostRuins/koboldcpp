@@ -6872,7 +6872,10 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.flush()
         except OSError:
             self.close_connection = True
-            handle.abort_generate()
+            if genparams.get('_keep_on_disconnect', False):
+                genparams['_client_disconnected'] = True #do not reply once the kept generation finishes
+            else:
+                handle.abort_generate()
 
     async def handle_sse_stream(self, genparams, api_format):
         global friendlymodelname, currfinishreason, thinkformats, tool_call_pairs, cached_chat_template
@@ -7336,7 +7339,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as ex:
             print("Token streaming was interrupted or aborted!")
             print(ex)
-            if batch_request_id >= 0:
+            if genparams.get('_keep_on_disconnect', False) and isinstance(ex, OSError): #client is gone, let the generation finish
+                genparams['_client_disconnected'] = True
+            elif batch_request_id >= 0:
                 handle.batch_generate_abort(batch_request_id)
             else:
                 handle.abort_generate()
@@ -7408,6 +7413,10 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         async def monitor_generation():
             await self.monitor_connection(disconnected)
+            if genparams.get('_keep_on_disconnect', False):
+                if genparams.get('_client_disconnected', False):
+                    print("\nClient disconnected, but keep_text_gen_on_disconnect is set, generation continues.")
+                return
             # Keep waiting for the generator to finish. An early abort can be
             # reset during native startup, or precede publication of a batch ID.
             while genparams.get('_client_disconnected', False) and not generate_task.done():
@@ -7458,8 +7467,12 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError) as cae: # attempt to abort if connection lost
             print("An ongoing connection was aborted or interrupted!")
             print(cae)
-            handle.abort_generate()
-            await asyncio.sleep(0.1) #short delay
+            if genparams.get('_keep_on_disconnect', False):
+                disconnected()
+                await asyncio.wait([generate_task])
+            else:
+                handle.abort_generate()
+                await asyncio.sleep(0.1) #short delay
         except Exception as e:
             print(e)
             if api_format in (3, 4):
@@ -9025,6 +9038,9 @@ Change Mode<br>
                         with batched_cond:
                             batched_request_runner_count += 1
 
+                    keep_text_gen = genparams.get('kcpp_extra_args', {}).get('keep_text_gen_on_disconnect', gendefaults.get('keep_text_gen_on_disconnect'))
+                    # batched generations cannot be recovered through generate/check, so those still abort
+                    genparams['_keep_on_disconnect'] = bool(keep_text_gen is not None and tryparseint(keep_text_gen, 1) and tryparseint(args.parallelrequests, 1) <= 1)
                     gendat = asyncio.run(self.handle_request(genparams, api_format, sse_stream_flag))
                     if genparams.pop('_client_disconnected', False):
                         return
