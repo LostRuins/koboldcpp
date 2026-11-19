@@ -133,6 +133,21 @@ std::string gguf_get_string(const std::string & gguf_filename, const std::string
     return value;
 }
 
+bool gguf_get_bool(const std::string & gguf_filename, const std::string & key)
+{
+    struct gguf_init_params ggufparams;
+    ggufparams.no_alloc = true;
+    ggufparams.ctx = NULL;
+    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), ggufparams);
+    if (!ctx) return false;
+
+    const int64_t keyidx = gguf_find_key(ctx, key.c_str());
+    const bool value = keyidx >= 0 && gguf_get_kv_type(ctx, keyidx) == GGUF_TYPE_BOOL
+        ? gguf_get_val_bool(ctx, keyidx) : false;
+    gguf_free(ctx);
+    return value;
+}
+
 std::string gguf_get_model_arch(const std::string & gguf_filename)
 {
     return gguf_get_string(gguf_filename, "general.architecture");

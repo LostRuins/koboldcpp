@@ -3,8 +3,11 @@
 #include "otherarch/llmutils.h"
 
 #include "common.h"
+#include "chat.h"
 #include "sampling.h"
 #include "llama.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 
 #include <algorithm>
 #include <cctype>
@@ -524,6 +527,15 @@ static bool is_qwen3tts_file = false;
 static qwen3_tts::Qwen3TTS qwen3tts_runner;
 extern bool qwen3tts_allowgpu;
 
+// llama.cpp/libmtmd TTS. These models use a llama backbone plus a gen-audio
+// projector (passed through KoboldCpp's historical --ttswavtokenizer slot).
+static bool is_llamacpp_tts = false;
+static llama_model * llamacpp_tts_model = nullptr;
+static llama_context * llamacpp_tts_ctx = nullptr;
+static mtmd::context_ptr llamacpp_tts_mctx;
+static common_chat_templates_ptr llamacpp_tts_templates;
+static std::unique_ptr<mtmd_helper::gen_audio> llamacpp_tts_generator;
+
 // Audio.cpp selective TTS integration
 struct audiocpp_tts_loader_entry {
     const char * family;
@@ -594,13 +606,36 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
         ? gguf_get_string(modelfile_ttc, "audiocpp.model_spec.family")
         : "";
 
+    // Release a previously loaded libmtmd pipeline even when the replacement
+    // model uses one of the legacy TTS backends.
+    llamacpp_tts_generator.reset();
+    llamacpp_tts_templates.reset();
+    llamacpp_tts_mctx.reset();
+    if (llamacpp_tts_ctx != nullptr) {
+        llama_free(llamacpp_tts_ctx);
+        llamacpp_tts_ctx = nullptr;
+    }
+    if (llamacpp_tts_model != nullptr) {
+        llama_model_free(llamacpp_tts_model);
+        llamacpp_tts_model = nullptr;
+    }
+
     is_ttscpp_file = false;
     is_qwen3tts_file = false;
+    is_llamacpp_tts = false;
     is_audiocpp_tts = false;
     audiocpp_tts_family.clear();
     audiocpp_tts_loader.reset();
     audiocpp_tts_session.reset();
     audiocpp_tts_model.reset();
+
+    // A gen-audio mmproj is an unambiguous marker for llama.cpp's TTS path.
+    // In particular, both the old TTS.cpp and new llama.cpp Kokoro backbones
+    // use general.architecture=kokoro, so the backbone metadata alone cannot
+    // distinguish them.
+    if (!modelfile_cts.empty()) {
+        is_llamacpp_tts = gguf_get_bool(modelfile_cts, "clip.has_gen_audio_encoder");
+    }
 
     const audiocpp_tts_loader_entry * selected_audiocpp_loader = nullptr;
     if (detectedarch == "audiocpp") {
@@ -620,7 +655,11 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
         audiocpp_tts_loader = selected_audiocpp_loader->loader;
     }
 
-    if (is_audiocpp_tts) {
+    if (is_llamacpp_tts) {
+        printf("\nLoading llama.cpp TTS Model: %s\nAudio Projector: %s\n",
+            modelfile_ttc.c_str(), modelfile_cts.c_str());
+    }
+    else if (is_audiocpp_tts) {
         printf("\nLoading Audio.cpp %s Model: %s\n", audiocpp_tts_family.c_str(), modelfile_ttc.c_str());
     }
     else if (detectedarch=="qwen3-tts")
@@ -653,7 +692,73 @@ bool ttstype_load_model(const tts_load_model_inputs inputs)
     tts_max_len = inputs.ttsmaxlen;
 
     // tts init
-    if (is_audiocpp_tts) {
+    if (is_llamacpp_tts) {
+        llama_model_params model_params = llama_model_default_params();
+        llama_context_params ctx_params = llama_context_default_params();
+        model_params.load_mode = LLAMA_LOAD_MODE_NONE;
+        model_params.n_gpu_layers = inputs.gpulayers;
+        model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
+        model_params.main_gpu = std::max(0, inputs.kcpp_main_gpu);
+        if (!devices_override.empty()) {
+            model_params.devices = devices_override.data();
+        }
+
+        ctx_params.n_ctx = 0; // use the backbone's trained context size
+        ctx_params.n_batch = 8192;
+        ctx_params.n_ubatch = 512;
+        ctx_params.n_threads = std::max(1, inputs.threads);
+        ctx_params.n_threads_batch = std::max(1, inputs.threads);
+        ctx_params.embeddings = true;
+        ctx_params.offload_kqv = inputs.gpulayers > 0;
+        ctx_params.flash_attn_type = inputs.flash_attention
+            ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+
+        llamacpp_tts_model = llama_model_load_from_file(modelfile_ttc.c_str(), model_params);
+        if (llamacpp_tts_model == nullptr) {
+            printf("\nllama.cpp TTS Load Error: failed to load the backbone model.\n");
+            return false;
+        }
+        llamacpp_tts_ctx = llama_init_from_model(llamacpp_tts_model, ctx_params);
+        if (llamacpp_tts_ctx == nullptr) {
+            printf("\nllama.cpp TTS Load Error: failed to initialize the backbone context.\n");
+            llama_model_free(llamacpp_tts_model);
+            llamacpp_tts_model = nullptr;
+            return false;
+        }
+
+        mtmd_context_params mtmd_params = mtmd_context_params_default();
+        mtmd_params.use_gpu = inputs.gpulayers > 0;
+        mtmd_params.n_threads = std::max(1, inputs.threads);
+        mtmd_params.flash_attn_type = ctx_params.flash_attn_type;
+        llamacpp_tts_mctx.reset(mtmd_init_from_file(
+            modelfile_cts.c_str(), llamacpp_tts_model, mtmd_params));
+        if (!llamacpp_tts_mctx ||
+            mtmd_gen_audio_get_info(llamacpp_tts_mctx.get()).type == MTMD_GEN_AUDIO_TYPE_NONE) {
+            printf("\nllama.cpp TTS Load Error: the auxiliary model does not support audio generation.\n");
+            llamacpp_tts_mctx.reset();
+            llama_free(llamacpp_tts_ctx);
+            llamacpp_tts_ctx = nullptr;
+            llama_model_free(llamacpp_tts_model);
+            llamacpp_tts_model = nullptr;
+            return false;
+        }
+
+        llamacpp_tts_templates = common_chat_templates_init(llamacpp_tts_model, "");
+        llamacpp_tts_generator = std::make_unique<mtmd_helper::gen_audio>();
+        llamacpp_tts_generator->init(llamacpp_tts_ctx, llamacpp_tts_mctx.get());
+        if (!llamacpp_tts_generator->valid()) {
+            printf("\nllama.cpp TTS Load Error: no compatible audio generation pipeline.\n");
+            llamacpp_tts_generator.reset();
+            llamacpp_tts_templates.reset();
+            llamacpp_tts_mctx.reset();
+            llama_free(llamacpp_tts_ctx);
+            llamacpp_tts_ctx = nullptr;
+            llama_model_free(llamacpp_tts_model);
+            llamacpp_tts_model = nullptr;
+            return false;
+        }
+    }
+    else if (is_audiocpp_tts) {
         try {
             engine::runtime::ModelLoadRequest request;
             request.model_path = modelfile_ttc;
@@ -1331,6 +1436,208 @@ static tts_generation_outputs ttstype_generate_outetts(const tts_generation_inpu
     }
 }
 
+static tts_generation_outputs ttstype_generate_llamacpp(const tts_generation_inputs inputs)
+{
+    tts_generation_outputs output;
+    output.data = "";
+    output.status = 0;
+    if (!llamacpp_tts_model || !llamacpp_tts_ctx || !llamacpp_tts_mctx ||
+        !llamacpp_tts_generator || !llamacpp_tts_generator->valid()) {
+        printf("\nWarning: llama.cpp TTS is not initialized.\n");
+        return output;
+    }
+
+    try {
+        std::string text = inputs.prompt != nullptr ? inputs.prompt : "";
+        if (tts_max_len > 0) {
+            text = TruncateToFirstNumberWords(text, tts_max_len);
+        }
+        std::string language = inputs.language != nullptr ? inputs.language : "";
+        std::string requested_voice = inputs.custom_speaker_voice != nullptr
+            ? inputs.custom_speaker_voice : "";
+        const auto info = mtmd_gen_audio_get_info(llamacpp_tts_mctx.get());
+        if (info.type == MTMD_GEN_AUDIO_TYPE_KOKORO &&
+            (language == "en" || language == "auto")) {
+            // Kokoro distinguishes en-us/en-gb and otherwise infers English
+            // from the selected voice. KoboldCpp's API default is plain "en".
+            language.clear();
+        }
+
+        mtmd::bitmap_ptr speaker;
+        const bool supports_reference_audio =
+            info.type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS ||
+            info.type == MTMD_GEN_AUDIO_TYPE_POCKETTTS ||
+            info.type == MTMD_GEN_AUDIO_TYPE_CHATTERBOX ||
+            info.type == MTMD_GEN_AUDIO_TYPE_DRAMA3 ||
+            info.type == MTMD_GEN_AUDIO_TYPE_ZONOS3 ||
+            info.type == MTMD_GEN_AUDIO_TYPE_FISH_S2 ||
+            info.type == MTMD_GEN_AUDIO_TYPE_VOXCPM2;
+        const std::string encoded_reference = inputs.reference_audio != nullptr
+            ? inputs.reference_audio : "";
+        if (!encoded_reference.empty() && supports_reference_audio) {
+            const auto media = kcpp_base64_decode(encoded_reference);
+            const auto wrapper = mtmd_helper_bitmap_init_from_buf(
+                llamacpp_tts_mctx.get(), media.data(), media.size(), false,
+                mtmd_helper_init_opt_default());
+            if (wrapper.video_ctx != nullptr) {
+                mtmd_helper_video_free(wrapper.video_ctx);
+            }
+            if (wrapper.bitmap == nullptr || !mtmd_bitmap_is_audio(wrapper.bitmap)) {
+                if (wrapper.bitmap != nullptr) {
+                    mtmd_bitmap_free(wrapper.bitmap);
+                }
+                throw std::runtime_error("could not decode the reference audio");
+            }
+            speaker.reset(wrapper.bitmap);
+        }
+
+        std::string selected_voice;
+        if (info.n_voices > 0 && !speaker) {
+            for (int32_t i = 0; i < info.n_voices; ++i) {
+                const char * name = mtmd_gen_audio_voice_name(llamacpp_tts_mctx.get(), i);
+                if (name != nullptr && requested_voice == name) {
+                    selected_voice = name;
+                    break;
+                }
+            }
+            if (selected_voice.empty() && !requested_voice.empty()) {
+                const std::string suffix = "_" + requested_voice;
+                for (int32_t i = 0; i < info.n_voices; ++i) {
+                    const char * name = mtmd_gen_audio_voice_name(llamacpp_tts_mctx.get(), i);
+                    const std::string candidate = name != nullptr ? name : "";
+                    if (candidate.size() > suffix.size() &&
+                        candidate.compare(candidate.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                        selected_voice = candidate;
+                        break;
+                    }
+                }
+            }
+            if (selected_voice.empty() && info.type == MTMD_GEN_AUDIO_TYPE_KOKORO &&
+                inputs.speaker_seed >= 1 && inputs.speaker_seed <= 5) {
+                static const std::vector<std::string> legacy_kokoro_voices = {
+                    "am_echo", "af_heart", "af_nicole", "bm_fable", "bf_isabella"};
+                const std::string & legacy_voice = legacy_kokoro_voices[inputs.speaker_seed - 1];
+                for (int32_t i = 0; i < info.n_voices; ++i) {
+                    const char * name = mtmd_gen_audio_voice_name(llamacpp_tts_mctx.get(), i);
+                    if (name != nullptr && legacy_voice == name) {
+                        selected_voice = name;
+                        break;
+                    }
+                }
+            }
+            if (selected_voice.empty()) {
+                const int64_t seed = std::max(1, inputs.speaker_seed);
+                const int32_t index = static_cast<int32_t>((seed - 1) % info.n_voices);
+                const char * name = mtmd_gen_audio_voice_name(llamacpp_tts_mctx.get(), index);
+                if (name != nullptr) {
+                    selected_voice = name;
+                }
+            }
+            speaker.reset(mtmd_gen_audio_get_voice(
+                llamacpp_tts_mctx.get(), selected_voice.c_str()));
+            if (!speaker) {
+                throw std::runtime_error("could not select a model voice");
+            }
+        }
+
+        std::string prompt = common_chat_get_tts_prompt(
+            llamacpp_tts_templates.get(), text, language, selected_voice,
+            [&](const std::string & word) {
+                char buf[512];
+                return mtmd_gen_audio_g2p(llamacpp_tts_mctx.get(), word.c_str(), buf, sizeof(buf)) > 0
+                    ? std::string(buf) : std::string();
+            });
+        if (prompt.empty()) {
+            prompt = text;
+        }
+
+        int audio_seed = inputs.audio_seed;
+        if (audio_seed <= 0 || static_cast<uint32_t>(audio_seed) == UINT32_MAX) {
+            audio_seed = static_cast<int>(static_cast<uint32_t>(time(nullptr)) % 1000000U);
+        }
+        common_params_sampling sampling;
+        sampling.seed = static_cast<uint32_t>(audio_seed);
+        common_sampler_ptr sampler(common_sampler_init(llamacpp_tts_model, sampling));
+        if (!sampler) {
+            throw std::runtime_error("could not initialize the sampler");
+        }
+
+        mtmd_helper::gen_audio::inp inp;
+        inp.set_prompt(std::move(prompt));
+        inp.set_lang(language);
+        inp.set_speaker_ref(std::move(speaker));
+        std::string reference_text = inputs.reference_text != nullptr ? inputs.reference_text : "";
+        if (reference_text.empty() && inputs.custom_speaker_text != nullptr) {
+            reference_text = inputs.custom_speaker_text;
+        }
+        inp.set_speaker_ref_text(std::move(reference_text));
+        inp.data.seq_id = 0;
+        inp.data.seed = static_cast<uint32_t>(audio_seed);
+        inp.data.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM;
+
+        if (!tts_is_quiet) {
+            printf("\nTTS Generating with llama.cpp%s%s...",
+                selected_voice.empty() ? "" : " voice ", selected_voice.c_str());
+        }
+        timer_start();
+        if (llamacpp_tts_generator->set_input(inp.get()) != 0) {
+            throw std::runtime_error("set_input failed");
+        }
+        for (;;) {
+            const int32_t remaining = llamacpp_tts_generator->step_prompt(
+                static_cast<int32_t>(llama_n_batch(llamacpp_tts_ctx)));
+            if (remaining < 0) {
+                throw std::runtime_error("prompt processing failed");
+            }
+            if (remaining == 0) {
+                break;
+            }
+        }
+
+        llama_token sampled = common_sampler_sample(sampler.get(), llamacpp_tts_ctx, -1);
+        common_sampler_accept(sampler.get(), sampled, true);
+        const float * h_state = llama_get_embeddings_ith(llamacpp_tts_ctx, -1);
+        bool stop = false;
+        int n_frames = 0;
+        const int max_frames = llamacpp_tts_generator->max_frames(0);
+        while (!stop && n_frames < max_frames) {
+            const float * h_next = nullptr;
+            if (llamacpp_tts_generator->step_gen(sampled, h_state, &h_next, &stop) != 0) {
+                throw std::runtime_error("audio frame generation failed");
+            }
+            if (h_next == nullptr) {
+                break;
+            }
+            ++n_frames;
+            h_state = h_next;
+            sampled = common_sampler_sample(sampler.get(), llamacpp_tts_ctx, -1);
+            common_sampler_accept(sampler.get(), sampled, true);
+        }
+
+        int32_t sample_rate = 0;
+        const char * data = nullptr;
+        size_t data_len = 0;
+        if (llamacpp_tts_generator->get_output(&sample_rate, &data, &data_len) != 0 ||
+            data == nullptr || data_len == 0 || data_len % sizeof(float) != 0) {
+            throw std::runtime_error("audio output failed");
+        }
+        const float * pcm = reinterpret_cast<const float *>(data);
+        std::vector<float> audio(pcm, pcm + data_len / sizeof(float));
+        last_generated_audio = save_tts_audio_base64(audio, sample_rate, inputs.use_mp3);
+        printf("\nTTS Generated audio in %.2fs.\nTTS Request complete.\n", timer_check());
+        output.data = last_generated_audio.c_str();
+        output.status = 1;
+        last_generation_settings_audio_seed = audio_seed;
+        last_generation_settings_speaker_seed = inputs.speaker_seed;
+        last_generation_settings_prompt = text;
+        total_tts_gens += 1;
+        return output;
+    } catch (const std::exception & error) {
+        printf("\nllama.cpp TTS Generation Error: %s\n", error.what());
+        return output;
+    }
+}
+
 static tts_generation_outputs ttstype_generate_qwen3tts(const tts_generation_inputs inputs)
 {
     tts_generation_outputs output;
@@ -1883,7 +2190,11 @@ static tts_generation_outputs ttstype_generate_audiocpp(const tts_generation_inp
 
 tts_generation_outputs ttstype_generate(const tts_generation_inputs inputs)
 {
-    if (is_audiocpp_tts)
+    if (is_llamacpp_tts)
+    {
+        return ttstype_generate_llamacpp(inputs);
+    }
+    else if (is_audiocpp_tts)
     {
         return ttstype_generate_audiocpp(inputs);
     }
