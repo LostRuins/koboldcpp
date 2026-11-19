@@ -1313,13 +1313,15 @@ def tryparsefloat(value,fallback):
     except (TypeError, ValueError, OverflowError):
         return fallback
 
-def write_json_atomic(path, obj): #writes to a temp file then swaps it in, so a crash cannot leave a truncated file
+def write_json_atomic(path, obj): #write atomically when possible, with an in-place fallback for compatibility
     path = os.path.realpath(path) #replace the real file, not a symlink pointing at it
     tmp = path + ".tmp"
+    atomic_error = None
     try:
         f = open(tmp, 'w', encoding='utf-8')
-    except OSError: #cannot create a file next to the target, e.g. a read-only directory
+    except OSError as e: #cannot create a file next to the target, e.g. a read-only directory
         f = None
+        atomic_error = e
     if f:
         try:
             with f:
@@ -1330,20 +1332,23 @@ def write_json_atomic(path, obj): #writes to a temp file then swaps it in, so a 
                 shutil.copymode(path, tmp)
             except OSError:
                 pass
-            for _ in range(5):
+            for attempt in range(5):
                 try:
                     os.replace(tmp, path)
                     return
-                except PermissionError: #windows: the target can be briefly held open by antivirus or sync tools
-                    time.sleep(0.1)
-                except OSError: #the target cannot be replaced, e.g. a bind-mounted single file
+                except PermissionError as e: #windows: the target can be briefly held open by antivirus or sync tools
+                    atomic_error = e
+                    if attempt < 4:
+                        time.sleep(0.1)
+                except OSError as e: #the target cannot be replaced, e.g. a bind-mounted single file
+                    atomic_error = e
                     break
         finally:
             try:
                 os.remove(tmp)
             except OSError: #already swapped in, or locked by another program on windows. the windows case is untested, we have no windows machine
                 pass
-    print(f"Could not swap in '{path}' atomically, writing it in place instead.")
+    print(f"Could not swap in '{path}' atomically ({atomic_error}), writing it in place instead.")
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(obj, f)
 
@@ -8455,13 +8460,14 @@ Change Mode<br>
         elif clean_path.endswith('/api/extra/data/list'):
             if not self.secure_endpoint():
                 return
-            if savedata_obj is None:
+            savedata = savedata_obj #writers replace the object, so keep one consistent snapshot for this request
+            if savedata is None:
                 response_body = (json.dumps([]).encode())
             else:
                 output = []
                 for i in range (net_save_slots):
-                    if str(i) in savedata_obj:
-                        output.append(savedata_obj[str(i)]["title"])
+                    if str(i) in savedata:
+                        output.append(savedata[str(i)]["title"])
                     else:
                         output.append("")
                 response_body = (json.dumps(output).encode())
@@ -8475,10 +8481,11 @@ Change Mode<br>
                 loadid = tryparseint(tempbody.get('slot', 0),0)
             except Exception:
                 loadid = -1
-            if savedata_obj is None or loadid < 0 or str(loadid) not in savedata_obj:
+            savedata = savedata_obj #writers replace the object, so keep one consistent snapshot for this request
+            if savedata is None or loadid < 0 or str(loadid) not in savedata:
                 response_body = (json.dumps({"success":False,"data":None}).encode())
             else:
-                response_body = (json.dumps({"success":True,"data":savedata_obj[str(loadid)]}).encode())
+                response_body = (json.dumps({"success":True,"data":savedata[str(loadid)]}).encode())
 
         elif clean_path.endswith('/api/extra/data/save'):
             if not self.secure_endpoint():
