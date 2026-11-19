@@ -13012,12 +13012,14 @@ def run_horde_worker(args, api_key, worker_name, worker_id, parallel_batching_th
             if prompt_tokens < 0:
                 prompt_tokens = (len(count_text) + 2) // 3
             prompt_tokens += 32 + 16 * len(count_payload.get("messages", [])) + image_tokens
-            context_limit = min(horde_ctxlimit, int(payload.get("max_context_length", horde_ctxlimit)))
             output_tokens = int(payload.get("max_length", args.defaultgenamt))
-            if prompt_tokens + output_tokens > context_limit:
-                print_with_time(f"Worker {worker_id} - Chat job {jobid} estimated at {prompt_tokens} prompt + {output_tokens} output tokens exceeds context {context_limit}.")
+            if prompt_tokens + output_tokens > maxctx:
+                print_with_time(f"Worker {worker_id} - Chat job {jobid} estimated at {prompt_tokens} prompt + {output_tokens} output tokens exceeds configured context {maxctx}.")
                 submit["fault_reason"] = "prompt_overflow"
                 return submit
+
+            # Use the same context budget for local generation as for the overflow check.
+            payload["max_context_length"] = maxctx
 
             # Tool parsing needs the complete reply. Ordinary non-streamed jobs also use JSON.
             stream = payload.pop("stream_progress", False) is True and not payload.get("tools")
