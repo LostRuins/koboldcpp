@@ -6036,6 +6036,16 @@ def get_my_epurl():
     return f"{httpsaffix}://{endpoint_host}:{displayedport}"
 
 proxy_reload_lock = threading.Lock()
+
+def header_password_matches(headers, target_password, target_alt_password=None):
+    if not target_password:
+        return True
+    auth_header = headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return False
+    token = auth_header[len('Bearer '):].strip()
+    return token == target_password or bool(target_alt_password and token == target_alt_password)
+
 ###########################################################
 ###   A simple reverse proxy used in Kcpp Router mode   ###
 ###########################################################
@@ -6101,9 +6111,11 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
 
         autoswapEnabled = global_memory["autoswapmode"] is not None and global_memory["autoswapmode"]
         model_switch_pass = False
+        # The worker checks each route's access rules. Only authenticated requests may trigger a model reload here.
+        can_reload = header_password_matches(self.headers, (args.password or "").strip(), args.adminpassword)
 
         with proxy_reload_lock:
-            if is_post and (is_completions_path or is_chat_completions_path or (not autoswapEnabled and is_wake_request)):
+            if can_reload and is_post and (is_completions_path or is_chat_completions_path or (not autoswapEnabled and is_wake_request)):
                 model_name = ""
                 if body:
                     try:
@@ -6144,7 +6156,7 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                             self.send_error(504, "KoboldCpp model swap reload timed out")
                             return
                         time.sleep(0.1)
-            if autoswapEnabled and not model_switch_pass:
+            if can_reload and autoswapEnabled and not model_switch_pass:
                 textReqs = ["/api/extra/generate/stream","/api/extra/tokencount","/api/v1/generate","/sdapi/v1/interrogate","/v1/completions","/v1/chat/completions","/v1/responses","/completions","/chat/completions","/responses","/api/generate", "/api/chat", "/v1/messages", "/messages"]
                 sttReqs = ["/api/extra/transcribe","/api/extra/music/transcribe","/v1/audio/transcriptions"]
                 ttsReqs = ["/api/extra/tts", "/v1/audio/speech"]
@@ -7493,24 +7505,9 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                 return False
         return True
 
-    def check_header_password(self, target_password, target_alt_password=None):
-        auth_ok = True
-        if target_password and target_password !="":
-            auth_header = None
-            auth_ok = False
-            if 'Authorization' in self.headers:
-                auth_header = self.headers['Authorization']
-            elif 'authorization' in self.headers:
-                auth_header = self.headers['authorization']
-            if auth_header is not None and auth_header.startswith('Bearer '):
-                token = auth_header[len('Bearer '):].strip()
-                if token==target_password or (target_alt_password and target_alt_password!="" and token==target_alt_password):
-                    auth_ok = True
-        return auth_ok
-
     def secure_endpoint(self): #returns false if auth fails. caller should exit
         #handle password stuff
-        auth_ok = self.check_header_password(password, args.adminpassword)
+        auth_ok = header_password_matches(self.headers, password, args.adminpassword)
         if auth_ok is False:
             self.send_response(401)
             self.end_headers(content_type='application/json')
@@ -7776,14 +7773,19 @@ Change Mode<br>
 
 
         elif clean_path in ["/noscript","noscript"]: #noscript webui
-            self.noscript_webui()
-            return
+            if password:
+                response_code = 403
+                content_type = 'text/plain'
+                response_body = b"NoScript mode is disabled when an API key is required."
+            else:
+                self.noscript_webui()
+                return
 
         elif clean_path.endswith(('/manifest.json')):
             response_body = (json.dumps({"name":"KoboldAI Lite","short_name":"KoboldAI Lite","description":"Progressive Web App for KoboldAI Lite","start_url":"./","scope":".","display":"standalone","background_color":"#303030","theme_color":"#337ab7","orientation":"portrait-primary","icons":[{"src":"data:image/png;base64,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","type":"image/png","sizes":"150x150"}]}).encode())
 
         elif clean_path.endswith(('/api/v1/model', '/api/latest/model')):
-            auth_ok = self.check_header_password(password, args.adminpassword)
+            auth_ok = header_password_matches(self.headers, password, args.adminpassword)
             modelNameToReturn = friendlymodelname
             if autoswapmode and textName is not None:
                 modelNameToReturn = textName
@@ -7813,7 +7815,7 @@ Change Mode<br>
 
         elif clean_path.endswith(('/api/admin/list_options')):  # used by admin to get info about a kcpp instance
             opts = []
-            if args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
+            if args.admin and args.admindir and os.path.exists(args.admindir) and header_password_matches(self.headers, args.adminpassword):
                 opts = get_current_admindir_list()
             response_body = (json.dumps(opts).encode())
 
@@ -7968,6 +7970,13 @@ Change Mode<br>
             response_body = (json.dumps({"status": "healthy"}).encode())
 
         #comfyui compatible
+        elif (
+            clean_path in ('/system_stats', '/object_info', '/api/models/loras', '/models/loras',
+                           '/view', '/view.png', '/api/view', '/history', '/api/history', '/ws')
+            or clean_path.endswith('/models/checkpoints')
+            or clean_path.startswith(('/view_image', '/api/history/', '/history/'))
+        ) and not self.secure_endpoint():
+            return
         elif clean_path=='/system_stats':
             response_body = (json.dumps({"system":{"os":"posix","ram_total":12345678900,"ram_free":12345678900,"comfyui_version":"v0.3.4-3-g7126ecf","python_version":"3.10.12","pytorch_version":"2.5.1","embedded_python":False,"argv":[]},"devices":[{"name":"koboldcpp","type":"cuda","index":0,"vram_total":12345678900,"vram_free":12345678900,"torch_vram_total":12345678900,"torch_vram_free":12345678900}]}).encode())
         elif clean_path=='/object_info':
@@ -7988,6 +7997,8 @@ Change Mode<br>
             content_type = 'image/png'
             response_body = lastgeneratedcomfyimg
         elif clean_path.startswith('/sdapi/v1/recovery-status'):
+            if not self.secure_endpoint():
+                return
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
@@ -8000,6 +8011,8 @@ Change Mode<br>
                     recovery_status = 'unknown'
             response_body = json.dumps({"status": recovery_status}).encode()
         elif clean_path.startswith('/sdapi/v1/get_last.json'):
+            if not self.secure_endpoint():
+                return
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
@@ -8009,6 +8022,8 @@ Change Mode<br>
                 else:
                     response_body = None
         elif clean_path.startswith('/sdapi/v1/progress'):
+            if not self.secure_endpoint():
+                return
             parsed_url = urllib.parse.urlparse(self.path)
             parsed_dict = urllib.parse.parse_qs(parsed_url.query)
             genkey = parsed_dict.get('genkey', [''])[0]
@@ -8328,6 +8343,8 @@ Change Mode<br>
                 response_body = (json.dumps({"success": "false", "done":"false"}).encode())
 
         elif clean_path.endswith('/sdapi/v1/interrupt'):
+            if not self.secure_endpoint():
+                return
             image_genkey = ""
             try:
                 tempbody = json.loads(body)
@@ -8543,7 +8560,7 @@ Change Mode<br>
 
         elif clean_path.startswith(("/api/admin/reload_config")):
             resp = {"success": False}
-            if global_memory and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
+            if global_memory and args.admin and args.admindir and os.path.exists(args.admindir) and header_password_matches(self.headers, args.adminpassword):
                 targetfile = ""
                 baseconfig = ""
                 try:
@@ -8720,6 +8737,7 @@ Change Mode<br>
             global_memory["active_requests"] = global_memory.get("active_requests", 0) + 1
 
         # handle endpoints that require mutex locking and handle actual gens
+        accepted_request = False
         try:
             sse_stream_flag = False
             api_format = 0 #1=basic,2=kai,3=oai,4=oai-chat,5=interrogate,6=ollama,7=ollamachat,8=oai-responses,9=anthropic-messages
@@ -8737,10 +8755,9 @@ Change Mode<br>
             is_music_audio = False
             response_body = None
             use_jinja = args.jinja
-            global_memory["last_active_timestamp"] = datetime.now()
-            global_memory["triggered_sleeping"] = False
             if clean_path.endswith('/api/admin/check_state'):
-                if global_memory and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
+                if global_memory and args.admin and args.admindir and os.path.exists(args.admindir) and header_password_matches(self.headers, args.adminpassword):
+                    accepted_request = True
                     cur_states = []
                     for sl in range(savestate_limit): #0,1,2,3
                         oldstate = handle.calc_old_state_kv(sl)
@@ -8752,7 +8769,8 @@ Change Mode<br>
                 else:
                     response_body = (json.dumps({"success": False, "old_states":[], "new_state_size":0, "new_tokens":0}).encode())
             elif clean_path.endswith('/api/admin/load_state'):
-                if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
+                if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and header_password_matches(self.headers, args.adminpassword):
+                    accepted_request = True
                     targetslot = 0
                     try:
                         tempbody = json.loads(body)
@@ -8767,7 +8785,8 @@ Change Mode<br>
                 else:
                     response_body = (json.dumps({"success": False, "new_tokens":0}).encode())
             elif clean_path.endswith('/api/admin/save_state'):
-                if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
+                if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and header_password_matches(self.headers, args.adminpassword):
+                    accepted_request = True
                     targetslot = 0
                     try:
                         tempbody = json.loads(body)
@@ -8782,12 +8801,16 @@ Change Mode<br>
                 else:
                     response_body = (json.dumps({"success": False, "new_state_size":0, "new_tokens":0}).encode())
             elif clean_path.endswith('/api/admin/clear_state'):
-                if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and self.check_header_password(args.adminpassword):
+                if global_memory and savestate_limit>0 and args.admin and args.admindir and os.path.exists(args.admindir) and header_password_matches(self.headers, args.adminpassword):
+                    accepted_request = True
                     result = handle.clear_state_kv()
                     response_body = (json.dumps({"success": result}).encode())
                 else:
                     response_body = (json.dumps({"success": False}).encode())
             elif clean_path.startswith('/api/upload/image') or clean_path.startswith("/upload/image"): #comfyui compatible
+                if not self.secure_endpoint():
+                    return
+                accepted_request = True
                 lastuploadedcomfyimg = b''
                 formdata = self.extract_formdata_from_file_upload(body)
                 if "file" in formdata and formdata["file"]:
@@ -8805,17 +8828,6 @@ Change Mode<br>
             elif clean_path.endswith('/v1/chat/completions') or clean_path=='/chat/completions':
                 api_format = 4
             elif clean_path.endswith('/sdapi/v1/interrogate'):
-                mmprojOverride = False
-                if autoswapmode and mmprojName is not None:
-                    mmprojOverride = True
-                if not mmprojOverride and not has_vision_support:
-                    self.send_response(503)
-                    self.end_headers(content_type='application/json')
-                    self.wfile.write(json.dumps({"detail": {
-                            "msg": "No Vision model loaded",
-                            "type": "service_unavailable",
-                        }}).encode())
-                    return
                 api_format = 5
             elif clean_path.endswith('/api/generate'): #ollama
                 api_format = 6
@@ -8856,12 +8868,20 @@ Change Mode<br>
                 self.end_headers(content_type='application/json')
                 self.wfile.write(response_body)
             elif is_imggen or is_img_upscale or is_transcribe or is_tts or is_embeddings or is_music_codes or is_music_audio or api_format > 0:
+                if not is_sdcpp_imggen and not self.secure_endpoint():
+                    return
+                accepted_request = True
                 global last_req_time
                 last_req_time = time.time()
 
-                if not is_imggen and not is_img_upscale and not clean_path.endswith('/tts_to_audio') and api_format!=5:
-                    if not self.secure_endpoint():
-                        return
+                if api_format == 5 and not has_vision_support and not (autoswapmode and mmprojName is not None):
+                    self.send_response(503)
+                    self.end_headers(content_type='application/json')
+                    self.wfile.write(json.dumps({"detail": {
+                            "msg": "No Vision model loaded",
+                            "type": "service_unavailable",
+                        }}).encode())
+                    return
 
                 genparams = None
                 try:
@@ -9570,7 +9590,10 @@ Change Mode<br>
         finally:
             time.sleep(0.05)
             with batched_cond:
-                global_memory["last_active_timestamp"] = datetime.now()
+                # Rejected requests must preserve the router's wake signal.
+                if accepted_request:
+                    global_memory["last_active_timestamp"] = datetime.now()
+                    global_memory["triggered_sleeping"] = False
                 global_memory["active_requests"] -= 1
             if is_batchable_req:
                 with batched_cond:
@@ -11138,7 +11161,7 @@ def show_gui():
 
     makefileentry(network_tab, "SSL Cert:", "Select Unencrypted SSL cert.pem file",ssl_cert_var, 20, width=200,filetypes=[("*.pem *.crt *.key", "*.pem *.crt *.cer *.key")], singlerow=True,tooltiptxt="Select your unencrypted .pem SSL certificate file for https.\nCan be generated with OpenSSL.")
     makefileentry(network_tab, "SSL Key:", "Select Unencrypted SSL key.pem file", ssl_key_var, 22, width=200, filetypes=[("*.pem *.crt *.key", "*.pem *.key")], singlerow=True, tooltiptxt="Select your unencrypted .pem SSL key file for https.\nCan be generated with OpenSSL.")
-    makelabelentry(network_tab, "Password: ", password_var, 24, 200, padx=(100), singleline=True, tooltip="Enter a password required to use this instance.\nThis key will be required for all text endpoints.\nImage endpoints are not secured.")
+    makelabelentry(network_tab, "Password: ", password_var, 24, 200, padx=(100), singleline=True, tooltip="Require a Bearer API key for generation endpoints.\nNoScript mode is disabled when a key is set.")
 
     makelabelentry(network_tab, "Queue Limit:", queuelimit_var, row=30, width=50, padx=(120), singleline=True, tooltip="Maximum queued incoming requests.")
     makelabelentry(network_tab, "Max Req. Size (MB):", maxrequestsize_var, row=30, width=50, padx=(340), singleline=True, tooltip="Specify a max request payload size. Any requests to the server larger than this size will be dropped. Do not change if unsure.",labelpadx=210)
@@ -15351,6 +15374,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                        {"find":"<p id=\"tempgtloadtxt\">Loading...</p>","replace":"<p id=\"tempgtloadtxt\">Loading...<br>(If load fails, try <a class=\"color_blueurl\" href=\"/noscript\">KoboldCpp NoScript mode</a> instead, or adding /noscript at this url.)</p>"}]
             embedded_kailite = embedded_kailite.decode("UTF-8","ignore")
             for p in patches:
+                if password and '/noscript' in p["replace"]:
+                    continue
                 embedded_kailite = embedded_kailite.replace(p["find"], p["replace"])
             embedded_kailite = embedded_kailite.encode()
             embedded_kailite_gz = gzip.compress(embedded_kailite)
@@ -15802,7 +15827,7 @@ if __name__ == '__main__':
     advparser.add_argument("--overridetensors","--override-tensor","-ot", metavar=('[tensor name pattern=buffer type]'), help="Override selected backend for specific tensors matching tensor_name_regex_pattern=buffer_type, same as in llama.cpp.", default="")
     advparser.add_argument("--parallelrequests","--continuous-batching","--contbatch", help="Allows multiple text and multimodal generation requests to be processed in parallel (Experimental).", metavar=('[slots]'), type=check_range(int,0,32), default=1)
     advparser.add_argument("--paralleltotalcontext","--parallel-total-context", help="Sets the total shared KV cache size in tokens for parallel requests. Defaults to --contextsize when unset; lower values are raised to --contextsize.", metavar=('[tokens]'), type=check_range(int,0,2147483647), default=0)
-    advparser.add_argument("--password", metavar=('[API key]'), help="Enter a password required to use this instance. This key will be required for all text endpoints. Image endpoints are not secured. Can also be set with env var KCPP_PASSWORD", default=os.getenv('KCPP_PASSWORD',None))
+    advparser.add_argument("--password", metavar=('[API key]'), help="Require a Bearer API key for generation endpoints and disable NoScript mode. Can also be set with env var KCPP_PASSWORD", default=os.getenv('KCPP_PASSWORD',None))
     advparser.add_argument("--preloadstory", metavar=('[savefile]'), help="Configures a prepared story json save file to be hosted on the server, which frontends (such as KoboldAI Lite) can access over the API.", default="")
     advparser.add_argument("--prompt","-p", metavar=('[prompt]'), help="Passing a prompt string triggers a direct inference, loading the model, outputs the response to stdout and exits. Can be used alone or with benchmark.", type=str, default="")
     advparser.add_argument("--quantkv", help="Sets the KV cache data type quantization, options are f16/bf16/q8_0/q5_1/q4_0. Requires Flash Attention for full effect, otherwise only K cache is quantized.",metavar=('[quantization level f16/bf16/q8_0/q5_1/q4_0]'), type=str, choices=["f16","bf16","q8_0","q5_1","q4_0","0","1","2","3"], default="f16")

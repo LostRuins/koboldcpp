@@ -10701,12 +10701,15 @@ Current version indicated by LITEVER below.
 		a1111_t2i_payload = Object.fromEntries(Object.entries(a1111_t2i_payload).filter(([_, v]) => v != null));
 
 		let gen_endpoint = localsettings.saved_a1111_url + ep;
+		let headers = {'Content-Type': 'application/json'};
+		if(custom_kobold_key && is_using_kcpp_with_imagegen() && localsettings.saved_a1111_url === custom_kobold_endpoint)
+		{
+			headers['Authorization'] = 'Bearer ' + custom_kobold_key;
+		}
 		console.log(a1111_t2i_payload);
 		fetch(gen_endpoint, {
 			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-			},
+			headers,
 			body: JSON.stringify(a1111_t2i_payload),
 		})
 		.then(x => x.json())
@@ -25106,15 +25109,18 @@ Current version indicated by LITEVER below.
 			};
 			let imgid = "A1111interrogate"+(Math.floor(10000 + Math.random() * 90000)).toString();
 			let interrogateep = localsettings.saved_a1111_url + a1111_interrogate_endpoint;
+			let headers = {'Content-Type': 'application/json'};
 			if(is_using_kcpp_with_vision()) //handle using connected vision endpoint instead if available
 			{
 				interrogateep = apply_proxy_url(custom_kobold_endpoint + a1111_interrogate_endpoint);
+				if(custom_kobold_key)
+				{
+					headers['Authorization'] = 'Bearer ' + custom_kobold_key;
+				}
 			}
 			fetch(interrogateep, {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
+				headers,
 				body: JSON.stringify(payload),
 			})
 			.then(x => x.json())
