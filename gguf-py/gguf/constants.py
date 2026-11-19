@@ -143,6 +143,7 @@ class Keys:
         DECODER_BLOCK_COUNT               = "{arch}.decoder_block_count"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
+        ROUTER_HIDDEN_SIZE                = "{arch}.router_hidden_size"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
         FINAL_LOGIT_SIGMOID_CAPPING       = "{arch}.final_logit_sigmoid_capping"
         SWIN_NORM                         = "{arch}.swin_norm"
@@ -736,6 +737,7 @@ class MODEL_ARCH(IntEnum):
     LFM2             = auto()
     LFM2MOE          = auto()
     LFM3             = auto()
+    ZAYA1            = auto()
     DREAM            = auto()
     SMALLTHINKER     = auto()
     LLADA            = auto()
@@ -770,6 +772,8 @@ class MODEL_ARCH(IntEnum):
     QWEN3TTS         = auto()
     POCKETTTS        = auto()
     ZONOS3           = auto()
+    KOKORO           = auto()
+    TINY_VOCA        = auto()
     K2HORIZON        = auto()
     KOLIBRI1         = auto()
     LIMITE           = auto()
@@ -794,6 +798,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
 class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD           = auto()
     TOKEN_EMBD_NORM      = auto()
+    TOKEN_EMBD_PROJ      = auto()
     MASKED_EMBD_CENTROIDS= auto()
     MASKED_EMBD_ORDERING = auto()
     TOKEN_TYPES          = auto()
@@ -1360,6 +1365,21 @@ class MODEL_TENSOR(IntEnum):
     A_CODEC_VQ_FIRST_CB    = auto() # semantic VQ codebook, l2-normalized
     A_CODEC_VQ_REST_IN     = auto() # residual VQ input projections, merged 3D
     A_CODEC_VQ_REST_CB     = auto() # residual VQ codebooks, l2-normalized, merged 3D
+    # qwen3tts reference encoder: raw PCM -> RVQ codes, the SEANet stack and the downsample conv use A_ENC_*
+    A_GEN_ENC_TFM_ATTN_NORM        = auto()
+    A_GEN_ENC_TFM_ATTN_Q           = auto()
+    A_GEN_ENC_TFM_ATTN_K           = auto()
+    A_GEN_ENC_TFM_ATTN_V           = auto()
+    A_GEN_ENC_TFM_ATTN_OUT         = auto()
+    A_GEN_ENC_TFM_ATTN_SCALE       = auto()
+    A_GEN_ENC_TFM_FFN_NORM         = auto()
+    A_GEN_ENC_TFM_FFN_UP           = auto()
+    A_GEN_ENC_TFM_FFN_DOWN         = auto()
+    A_GEN_ENC_TFM_FFN_SCALE        = auto()
+    A_GEN_ENC_QUANT_FIRST_IN       = auto()
+    A_GEN_ENC_QUANT_FIRST_CB       = auto()
+    A_GEN_ENC_QUANT_REST_IN        = auto()
+    A_GEN_ENC_QUANT_REST_CB        = auto()
     # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj
@@ -1515,6 +1535,17 @@ class MODEL_TENSOR(IntEnum):
     LILICORR_OUT_HEAD             = auto()
     LILICORR_IN_HEAD              = auto()
     LILICORR_ANCHOR_OUT_HEAD      = auto()
+    # zaya1
+    CCA_CONV_GRP           = auto()
+    CCA_TEMP               = auto()
+    RES_SCALE_IN           = auto()
+    ATTN_RES_SCALE_HS      = auto()
+    FFN_RES_SCALE_HS       = auto()
+    ROUTER_EDA             = auto()
+    ROUTER_NORM            = auto()
+    ROUTER_FC1             = auto()
+    ROUTER_FC2             = auto()
+    ROUTER_OUT             = auto()
     # lfm2 audio
     A_ENC_NORM_CONV        = auto()
     A_ENC_LINEAR_POS       = auto()
@@ -1706,6 +1737,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LFM2:             "lfm2",
     MODEL_ARCH.LFM2MOE:          "lfm2moe",
     MODEL_ARCH.LFM3:             "lfm3",
+    MODEL_ARCH.ZAYA1:            "zaya1",
     MODEL_ARCH.DREAM:            "dream",
     MODEL_ARCH.SMALLTHINKER:     "smallthinker",
     MODEL_ARCH.LLADA:            "llada",
@@ -1740,6 +1772,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
     MODEL_ARCH.POCKETTTS:        "pockettts",
     MODEL_ARCH.ZONOS3:           "zonos3",
+    MODEL_ARCH.KOKORO:           "kokoro",
+    MODEL_ARCH.TINY_VOCA:        "tiny-voca",
     MODEL_ARCH.K2HORIZON:        "k2-horizon",
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
@@ -1762,6 +1796,7 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.TOKEN_EMBD:                "token_embd",
     MODEL_TENSOR.TOKEN_EMBD_NORM:           "token_embd_norm",
+    MODEL_TENSOR.TOKEN_EMBD_PROJ:           "token_embd_proj",
     MODEL_TENSOR.TOKEN_TYPES:               "token_types",
     MODEL_TENSOR.MASKED_EMBD_CENTROIDS:     "masked_embd_centroids",
     MODEL_TENSOR.MASKED_EMBD_ORDERING:      "masked_embd_ordering",
@@ -2323,6 +2358,20 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_CODEC_VQ_FIRST_CB:       "a.codec.vq.first.codebook",
     MODEL_TENSOR.A_CODEC_VQ_REST_IN:        "a.codec.vq.rest.in_proj",
     MODEL_TENSOR.A_CODEC_VQ_REST_CB:        "a.codec.vq.rest.codebook",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_NORM:   "a.gen.enc.tfm.blk.{bid}.ln1",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_Q:      "a.gen.enc.tfm.blk.{bid}.attn_q",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_K:      "a.gen.enc.tfm.blk.{bid}.attn_k",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_V:      "a.gen.enc.tfm.blk.{bid}.attn_v",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_OUT:    "a.gen.enc.tfm.blk.{bid}.attn_out",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_SCALE:  "a.gen.enc.tfm.blk.{bid}.ls1",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_NORM:    "a.gen.enc.tfm.blk.{bid}.ln2",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_UP:      "a.gen.enc.tfm.blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_DOWN:    "a.gen.enc.tfm.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_SCALE:   "a.gen.enc.tfm.blk.{bid}.ls2",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_IN:  "a.gen.enc.quant.first.in_proj",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_CB:  "a.gen.enc.quant.first.codebook",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_REST_IN:   "a.gen.enc.quant.rest.in_proj",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_REST_CB:   "a.gen.enc.quant.rest.codebook",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN:  "a.gen.wav.quant.first.in_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT: "a.gen.wav.quant.first.out_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB:  "a.gen.wav.quant.first.codebook",
@@ -2524,6 +2573,16 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.LILICORR_OUT_HEAD:                     "lilicorr.out_head",
     MODEL_TENSOR.LILICORR_IN_HEAD:                      "lilicorr.in_head",
     MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD:              "lilicorr.anchor_out_head",
+    MODEL_TENSOR.CCA_CONV_GRP:              "blk.{bid}.cca_conv_grp",
+    MODEL_TENSOR.CCA_TEMP:                  "blk.{bid}.cca_temp",
+    MODEL_TENSOR.RES_SCALE_IN:              "res_scale_in",
+    MODEL_TENSOR.ATTN_RES_SCALE_HS:         "blk.{bid}.attn_res_scale_hs",
+    MODEL_TENSOR.FFN_RES_SCALE_HS:          "blk.{bid}.ffn_res_scale_hs",
+    MODEL_TENSOR.ROUTER_EDA:                "blk.{bid}.ffn_router_eda",
+    MODEL_TENSOR.ROUTER_NORM:               "blk.{bid}.ffn_router_norm",
+    MODEL_TENSOR.ROUTER_FC1:                "blk.{bid}.ffn_router_fc1",
+    MODEL_TENSOR.ROUTER_FC2:                "blk.{bid}.ffn_router_fc2",
+    MODEL_TENSOR.ROUTER_OUT:                "blk.{bid}.ffn_router_out",
     MODEL_TENSOR.D2T:                       "d2t",
     MODEL_TENSOR.ATTN_V_GATE:               "blk.{bid}.attn_v_gate",
     MODEL_TENSOR.ATTN_V_EXP:                "blk.{bid}.attn_v_exps",
@@ -2778,6 +2837,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_CODEC_VQ_FIRST_CB,
         MODEL_TENSOR.A_CODEC_VQ_REST_IN,
         MODEL_TENSOR.A_CODEC_VQ_REST_CB,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_NORM,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_Q,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_K,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_V,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_OUT,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_SCALE,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_NORM,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_UP,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_DOWN,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_SCALE,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_IN,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_CB,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_REST_IN,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_REST_CB,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB,
@@ -6081,6 +6154,34 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.ATTN_GATE,
     ],
+    MODEL_ARCH.ZAYA1: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.RES_SCALE_IN,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.CCA_CONV_GRP,
+        MODEL_TENSOR.CCA_TEMP,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_RES_SCALE_HS,
+        MODEL_TENSOR.ATTN_RESID_SCALE,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.ROUTER_EDA,
+        MODEL_TENSOR.ROUTER_NORM,
+        MODEL_TENSOR.ROUTER_FC1,
+        MODEL_TENSOR.ROUTER_FC2,
+        MODEL_TENSOR.ROUTER_OUT,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_RES_SCALE_HS,
+        MODEL_TENSOR.FFN_RESID_SCALE,
+    ],
     MODEL_ARCH.SMALLTHINKER: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -6819,6 +6920,33 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.TINY_VOCA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+    ],
+    MODEL_ARCH.KOKORO: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.TOKEN_EMBD_PROJ,
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_OUT_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.LAYER_OUT_NORM,
+    ],
     MODEL_ARCH.ZONOS3: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -7291,9 +7419,13 @@ class VisionProjectorType:
     ZONOS3_GEN = "zonos3_gen" # audio generation: 10 codebook heads + ZAC decoder
     ZONOS3_SPKENC = "zonos3_spkenc" # audio: MECT-B2 speaker encoder
     YUE2_GEN = "yue2_gen" # audio generation: flow-matching NAR + Oobleck VAE decoder
+    VOXCPM2_GEN = "voxcpm2_gen" # audio generation: residual LM + LocDiT flow matching + AudioVAE decoder
+    VOXCPM2_SPKENC = "voxcpm2_spkenc" # audio: AudioVAE encoder, reference clip -> latents
     MINIMAX_MUSIC3_GEN = "minimax_music3_gen" # audio generation: RVQ depth decoder + flow-matching DiT + DAC decoder
     FISH_S2_GEN = "fish_s2_gen" # audio generation: fast AR code predictor + Fish DAC decoder
     FISH_S2_SPKENC = "fish_s2_spkenc" # audio: Fish DAC encoder + RVQ, reference clip -> prompt rows
+    KOKORO = "kokoro" # audio generation: StyleTTS2 prosody predictor + iSTFTNet decoder
+    TINY_VOCA = "tiny_voca" # audio generation: duration predictor, frame transformers, source-filter vocoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
