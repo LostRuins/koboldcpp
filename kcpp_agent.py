@@ -70,8 +70,14 @@ MAX_PROJECT_INSTRUCTION_CHARS = 12000
 DEFAULT_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://127.0.0.1:5001/v1")
 DEFAULT_API_KEY = os.getenv("OPENAI_API_KEY", "local")
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "")
-# Accept self-signed endpoint certificates for now; web_fetch keeps verification.
+# Accept self-signed endpoint certificates for now; web_fetch verifies unless
+# the user explicitly launches KoboldCpp with --nocertify.
 API_SSL_CONTEXT = ssl._create_unverified_context()
+# Match KoboldCpp's verified urllib setup for bundled non-Windows builds, where
+# OpenSSL may otherwise have no default CA directory.
+if not os.environ.get("SSL_CERT_DIR") and os.name != "nt":
+    os.environ["SSL_CERT_DIR"] = "/etc/ssl/certs"
+WEB_SSL_CONTEXT = ssl.create_default_context()
 COLOR_STDOUT = False
 COLOR_STDERR = False
 DEFAULT_TEMPERATURE = 0.4
@@ -1274,7 +1280,10 @@ def tool_web_fetch(args: dict[str, Any]) -> str:
         },
         method="GET",
     )
-    opener = urllib.request.build_opener(SafeRedirectHandler())
+    opener = urllib.request.build_opener(
+        SafeRedirectHandler(),
+        urllib.request.HTTPSHandler(context=WEB_SSL_CONTEXT),
+    )
     with opener.open(request, timeout=timeout) as response:
         final_url = validate_web_url(response.geturl())
         content_type = response.headers.get_content_type().lower()
@@ -3655,6 +3664,11 @@ def parse_args() -> argparse.Namespace:
         help="Model request timeout in seconds (default: %(default)s)",
     )
     parser.add_argument(
+        "--nocertify",
+        action="store_true",
+        help="Disable TLS certificate verification for web_fetch (insecure).",
+    )
+    parser.add_argument(
         "--confirmation",
         choices=CONFIRMATION_MODES,
         default="on",
@@ -3717,7 +3731,7 @@ def temperature_value(value: str) -> float:
 
 
 def main() -> None:
-    global MAX_TOOL_RESULT_CHARS
+    global MAX_TOOL_RESULT_CHARS, WEB_SSL_CONTEXT
 
     # Prevent locale-specific encoding failures for prompts, paths, and model text.
     for stream in (sys.stdout, sys.stderr):
@@ -3730,6 +3744,11 @@ def main() -> None:
         for value in sys.argv[1:]
     )
     MAX_TOOL_RESULT_CHARS = args.max_tool_result_chars
+    WEB_SSL_CONTEXT = (
+        ssl._create_unverified_context()
+        if args.nocertify
+        else ssl.create_default_context()
+    )
     configure_colors(disabled=args.no_color)
     try:
         if args.workdir is not None:

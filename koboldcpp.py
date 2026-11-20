@@ -13909,7 +13909,8 @@ def get_kobold_agent_path():
     return os.path.join(base_path, "kcpp_agent.py")
 
 
-def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None, request_timeout=None):
+def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None,
+                             request_timeout=None, no_certify=False):
     """Run the bundled agent script inside a frozen KoboldCpp process."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -13928,13 +13929,16 @@ def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None, req
             sys.argv.extend(["--load-session", load_session])
         if request_timeout is not None:
             sys.argv.extend(["--request-timeout", str(request_timeout)])
+        if no_certify:
+            sys.argv.append("--nocertify")
         kcpp_agent.main()
     finally:
         sys.argv = old_argv
 
 
 def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=False,
-                                 load_session=None, request_timeout=None):
+                                 load_session=None, request_timeout=None,
+                                 no_certify=False):
     """Run the agent in a new or existing terminal, using the bundled runner when frozen."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -13952,6 +13956,8 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
         command.extend(["--agentload" if is_frozen else "--load-session", load_session])
     if request_timeout is not None:
         command.extend(["--reqtimeout" if is_frozen else "--request-timeout", str(request_timeout)])
+    if no_certify:
+        command.append("--nocertify")
 
     try:
         if same_terminal:
@@ -14051,6 +14057,8 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
             if request_timeout is not None:
                 manual_command.extend(["--reqtimeout" if is_frozen else "--request-timeout",
                                        str(request_timeout)])
+            if no_certify:
+                manual_command.append("--nocertify")
             print(f"Try running this in an existing terminal: {shlex.join(manual_command)}")
             return False
         return True
@@ -14061,7 +14069,7 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
 
 def launch_kobold_agent_after_mcp_load(
     mcp_load_thread, base_url=None, api_key=None, same_terminal=False, load_session=None,
-    request_timeout=None
+    request_timeout=None, no_certify=False
 ):
     """Briefly wait for a complete MCP tool list, then launch regardless."""
     if mcp_load_thread is not None:
@@ -14075,7 +14083,7 @@ def launch_kobold_agent_after_mcp_load(
                 "to refresh MCP tools."
             )
     return launch_kobold_agent_terminal(
-        base_url, api_key, same_terminal, load_session, request_timeout
+        base_url, api_key, same_terminal, load_session, request_timeout, no_certify
     )
 
 
@@ -14226,15 +14234,20 @@ def main(launch_args, default_args):
 
     if args.run_bundled_agent:
         run_bundled_kobold_agent(
-            args.agent_base_url, args.agent_api_key, args.agentload, args.reqtimeout
+            args.agent_base_url, args.agent_api_key, args.agentload, args.reqtimeout,
+            args.nocertify
         )
         return
 
     standalone_agent_args = cli_arg_overrides and cli_arg_overrides <= {
-        "agent", "agentload", "reqtimeout"
+        "agent", "agentload", "reqtimeout", "nocertify"
     }
     if args.agent and (len(sys.argv) == 2 or standalone_agent_args):
-        launch_kobold_agent_terminal(load_session=args.agentload, request_timeout=args.reqtimeout)
+        launch_kobold_agent_terminal(
+            load_session=args.agentload,
+            request_timeout=args.reqtimeout,
+            no_certify=args.nocertify,
+        )
         return
 
     if (args.version) and len(sys.argv) <= 2:
@@ -15791,6 +15804,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     same_terminal=args.cli,
                     load_session=args.agentload,
                     request_timeout=args.reqtimeout,
+                    no_certify=args.nocertify,
                 )
                 if args.cli:
                     raise SystemExit(0 if success else 1)
