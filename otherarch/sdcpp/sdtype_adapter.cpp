@@ -323,31 +323,57 @@ struct KcppLoadParams {
     bool has_llm_vision = false;
 };
 
+// local intermediate representation of a generation request: decoded from
+// sd_generation_inputs at the top of sdtype_generate, processed in place, then
+// settled into sd_img_gen_params_t / sd_vid_gen_params_t before the call.
+struct SDGenParams {
+    // prompts
+    std::string prompt;
+    std::string negative_prompt;
+
+    // sampling
+    float cfg_scale          = 7.0f;
+    float distilled_guidance = -1.0f;
+    int sample_steps         = 20;
+    int shifted_timestep     = 0;
+    float flow_shift         = -1.0f;
+    float eta                = -1.0f;
+    int64_t seed             = 42;
+    int clip_skip            = -1;  // <= 0 represents unspecified
+    sample_method_t sample_method = sample_method_t::SAMPLE_METHOD_COUNT;
+    scheduler_t scheduler         = scheduler_t::SCHEDULER_COUNT;
+    std::vector<float> custom_sigmas;
+    std::string extra_sample_args;
+    std::string ref_image_args;
+
+    // size / img2img
+    int width  = 512;
+    int height = 512;
+    float strength = 0.75f;
+
+    // vae cache
+    std::string cache_mode;
+    std::string cache_options;
+
+    // circular sampling
+    bool circular_x = false;
+    bool circular_y = false;
+
+    // LoRAs merged from the model-load list and the request (dynamic mode);
+    // loras[i].path points into lora_map, which must outlive loras
+    LoraMap lora_map;
+    std::vector<sd_lora_t> loras;
+    std::string lora_meta;
+
+    // state tracking
+    bool force_image_edit = false;
+    int req_width  = 512;
+    int req_height = 512;
+};
+
 struct SDParams {
     SDLoadParams load_params;
     KcppLoadParams kcpp_load_params;
-
-    std::string prompt;
-    std::string negative_prompt;
-    float cfg_scale   = 7.0f;
-    int clip_skip     = -1;  // <= 0 represents unspecified
-    int width         = 512;
-    int height        = 512;
-
-    sample_method_t sample_method = sample_method_t::SAMPLE_METHOD_COUNT;
-    scheduler_t scheduler         = scheduler_t::SCHEDULER_COUNT;
-    int sample_steps              = 20;
-    float distilled_guidance      = -1.0f;
-    float shifted_timestep        = 0;
-    float flow_shift              = -1.0f;
-    std::string extra_sample_args = "";
-    float eta                     = -1.0f;
-    float strength                = 0.75f;
-    int64_t seed                  = 42;
-    std::string ref_image_args    = "";
-
-    std::string cache_mode;
-    std::string cache_options;
 };
 
 //shared
@@ -2331,26 +2357,56 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     auto& klp = sd_params->kcpp_load_params;
 
-    {
-        std::lock_guard<std::mutex> lock(geninfo.mux);
-        geninfo.start_time = std::chrono::steady_clock::now();
-        geninfo.steps = inputs.sample_steps;
-        geninfo.preview_requested = false;
-        geninfo.preview_enabled = false;
-        geninfo.aborted = false;
-        geninfo.gendata = {};
-        geninfo.gendata.status = 1;
-        set_preview_images(1);
+    // decode the request into a local parameter representation
+    SDGenParams gp;
+    gp.prompt = SAFE_STR(inputs.prompt);
+    gp.negative_prompt = SAFE_STR(inputs.negative_prompt);
+    gp.cfg_scale = inputs.cfg_scale;
+    gp.distilled_guidance = inputs.distilled_guidance;
+    gp.sample_steps = inputs.sample_steps;
+    gp.shifted_timestep = inputs.shifted_timestep;
+    gp.flow_shift = inputs.flow_shift;
+    gp.extra_sample_args = SAFE_STR(inputs.extra_sample_args);
+    gp.eta = inputs.eta;
+    gp.seed = inputs.seed;
+    gp.width = gp.req_width = inputs.width;
+    gp.height = gp.req_height = inputs.height;
+    gp.strength = inputs.denoising_strength;
+    gp.clip_skip = inputs.clip_skip;
+    gp.sample_method = sampler_from_name(inputs.sample_method);
+    gp.scheduler = scheduler_from_name(inputs.scheduler);
+    gp.cache_mode = SAFE_STR(inputs.cache_mode);
+    gp.cache_options = SAFE_STR(inputs.cache_options);
+    gp.circular_x = inputs.circular_x;
+    gp.circular_y = inputs.circular_y;
+    if (inputs.custom_sigmas && inputs.custom_sigmas_count > 0) {
+        gp.custom_sigmas.assign(inputs.custom_sigmas, inputs.custom_sigmas + inputs.custom_sigmas_count);
+    }
+    gp.lora_map = klp.lora_map;
+    if (klp.lora_dynamic) {
+        for (int i = 0; i < inputs.lora_len; i++) {
+            gp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
+        }
+    }
+    gp.loras = gp.lora_map.get_lora_specs();
+    gp.lora_meta = gp.lora_map.get_lora_meta();
+
+    gp.ref_image_args = "resize_before_vae=on"; // auto resize ref image
+    if (inputs.ref_image_args && *inputs.ref_image_args) {
+        gp.ref_image_args += ",";
+        gp.ref_image_args += inputs.ref_image_args;
+        if (gp.ref_image_args.find("preset") != std::string::npos) {
+            gp.force_image_edit = true;
+            if(!sd_is_quiet && sddebugmode==1) {
+                printf("ref_image_args=\"%s\", forcing edit mode", inputs.ref_image_args);
+            }
+        }
     }
 
-    sd_image_generation_result_t* img_result = nullptr;
-    sd_video_generation_result_t* vid_result = nullptr;
-    int generated_num_results = 0;
-
-    std::string img2img_data = std::string(inputs.init_images);
-    std::string img2img_mask = std::string(inputs.mask);
-    std::string video_start_frame_data = std::string(inputs.video_start_frame ? inputs.video_start_frame : "");
-    std::string video_end_frame_data = std::string(inputs.video_end_frame ? inputs.video_end_frame : "");
+    std::string img2img_data = SAFE_STR(inputs.init_images);
+    std::string img2img_mask = SAFE_STR(inputs.mask);
+    std::string video_start_frame_data = SAFE_STR(inputs.video_start_frame);
+    std::string video_end_frame_data = SAFE_STR(inputs.video_end_frame);
     std::vector<std::string> extra_image_data;
     for(int i=0;i<inputs.extra_images_len;++i)
     {
@@ -2361,12 +2417,19 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     {
         ref_audio_data.push_back(std::string(inputs.ref_audios[i]));
     }
-    std::vector<float> custom_sigmas;
-    if (inputs.custom_sigmas && inputs.custom_sigmas_count > 0) {
-        custom_sigmas.assign(inputs.custom_sigmas, inputs.custom_sigmas + inputs.custom_sigmas_count);
+
+    {
+        std::lock_guard<std::mutex> lock(geninfo.mux);
+        geninfo.start_time = std::chrono::steady_clock::now();
+        geninfo.steps = gp.sample_steps;
+        geninfo.preview_requested = false;
+        geninfo.preview_enabled = false;
+        geninfo.aborted = false;
+        geninfo.gendata = {};
+        geninfo.gendata.status = 1;
+        set_preview_images(1);
     }
-    sd_params->prompt = inputs.prompt;
-    sd_params->negative_prompt = inputs.negative_prompt;
+
     // <image:N>/<image:+N> prompt tags reference extra_image_data by position
     // and route the images to the VLM conditioner; images will be removed from
     // the ref_images parameter unless a reference has a '+' tag
@@ -2376,7 +2439,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     {
         size_t ref_count = std::min(extra_image_data.size(), (size_t)max_extra_images);
         std::string tag_err;
-        if (!collect_image_tags(sd_params->prompt, sd_params->negative_prompt, ref_count, image_tags, tag_err)) {
+        if (!collect_image_tags(gp.prompt, gp.negative_prompt, ref_count, image_tags, tag_err)) {
             return sd_generation.error(("KCPP SD: " + tag_err).c_str());
         }
         if (image_tags.has_tags) {
@@ -2388,90 +2451,61 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 if (!sd_is_quiet && sddebugmode == 1) {
                     printf("\nKCPP SD: replacing <image:...> tags with plain references, the model has no vision encoder\n");
                 }
-                sd_params->prompt = strip_image_tags(sd_params->prompt, image_tags.zero_based);
-                sd_params->negative_prompt = strip_image_tags(sd_params->negative_prompt, image_tags.zero_based);
+                gp.prompt = strip_image_tags(gp.prompt, image_tags.zero_based);
+                gp.negative_prompt = strip_image_tags(gp.negative_prompt, image_tags.zero_based);
             }
         }
     }
     prompt_ref_image_pool.clear();
     prompt_refs_zero_based = image_tags.zero_based;
-    sd_params->cfg_scale = inputs.cfg_scale;
-    sd_params->distilled_guidance = inputs.distilled_guidance;
-    sd_params->sample_steps = inputs.sample_steps;
-    sd_params->shifted_timestep = inputs.shifted_timestep;
-    sd_params->flow_shift = inputs.flow_shift;
-    sd_params->extra_sample_args = inputs.extra_sample_args ? inputs.extra_sample_args : "";
-    bool force_image_edit = false;
-    sd_params->ref_image_args = "resize_before_vae=on"; // auto_resize_ref_image = true;
-    if (inputs.ref_image_args && *inputs.ref_image_args) {
-        sd_params->ref_image_args += ",";
-        sd_params->ref_image_args += inputs.ref_image_args;
-        if (sd_params->ref_image_args.find("preset") != std::string::npos) {
-            force_image_edit = true;
-            if(!sd_is_quiet && sddebugmode==1) {
-                printf("ref_image_args=\"%s\", forcing edit mode", inputs.ref_image_args);
-            }
-        }
-    }
-    sd_params->eta = inputs.eta;
-    sd_params->seed = inputs.seed;
-    sd_params->width = inputs.width;
-    sd_params->height = inputs.height;
-    sd_params->strength = inputs.denoising_strength;
-    sd_params->clip_skip = inputs.clip_skip;
-    sd_params->sample_method = sampler_from_name(inputs.sample_method);
-    sd_params->scheduler = scheduler_from_name(inputs.scheduler);
 
-    if (sd_params->sample_method == sample_method_t::SAMPLE_METHOD_COUNT) {
-        sd_params->sample_method = sd_get_default_sample_method(sd_ctx);
+    if (gp.sample_method == sample_method_t::SAMPLE_METHOD_COUNT) {
+        gp.sample_method = sd_get_default_sample_method(sd_ctx);
     }
-
-    sd_params->cache_mode    = inputs.cache_mode ? inputs.cache_mode : "";
-    sd_params->cache_options = inputs.cache_options ? inputs.cache_options : "";
 
     auto info = get_model_info(sd_ctx);
     bool is_img2img = img2img_data != "";
 
     if (!remove_limits && info.is_flux1)
     {
-        if (sd_params->cfg_scale != 1.0f) {
+        if (gp.cfg_scale != 1.0f) {
             // clamp cfg scale
             if (!sd_is_quiet && sddebugmode) {
                 printf("Flux: clamping CFG Scale to 1\n");
             }
-            sd_params->cfg_scale = 1.0f;
+            gp.cfg_scale = 1.0f;
         }
     }
 
     if(!remove_limits && info.is_zimage)
     {
-        if(sd_params->cfg_scale > 4.0f)
+        if(gp.cfg_scale > 4.0f)
         {
             if (!sd_is_quiet && sddebugmode) {
                 printf("Z-Image: clamping CFG Scale to 4.0 to preserve quality\n");
             }
-            sd_params->cfg_scale = 4.0f;
+            gp.cfg_scale = 4.0f;
         }
     }
 
     if(info.is_sdxs)
     {
-        if(sd_params->cfg_scale > 1.0f || sd_params->sample_steps > 1)
+        if(gp.cfg_scale > 1.0f || gp.sample_steps > 1)
         {
             if (!sd_is_quiet && sddebugmode) {
                 printf("SDXS: clamping steps and cfg to 1\n");
             }
-            sd_params->cfg_scale = 1.0f;
-            sd_params->sample_steps = 1;
+            gp.cfg_scale = 1.0f;
+            gp.sample_steps = 1;
         }
         // A custom sigma list determines the real sampler iteration count and
         // would otherwise bypass the SDXS one-step restriction above. A
         // two-value list already represents one step and remains valid.
-        if (custom_sigmas.size() > 2) {
+        if (gp.custom_sigmas.size() > 2) {
             if (!sd_is_quiet && sddebugmode) {
                 printf("SDXS: ignoring custom sigma schedule with more than 1 step\n");
             }
-            custom_sigmas.clear();
+            gp.custom_sigmas.clear();
         }
     }
 
@@ -2481,7 +2515,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             // a single extra image is provided, and mask is NOT provided
             && extra_image_data.size()==1 && img2img_mask==""
             // the model does not support references natively, or through an edit mode/LoRa
-            && !supports_reference_images(info) && !force_image_edit
+            && !supports_reference_images(info) && !gp.force_image_edit
             // the model can't handle image tags, or the user didn't ask for them
             && !vision_tags_active);
 
@@ -2521,14 +2555,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     // unet is limited to multiples of 64; dit models vary
     int spatial_multiple = info.spatial_multiple;
 
-    sd_fix_resolution(sd_params->width, sd_params->height, img_hard_limit, img_soft_limit, spatial_multiple);
-    if (inputs.width != sd_params->width || inputs.height != sd_params->height) {
+    sd_fix_resolution(gp.width, gp.height, img_hard_limit, img_soft_limit, spatial_multiple);
+    if (gp.req_width != gp.width || gp.req_height != gp.height) {
         printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
-            inputs.width, inputs.height, sd_params->width, sd_params->height);
+            gp.req_width, gp.req_height, gp.width, gp.height);
     }
 
     // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
-    bool dotile = (sd_params->width*sd_params->height > cfg_tiled_vae_threshold*cfg_tiled_vae_threshold);
+    bool dotile = (gp.width*gp.height > cfg_tiled_vae_threshold*cfg_tiled_vae_threshold);
 
     int vae_tile_size = -1;
     if (dotile) {
@@ -2564,16 +2598,16 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     } reference_audio_cleanup { reference_audios };
 
     int nx, ny, nc;
-    int img2imgW = sd_params->width; //for img2img input
-    int img2imgH = sd_params->height;
+    int img2imgW = gp.width; //for img2img input
+    int img2imgH = gp.height;
     int img2imgC = 3; // Assuming RGB image
 
     std::string ts = get_timestamp_str();
     if(!sd_is_quiet)
     {
-        printf("\n[%s] Generating Image (%d steps)\n",ts.c_str(),inputs.sample_steps);
+        printf("\n[%s] Generating Image (%d steps)\n",ts.c_str(),gp.sample_steps);
     }else{
-        printf("\n[%s] Generating (%d st.)\n",ts.c_str(),inputs.sample_steps);
+        printf("\n[%s] Generating (%d st.)\n",ts.c_str(),gp.sample_steps);
     }
 
     fflush(stdout);
@@ -2621,7 +2655,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         for(int i=0;i<extra_image_data.size() && i<max_extra_images;++i)
         {
             sd_image_t image = {0,0,0,nullptr};
-            if(supports_reference_images(info)||force_image_edit||vision_tags_active)
+            if(supports_reference_images(info)||gp.force_image_edit||vision_tags_active)
             {
                 int nx2, ny2, nc2;
                 int desiredchannels = 3;
@@ -2632,7 +2666,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         image = load_extra_image(extra_image_data[i], !info.is_minimaxh3);
                     }
                 }
-                else if(info.supports_ref_image||force_image_edit)
+                else if(info.supports_ref_image||gp.force_image_edit)
                 {
                     uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2);
                     if(loaded)
@@ -2687,7 +2721,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                     continue; // used only as VLM context, kept out of the ref list
                 }
             }
-            if (!(supports_reference_images(info)||force_image_edit)) {
+            if (!(supports_reference_images(info)||gp.force_image_edit)) {
                 continue; // VLM-only model: tagged image is not a DiT reference
             }
             if (info.is_video_model) {
@@ -2711,11 +2745,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         //ensure prompt has img keyword, otherwise append it
         if(photomaker_enabled)
         {
-            if (sd_params->prompt.find("img") == std::string::npos) {
-                sd_params->prompt += " img";
-            } else if (sd_params->prompt.rfind("img", 0) == 0) {
+            if (gp.prompt.find("img") == std::string::npos) {
+                gp.prompt += " img";
+            } else if (gp.prompt.rfind("img", 0) == 0) {
                 // "img" found at the start of the string (position 0), which is not allowed. Add some text before it
-                sd_params->prompt = "person " + sd_params->prompt;
+                gp.prompt = "person " + gp.prompt;
             }
         }
 
@@ -2751,37 +2785,38 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         legacy_video_imgs.clear();
     }
 
+    // settle the local parameters into the upstream image generation params
     sd_img_gen_params_t params = {};
     sd_img_gen_params_init (&params);
     params.batch_count = 1;
-    params.ref_image_args = sd_params->ref_image_args.c_str();
-    params.prompt = sd_params->prompt.c_str();
-    params.negative_prompt = sd_params->negative_prompt.c_str();
-    params.clip_skip = sd_params->clip_skip;
-    params.sample_params.guidance.txt_cfg = sd_params->cfg_scale;
-    // params.sample_params.guidance.img_cfg = sd_params->cfg_scale; //removed, breaks qwen img edit and more
-    if (sd_params->distilled_guidance >= 0.f) {
-        params.sample_params.guidance.distilled_guidance = sd_params->distilled_guidance;
+    params.ref_image_args = gp.ref_image_args.c_str();
+    params.prompt = gp.prompt.c_str();
+    params.negative_prompt = gp.negative_prompt.c_str();
+    params.clip_skip = gp.clip_skip;
+    params.sample_params.guidance.txt_cfg = gp.cfg_scale;
+    // params.sample_params.guidance.img_cfg = gp.cfg_scale; //removed, breaks qwen img edit and more
+    if (gp.distilled_guidance >= 0.f) {
+        params.sample_params.guidance.distilled_guidance = gp.distilled_guidance;
     }
-    params.width = sd_params->width;
-    params.height = sd_params->height;
-    params.sample_params.sample_method = sd_params->sample_method;
-    params.sample_params.scheduler = sd_params->scheduler;
-    params.sample_params.sample_steps = sd_params->sample_steps;
-    if (!custom_sigmas.empty()) {
-        params.sample_params.custom_sigmas = custom_sigmas.data();
-        params.sample_params.custom_sigmas_count = (int)custom_sigmas.size();
+    params.width = gp.width;
+    params.height = gp.height;
+    params.sample_params.sample_method = gp.sample_method;
+    params.sample_params.scheduler = gp.scheduler;
+    params.sample_params.sample_steps = gp.sample_steps;
+    if (!gp.custom_sigmas.empty()) {
+        params.sample_params.custom_sigmas = gp.custom_sigmas.data();
+        params.sample_params.custom_sigmas_count = (int)gp.custom_sigmas.size();
     }
-    params.sample_params.shifted_timestep = sd_params->shifted_timestep;
-    if (sd_params->eta >= 0.f && sd_params->eta <= 1.f) {
-        params.sample_params.eta = sd_params->eta;
+    params.sample_params.shifted_timestep = gp.shifted_timestep;
+    if (gp.eta >= 0.f && gp.eta <= 1.f) {
+        params.sample_params.eta = gp.eta;
     }
-    if (sd_params->flow_shift > 0.f && sd_params->flow_shift != INFINITY) {
-        params.sample_params.flow_shift = sd_params->flow_shift;
+    if (gp.flow_shift > 0.f && gp.flow_shift != INFINITY) {
+        params.sample_params.flow_shift = gp.flow_shift;
     }
-    params.sample_params.extra_sample_args = sd_params->extra_sample_args.c_str();
-    params.seed = sd_params->seed;
-    params.strength = sd_params->strength;
+    params.sample_params.extra_sample_args = gp.extra_sample_args.c_str();
+    params.seed = gp.seed;
+    params.strength = gp.strength;
     params.vae_tiling_params.enabled = dotile;
     if (vae_tile_size > 0) {
         params.vae_tiling_params.tile_size_w = vae_tile_size;
@@ -2791,36 +2826,24 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     {
         params.vae_tiling_params.temporal_tiling = true;
     }
-    parse_cache_options(params.cache, sd_params->cache_mode, sd_params->cache_options);
-    params.circular_x = inputs.circular_x;
-    params.circular_y = inputs.circular_y;
-
-    LoraMap lora_map = klp.lora_map;
-    if (klp.lora_dynamic) {
-        for (int i = 0; i < inputs.lora_len; i++) {
-            std::string path = inputs.lora_filenames[i];
-            float preloaded_mult = klp.lora_map.get_mult(path);
-            lora_map.add_lora(path, inputs.lora_multipliers[i]);
-        }
-    }
-
-    std::vector<sd_lora_t> lora_specs = lora_map.get_lora_specs();
-    std::string lora_meta = lora_map.get_lora_meta();
+    parse_cache_options(params.cache, gp.cache_mode, gp.cache_options);
+    params.circular_x = gp.circular_x;
+    params.circular_y = gp.circular_y;
 
     if(!sd_is_quiet && sddebugmode==1) {
-        if (lora_specs.size() > 0) {
+        if (gp.loras.size() > 0) {
             printf("Applying LoRAs:\n");
-            for(size_t i=0;i<lora_specs.size();++i)
+            for(size_t i=0;i<gp.loras.size();++i)
             {
-                printf("  %s @ %.3f\n", lora_specs[i].path, lora_specs[i].multiplier);
+                printf("  %s @ %.3f\n", gp.loras[i].path, gp.loras[i].multiplier);
             }
         }
     }
 
     // note sdcpp tracks previously applied LoRAs and weights,
     // and apply/unapply the differences at each gen
-    params.loras = lora_specs.data();
-    params.lora_count = lora_specs.size();
+    params.loras = gp.loras.data();
+    params.lora_count = gp.loras.size();
 
     params.ref_images = reference_imgs.data();
     params.ref_images_count = reference_imgs.size();
@@ -2834,8 +2857,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     remove_limits = inputs.remove_limits;
 
      //special case, is img2img and denoise strength is 0 and steps is 1, do a passthru
-    bool is_passthrough = (sd_params->sample_steps<=1 && sd_params->strength<=0 && is_img2img && vid_req_frames<=1 && extra_image_data.size()==0);
+    bool is_passthrough = (gp.sample_steps<=1 && gp.strength<=0 && is_img2img && vid_req_frames<=1 && extra_image_data.size()==0);
     sd_audio_t* generated_audio = nullptr;
+
+    sd_image_generation_result_t* img_result = nullptr;
+    sd_video_generation_result_t* vid_result = nullptr;
+    int generated_num_results = 0;
 
     if(is_vid_model)
     {
@@ -3027,7 +3054,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     bool isanim = (vid_req_frames>1 && generated_num_results>1 && is_vid_model);
     nlohmann::json jsoninfo = nlohmann::json::object();
     if (!isanim) {
-        jsoninfo["prompt"] = params.prompt + lora_meta;
+        jsoninfo["prompt"] = params.prompt + gp.lora_meta;
         if (*params.negative_prompt)
             jsoninfo["negative_prompt"] = params.negative_prompt;
         jsoninfo["seed"] = params.seed;
@@ -3059,7 +3086,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         jsoninfo["all_prompts"] = nlohmann::json::array();
         jsoninfo["all_negative_prompts"] = nlohmann::json::array();
         jsoninfo["all_seeds"] = nlohmann::json::array();
-        jsoninfo["lora_meta"] = lora_meta;
+        jsoninfo["lora_meta"] = gp.lora_meta;
         jsoninfo["version"] = "KoboldCpp";
     }
     sd_image_t* upscaled_image = nullptr;
@@ -3155,7 +3182,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             if (result_image.data == NULL) {
                 continue;
             }
-            std::string meta_image_info = get_image_params(params, lora_meta, i);
+            std::string meta_image_info = get_image_params(params, gp.lora_meta, i);
             if(inputs.upscale && upscaler_ctx != nullptr)
             {
                 printf("Upscaling output image...\n");
