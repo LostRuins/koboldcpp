@@ -1080,11 +1080,16 @@ static kcpp_path_class kcpp_classify_path(const std::string& path)
     return c;
 }
 
-static bool kcpp_is_vision_encoder(const kcpp_path_class& c, bool for_llm = false)
+static bool kcpp_is_confirmed_vision_encoder(const kcpp_path_class& c, bool for_llm = false)
 {
     // The LLM vision slot prepends its own visual namespace. Safetensors
     // with visual.* or model.visual.* keys need the ordinary LLM slot.
-    return c.is_mmproj || c.is_mmproj_filename || (!for_llm && c.st.is_vision_only());
+    return c.is_mmproj || (!for_llm && c.st.is_vision_only());
+}
+
+static bool kcpp_is_vision_encoder(const kcpp_path_class& c, bool for_llm = false)
+{
+    return kcpp_is_confirmed_vision_encoder(c, for_llm) || c.is_mmproj_filename;
 }
 
 // read the model version from the file metadata using a temporary loader and
@@ -1238,6 +1243,34 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     {
         std::string* slots[3] = {&lp.t5xxl_path, &lp.clip_l_path, &lp.clip_g_path};
 
+        // Content-confirmed vision encoders outrank the filename fallback,
+        // regardless of which generic input slot they came from.
+        if (vision_path != nullptr && vision_path->empty())
+        {
+            std::string* filename_guess = nullptr;
+            std::string* vision_source = nullptr;
+            for (auto slot: slots)
+            {
+                if (slot->empty()) continue;
+                const kcpp_path_class c = kcpp_classify_path(*slot);
+                if (kcpp_is_confirmed_vision_encoder(c, has_llm_vision))
+                {
+                    vision_source = slot;
+                    break;
+                }
+                if (filename_guess == nullptr && c.is_mmproj_filename)
+                {
+                    filename_guess = slot;
+                }
+            }
+            if (vision_source == nullptr) vision_source = filename_guess;
+            if (vision_source != nullptr)
+            {
+                printf("\nKCPP: routing %s to the vision encoder slot\n", vision_source->c_str());
+                std::swap(*vision_path, *vision_source);
+            }
+        }
+
         for (auto slot: slots)
         {
             if (slot->empty()) continue;
@@ -1267,14 +1300,6 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
                 }
                 printf("\nKCPP: using tokenizer JSON found in %s\n", slot->c_str());
                 *slot = "";
-            }
-            else if (kcpp_is_vision_encoder(c, has_llm_vision))
-            {
-                if (vision_path != nullptr && vision_path->empty())
-                {
-                    printf("\nKCPP: routing %s to the vision encoder slot\n", slot->c_str());
-                    std::swap(*vision_path, *slot);
-                }
             }
             else if (c.is_connector)
             {
@@ -1402,10 +1427,13 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     // Safetensors encoders have no embedded tokenizer metadata, so Wan/LTX may
     // use a tokenizer.json placed directly beside the selected text encoder.
     // Never probe beside GGUF files; their tokenizer comes from GGUF metadata.
+    auto is_safetensors_source = [](const std::string& path) {
+        return !path.empty() && kcpp_classify_path(path).is_safetensors;
+    };
     if (iswan && kcpp_tokenizer_resources.explicit_umt5_json.empty()) {
         const std::string tokenizer_source = !lp.t5xxl_path.empty() ? lp.t5xxl_path : lp.model_path;
         const std::string tokenizer_path =
-            !tokenizer_source.empty() && is_safetensors_file(tokenizer_source)
+            is_safetensors_source(tokenizer_source)
                 ? sibling_tokenizer_json(tokenizer_source)
                 : std::string();
         if (!tokenizer_path.empty()) {
@@ -1421,7 +1449,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     }
     if (is_ltx && kcpp_main_tokenizer.empty()) {
         const std::string tokenizer_source = !lp.llm_path.empty() ? lp.llm_path : lp.model_path;
-        if (!tokenizer_source.empty() && is_safetensors_file(tokenizer_source)) {
+        if (is_safetensors_source(tokenizer_source)) {
             kcpp_main_tokenizer = sibling_tokenizer_json(tokenizer_source);
         }
         if (!kcpp_main_tokenizer.empty()) {
