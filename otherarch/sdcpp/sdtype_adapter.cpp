@@ -1883,8 +1883,12 @@ static std::string get_image_params(const sd_img_gen_params_t & params, const st
         ss << "| Flow Shift: " << params.sample_params.flow_shift;
     ss  << " | Clip skip: " << params.clip_skip
         << " | Model: " << model;
-    if (sd_params->load_params.vae_path != "")
-        ss << " | VAE: " << friendly_model_name(sd_params->load_params.vae_path);
+    std::string vae = sd_params->load_params.vae_path;
+    if (!vae.empty())
+        ss << " | VAE: " << friendly_model_name(vae);
+    std::string tae = sd_params->load_params.taesd_path;
+    if (!tae.empty())
+        ss << " | TAE: " << friendly_model_name(tae);
     ss << " | Version: KoboldCpp";
     return ss.str();
 }
@@ -3045,8 +3049,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.diffusion_model_path);
         else
             jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.model_path);
-        if (sd_params->load_params.vae_path != "")
-            jsoninfo["sd_vae_name"] = friendly_model_name(sd_params->load_params.vae_path);
+        std::string vae = sd_params->load_params.vae_path;
+        if (vae.empty())
+            // TODO: check if auto1111 uses a specific field for tae
+            vae = sd_params->load_params.taesd_path;
+        if (!vae.empty())
+            jsoninfo["sd_vae_name"] = friendly_model_name(vae);
         jsoninfo["infotexts"] = nlohmann::json::array();
         jsoninfo["all_prompts"] = nlohmann::json::array();
         jsoninfo["all_negative_prompts"] = nlohmann::json::array();
