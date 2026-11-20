@@ -711,6 +711,7 @@ static model_info get_model_info(sd_ctx_t* ctx)
 // indexing is adaptive: zero-based if any tag uses 0, otherwise 1-based.
 
 struct image_tag_refs {
+    std::set<int> mentioned;
     std::set<int> hidden;  // referenced, and all occurrences without '+'
     bool zero_based = false;
     bool has_tags = false;
@@ -778,7 +779,7 @@ static bool collect_image_tags(const std::string& prompt, const std::string& neg
     for (const auto& [source, idx, plus] : raw) {
         refs.zero_based = refs.zero_based || (idx == 0);
     }
-    std::set<int> mentioned, kept;
+    std::set<int> kept;
     for (const auto& [source, idx, plus] : raw) {
         int real = refs.zero_based ? idx : idx - 1;
         if (real < 0 || real >= (int)image_count) {
@@ -786,12 +787,12 @@ static bool collect_image_tags(const std::string& prompt, const std::string& neg
                 + std::to_string(image_count) + " reference image(s)";
             return false;
         }
-        mentioned.insert(real);
+        refs.mentioned.insert(real);
         if (plus) {
             kept.insert(real);
         }
     }
-    for (int i : mentioned) {
+    for (int i : refs.mentioned) {
         if (!kept.count(i)) {
             refs.hidden.insert(i);
         }
@@ -809,7 +810,14 @@ static std::string strip_image_tags(const std::string& text, bool zero_based)
         std::string result;
         for (const auto& part : sd::parse_prompt_input(text)) {
             if (part.type != sd::PromptPart::Type::IMAGE) {
-                result += part.content;
+                // The parser removes one escape from literal tags. Put it back
+                // so the rewritten prompt can be parsed again.
+                std::string literal = part.content;
+                for (size_t pos = literal.find("<image:"); pos != std::string::npos;
+                     pos = literal.find("<image:", pos + 8)) {
+                    literal.insert(pos, 1, '\\');
+                }
+                result += literal;
                 continue;
             }
             int idx;
@@ -886,18 +894,22 @@ struct kcpp_st_class
     int llm       = 0;   // causal LLM (or text side of a combined VLM file)
     int diffusion = 0;   // UNet / DiT
     int vae       = 0;
-    const char* label = ""; // dominant st bucket, for logging; null if unclear
+    const char* label = nullptr; // dominant st bucket, for logging; null if unclear
+
+    bool is_vision_only() const {
+        return vision >= 3 && text_t5 == 0 && text_clip == 0 && llm == 0 && diffusion == 0 && vae == 0;
+    }
 };
 
 struct kcpp_path_class
 {
     bool valid              = false;  // the probe managed to open the file
-    bool is_gguf            = false;
     bool is_safetensors     = false;
     bool is_json            = false;
     bool is_mmproj          = false;
     bool is_mmproj_filename = false;  // name heuristic: "mmproj" in the path (fallback only)
     bool is_connector       = false;  // connector file; currently only MiniMax P-H3 text connector
+    bool is_text_encoder    = false;
     kcpp_st_class st;                 // safetensors only
 };
 
@@ -985,6 +997,7 @@ static void kcpp_classify_safetensors(const kcpp_file_probe& probe, kcpp_path_cl
     c.st.vision    = st_count_prefix(ts, {"vision_model.", "vision_tower.", "model.visual.",
                                           "visual.", "multi_modal_projector."});
     c.st.llm       = st_count_prefix(ts, {"model.layers.", "model.embed_tokens.",
+                                          "model.language_model.", "language_model.",
                                           "layers.", "embed_tokens.", "lm_head."});
     c.st.diffusion = st_count_prefix(ts, {"model.diffusion_model.", "input_blocks.",
                                           "output_blocks.", "transformer_blocks.",
@@ -1002,7 +1015,9 @@ static void kcpp_classify_safetensors(const kcpp_file_probe& probe, kcpp_path_cl
     if (c.st.vae        > best) { best = c.st.vae;        label = "VAE"; }
     if (best < 3) return;  // too few hits to claim anything
     // a combined VLM dump (e.g. convert_qwen3_vl.py output) has both towers
-    if (label == std::string("LLM") && c.st.vision >= 3) label = "LLM + vision (combined VLM file)";
+    if (c.st.llm >= 3 && c.st.vision >= 3 && best == std::max(c.st.llm, c.st.vision)) {
+        label = "LLM + vision (combined VLM file)";
+    }
     c.st.label = label;
 }
 
@@ -1028,33 +1043,26 @@ static kcpp_path_class kcpp_classify_path(const std::string& path)
             c.is_json = true;
             identified = true;
         } else if (kcpp_file_format::GGUF == format) {
-            c.is_gguf = true;
-            const std::map<std::string, std::string>& meta = probe.metadata();
-            auto get = [&](const char* k) -> std::string {
-                auto it = meta.find(k);
-                return it == meta.end() ? std::string() : it->second;
-            };
-            const std::string arch  = get("general.architecture");
-            const std::string type  = get("general.type");
-            // any clip.vision.* key implies a vision encoder; true for every
-            // mmproj llama.cpp has ever produced
-            bool has_vision_kv = false;
-            for (const auto& kv : meta) {
-                if (kv.first.rfind("clip.vision.", 0) == 0) { has_vision_kv = true; break; }
-            }
+            const std::string type = probe.metadata_get("general.type");
             c.is_mmproj = type == "mmproj"
                 || type == "clip-vision" // Mistral/pixtral-era files "just in case"
-                || has_vision_kv
-                || get("clip.has_vision_encoder") == "1"
-                || !get("clip.projector_type").empty();
+                || probe.metadata_has_prefix("clip.vision.")
+                || probe.metadata_get("clip.has_vision_encoder") == "1"
+                || !probe.metadata_get("clip.projector_type").empty();
             // connector GGUFs come from external converters with no metadata
             // convention; the tensor names are the reliable signal
-            c.is_connector = kcpp_tensors_standalone_connector(probe.tensors());
+            c.is_connector = !c.is_mmproj && kcpp_tensors_standalone_connector(probe.tensors());
             identified = c.is_mmproj || c.is_connector;
-        } else if (kcpp_file_format::SAFETENSORS == format) {
+            if (!identified) {
+                c.is_text_encoder = probe.tensor_exists("token_embd.weight")
+                    || probe.tensor_exists("embed_tokens.weight", false);
+                identified = c.is_text_encoder;
+            }
+        } else if (kcpp_file_format::SAFETENSORS == format || kcpp_file_format::SAFETENSORS_INDEX == format) {
             c.is_safetensors = true;
             kcpp_classify_safetensors(probe, c);
             identified = c.st.label != nullptr;
+            c.is_text_encoder = std::max({c.st.llm, c.st.text_clip, c.st.text_t5}) >= 3;
         }
         if (!identified && !probe.error().empty())
         {
@@ -1064,17 +1072,19 @@ static kcpp_path_class kcpp_classify_path(const std::string& path)
     // the name heuristic is tracked separately: should only apply if
     // metadata couldn't identify it
     if (!identified) {
-        c.is_mmproj_filename = toLowerCase(path).find("mmproj") != std::string::npos;
+        const auto basename = path.substr(path.find_last_of("/\\") + 1);
+        c.is_mmproj_filename = toLowerCase(basename).find("mmproj") != std::string::npos;
     }
 
     kcpp_path_class_cache[key] = c;
     return c;
 }
 
-// an mmproj by content or by name
-static bool kcpp_is_mmproj(const kcpp_path_class& c)
+static bool kcpp_is_vision_encoder(const kcpp_path_class& c, bool for_llm = false)
 {
-    return c.is_mmproj || c.is_mmproj_filename;
+    // The LLM vision slot prepends its own visual namespace. Safetensors
+    // with visual.* or model.visual.* keys need the ordinary LLM slot.
+    return c.is_mmproj || c.is_mmproj_filename || (!for_llm && c.st.is_vision_only());
 }
 
 // read the model version from the file metadata using a temporary loader and
@@ -1199,6 +1209,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     bool is_fibo2 = (tempver == VERSION_FIBO2);
     bool is_lingbot = sd_version_is_lingbot_video(tempver);
     bool conditioner_is_llm = (is_qwenimg || is_zimg || is_flux2 || is_flux3 || is_mosi || is_ovis || is_anima || is_ernie || is_longcat || is_lens || is_llada || is_ltx || is_ideogram || is_boogu || is_krea2 || is_sefi || is_mageflow || is_minimaxh3 || is_pid || is_ming || is_zimg_l2p || is_iris || is_fibo2);
+    const bool legacy_clip2_llm_vision = is_qwenimg || is_longcat || is_boogu || is_fibo2;
     // LLM text encoders with a vision tower (Qwen-VL family); these models
     // can take a mmproj file (see the llm.visual handling in src/name_conversion.cpp)
     bool has_llm_vision = (
@@ -1212,6 +1223,8 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
         is_mosi
     );
     klp.has_llm_vision = has_llm_vision;
+    std::string* vision_path = has_llm_vision ? &lp.llm_vision_path
+                            : (iswan || is_ltx) ? &lp.clip_vision_path : nullptr;
     bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi || is_llada);
 
     std::string kcpp_main_tokenizer;
@@ -1245,6 +1258,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
                     {
                         printf("\nKCPP: could not read UMT5 tokenizer JSON from %s: %s\n",
                                slot->c_str(), exception.what());
+                        continue;
                     }
                 }
                 else
@@ -1254,18 +1268,12 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
                 printf("\nKCPP: using tokenizer JSON found in %s\n", slot->c_str());
                 *slot = "";
             }
-            else if (c.is_mmproj)
+            else if (kcpp_is_vision_encoder(c, has_llm_vision))
             {
-                std::string* target = nullptr;
-                if (has_llm_vision) target = &lp.llm_vision_path;
-                else if (is_ltx || iswan) target = &lp.clip_vision_path;
-                // a second mmproj is an error: the first one wins, so the
-                // destination must still be empty
-                if (target != nullptr && target->empty())
+                if (vision_path != nullptr && vision_path->empty())
                 {
-                    printf("\nKCPP: routing mmproj found in %s to %s\n", slot->c_str(), target->c_str());
-                    *target = *slot;
-                    *slot = "";
+                    printf("\nKCPP: routing %s to the vision encoder slot\n", slot->c_str());
+                    std::swap(*vision_path, *slot);
                 }
             }
             else if (c.is_connector)
@@ -1284,8 +1292,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
             }
             else if (c.is_safetensors && c.st.label)
             {
-                // safetensors are not rerouted: a combined VLM safetensors must
-                // stay in one piece for sd.cpp to split internally
+                // Keep combined VLM safetensors intact so sd.cpp can split them.
                 printf("\nKCPP: %s looks like a %s (safetensors)\n", slot->c_str(), c.st.label);
             }
         }
@@ -1301,7 +1308,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
         else if(lp.clip_g_path.empty())
         {
             //very tricky case. see if we can tell if clipl is an mmproj, if so move to right place
-            if(kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)) || is_ltx)
+            if(kcpp_is_vision_encoder(kcpp_classify_path(lp.clip_l_path), has_llm_vision) || is_ltx)
             {
                 // g = l, l = t, t = ""
                 std::swap(lp.clip_g_path, lp.clip_l_path);
@@ -1315,7 +1322,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     {
         if(conditioner_is_llm && lp.llm_path.empty())
         {
-            if (kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)))
+            if (kcpp_is_vision_encoder(kcpp_classify_path(lp.clip_l_path), has_llm_vision))
             {
                 // an mmproj in a text-encoder field: route it to the vision
                 // field when the model has one and it is free
@@ -1325,7 +1332,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
                 }
                 else
                 {
-                    printf("\nKCPP: clip_1 holds an mmproj, which is not a text model; leaving clip_1 as is\n");
+                    printf("\nKCPP: clip_1 holds a vision encoder; leaving clip_1 as is\n");
                 }
             }
             else
@@ -1337,10 +1344,10 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
         {
             if(lp.t5xxl_path.empty())
             {
-                if (!kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)))
+                if (!kcpp_is_vision_encoder(kcpp_classify_path(lp.clip_l_path)))
                     std::swap(lp.t5xxl_path, lp.clip_l_path);
             } else if (lp.clip_vision_path.empty()) {
-                if (!kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)))
+                if (!kcpp_is_vision_encoder(kcpp_classify_path(lp.clip_l_path)))
                     std::swap(lp.clip_vision_path, lp.clip_l_path);
             }
         }
@@ -1349,23 +1356,24 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     //settle clip-g replacements
     if (!lp.clip_g_path.empty())
     {
-        if (kcpp_is_mmproj(kcpp_classify_path(lp.clip_g_path)))
+        const kcpp_path_class c = kcpp_classify_path(lp.clip_g_path);
+        if (kcpp_is_vision_encoder(c, has_llm_vision))
         {
-            if(iswan && lp.clip_vision_path.empty())
+            if (vision_path != nullptr && vision_path->empty())
             {
-                std::swap(lp.clip_vision_path, lp.clip_g_path);
+                std::swap(*vision_path, lp.clip_g_path);
             }
-            else if(has_llm_vision && lp.llm_vision_path.empty())
-            {
-                std::swap(lp.llm_vision_path, lp.clip_g_path);
-            }
+        } else if (iswan && lp.clip_vision_path.empty()) {
+            // Older Wan CLIP vision checkpoints do not carry mmproj metadata.
+            std::swap(lp.clip_vision_path, lp.clip_g_path);
+        } else if (conditioner_is_llm && lp.llm_path.empty()) {
+            // The slot can hold a text encoder whose format the probe cannot classify.
+            std::swap(lp.llm_path, lp.clip_g_path);
+        } else if (legacy_clip2_llm_vision && lp.llm_vision_path.empty() &&
+                   !c.is_text_encoder && !c.st.is_vision_only()) {
+            std::swap(lp.llm_vision_path, lp.clip_g_path);
         } else {
-            if(conditioner_is_llm && lp.llm_path.empty())
-            {
-                // a text model misplaced in clip_2
-                std::swap(lp.llm_path, lp.clip_g_path);
-            }
-            else if(is_ltx)
+            if(is_ltx)
             {
                 std::swap(lp.embeddings_connectors_path, lp.clip_g_path);
             }
@@ -1384,8 +1392,8 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     //settle possible inversions for mmproj
     if(!lp.llm_vision_path.empty() && !lp.llm_path.empty())
     {
-        if(!kcpp_is_mmproj(kcpp_classify_path(lp.llm_vision_path)) &&
-        kcpp_is_mmproj(kcpp_classify_path(lp.llm_path)))
+        if(!kcpp_is_vision_encoder(kcpp_classify_path(lp.llm_vision_path), true) &&
+        kcpp_is_vision_encoder(kcpp_classify_path(lp.llm_path), true))
         {
             std::swap(lp.llm_path, lp.llm_vision_path);
         }
@@ -2434,7 +2442,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     // and route the images to the VLM conditioner; images will be removed from
     // the ref_images parameter unless a reference has a '+' tag
     image_tag_refs image_tags;
-    bool has_llm_vision = klp.has_llm_vision;
     bool vision_tags_active = false;
     {
         size_t ref_count = std::min(extra_image_data.size(), (size_t)max_extra_images);
@@ -2443,7 +2450,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             return sd_generation.error(("KCPP SD: " + tag_err).c_str());
         }
         if (image_tags.has_tags) {
-            if (has_llm_vision) {
+            if (klp.has_llm_vision) {
                 vision_tags_active = true;
             } else {
                 // the conditioner can't see images: replace the tags with plain
@@ -2654,6 +2661,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
         for(int i=0;i<extra_image_data.size() && i<max_extra_images;++i)
         {
+            const bool duplicates_video_frame = info.is_video_model && info.is_minimaxh3
+                && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data);
             sd_image_t image = {0,0,0,nullptr};
             if(supports_reference_images(info)||gp.force_image_edit||vision_tags_active)
             {
@@ -2661,7 +2670,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 int desiredchannels = 3;
                 if(info.is_video_model)
                 {
-                    if(!(info.is_minimaxh3 && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data)))
+                    if (!duplicates_video_frame || (vision_tags_active && image_tags.mentioned.count(i)))
                     {
                         image = load_extra_image(extra_image_data[i], !info.is_minimaxh3);
                     }
@@ -2721,8 +2730,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                     continue; // used only as VLM context, kept out of the ref list
                 }
             }
-            if (!(supports_reference_images(info)||gp.force_image_edit)) {
-                continue; // VLM-only model: tagged image is not a DiT reference
+            if (duplicates_video_frame || !(supports_reference_images(info)||gp.force_image_edit)) {
+                continue; // Keep frame deduplication in the diffusion reference list.
             }
             if (info.is_video_model) {
                 if (info.is_minimaxh3) {

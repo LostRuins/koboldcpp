@@ -568,6 +568,7 @@ set(SDCPP_THIRDPARTY_SOURCES
     otherarch/sdcpp/thirdparty/zip.c)
 
 add_library(sdtype_adapter
+            kcpp_src/model_file_probe.cpp
             kcpp_src/sdcpp_gguf_tokenizer.cpp
             otherarch/sdcpp/sdtype_adapter.cpp
             ${SDCPP_SOURCES}

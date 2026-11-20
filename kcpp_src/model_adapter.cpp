@@ -94,13 +94,16 @@ bool gguf_tensor_exists(const std::string & gguf_filename, std::string tensor_na
 
 std::string gguf_get_string(const std::string & gguf_filename, const std::string & key)
 {
-    // Note: via the probe, non-string values are returned serialized (e.g. u32 -> "32")
-    // instead of "" as before; the only current caller reads general.architecture,
-    // which is always a string.
-    kcpp_file_probe probe;
-    if (!probe.open(gguf_filename) || probe.format() != kcpp_file_format::GGUF)
-        return "";
-    return probe.metadata_get(key);
+    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), {true, nullptr});
+    if (!ctx) return "";
+
+    const int64_t keyidx = gguf_find_key(ctx, key.c_str());
+    std::string value;
+    if (keyidx >= 0 && gguf_get_kv_type(ctx, keyidx) == GGUF_TYPE_STRING) {
+        value = gguf_get_val_str(ctx, keyidx);
+    }
+    gguf_free(ctx);
+    return value;
 }
 
 bool gguf_get_bool(const std::string & gguf_filename, const std::string & key)

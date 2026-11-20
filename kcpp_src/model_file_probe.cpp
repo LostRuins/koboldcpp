@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <string_view>
 #include <utility>
 
 #include "ggml.h"
@@ -14,10 +15,8 @@ namespace {
 
 constexpr size_t kMaxSafetensorsHeader   = 1ULL << 30;  // 1 GB - a header is never bigger
 constexpr size_t kMaxGgufArrayElements   = 4096;       // serialize at most this many array elements
-constexpr size_t kJsonTailWindow         = 64;         // bytes inspected at the end for the JSON check
-
 bool is_json_ws(char c) {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
 std::string format_float32(float v) {
@@ -101,50 +100,38 @@ std::string gguf_value_to_string(const struct gguf_context* ctx, int64_t key_id)
 
 // GGUF backend: header + KV + tensor table only (no weight data)
 bool kcpp_file_probe::open_gguf(kcpp_file_probe& p, const std::string& path) {
-    struct ggml_context* meta = nullptr;
-    struct gguf_init_params params;
-    params.no_alloc = true;
-    params.ctx      = &meta;
-    struct gguf_context* ctx = gguf_init_from_file(path.c_str(), params);
+    struct gguf_context* ctx = gguf_init_from_file(path.c_str(), {true, nullptr});
     if (!ctx) {
         return false;
     }
 
     p.gguf_ctx_      = ctx;
-    p.gguf_meta_ctx_ = meta;
     p.format_        = kcpp_file_format::GGUF;
     p.version_       = static_cast<int>(gguf_get_version(ctx));
 
-    const int64_t n_kv = gguf_get_n_kv(ctx);
-    for (int64_t i = 0; i < n_kv; i++) {
-        const char* key = gguf_get_key(ctx, i);
-        if (key) {
-            p.metadata_[key] = gguf_value_to_string(ctx, i);
-        }
-    }
-
-    const int64_t n_tensors = gguf_get_n_tensors(ctx);
-    p.tensors_.reserve(static_cast<size_t>(n_tensors));
-    for (int64_t i = 0; i < n_tensors; i++) {
-        kcpp_probe_tensor t;
-        const char* name = gguf_get_tensor_name(ctx, i);
-        if (!name)
-            continue;
-        t.name  = name;
-        t.dtype = ggml_type_name(gguf_get_tensor_type(ctx, i));
-        if (meta) {
-            const struct ggml_tensor* dummy = ggml_get_tensor(meta, name);
-            if (dummy) {
-                const int nd = ggml_n_dims(dummy);
-                for (int d = 0; d < nd; d++) {
-                    t.shape.push_back(dummy->ne[d]);
-                }
-            }
-        }
-        p.tensors_.push_back(std::move(t));
-    }
     p.tensors_complete_ = true;
     return true;
+}
+
+const std::vector<kcpp_probe_tensor>& kcpp_file_probe::tensors() const {
+    if (!gguf_ctx_ || !tensors_.empty()) {
+        return tensors_;
+    }
+    const int64_t n_tensors = gguf_get_n_tensors(gguf_ctx_);
+    std::vector<kcpp_probe_tensor> tensors;
+    tensors.reserve(static_cast<size_t>(n_tensors));
+    for (int64_t i = 0; i < n_tensors; i++) {
+        const int64_t* shape = gguf_get_tensor_ne(gguf_ctx_, i);
+        int dims = GGML_MAX_DIMS;
+        while (dims > 1 && shape[dims - 1] == 1) {
+            --dims;
+        }
+        tensors.push_back({gguf_get_tensor_name(gguf_ctx_, i),
+                           ggml_type_name(gguf_get_tensor_type(gguf_ctx_, i)),
+                           {shape, shape + dims}});
+    }
+    tensors_ = std::move(tensors);
+    return tensors_;
 }
 
 // Safetensors backend: header JSON only (no weight data).
@@ -162,7 +149,7 @@ bool kcpp_file_probe::open_safetensors(kcpp_file_probe& p, std::ifstream& fin, u
         return false;
     }
 
-    std::vector<char> header(header_len + 1, '\0');
+    std::vector<char> header(header_len);
     fin.read(header.data(), static_cast<std::streamsize>(header_len));
     if (!fin) {
         return false;
@@ -170,7 +157,7 @@ bool kcpp_file_probe::open_safetensors(kcpp_file_probe& p, std::ifstream& fin, u
 
     nlohmann::json header_json;
     try {
-        header_json = nlohmann::json::parse(header.data());
+        header_json = nlohmann::json::parse(header.begin(), header.end());
     } catch (const std::exception&) {
         return false;
     }
@@ -226,47 +213,85 @@ bool kcpp_file_probe::open_safetensors(kcpp_file_probe& p, std::ifstream& fin, u
     return true;
 }
 
-// Cheap "looks like JSON" check: first non-whitespace byte is '{' or '[' and
-// the last non-whitespace byte is the matching closer. No full parse.
-bool kcpp_file_probe::looks_like_json(std::ifstream& fin, uint64_t file_size) {
-    char head[8] = {0};
+namespace {
+// Inspect only the root weight_map. Tokenizer vocabularies can be large.
+struct index_probe : nlohmann::detail::json_sax_acceptor<nlohmann::json> {
+    size_t depth = 0;
+    bool weight_map_key = false;
+    bool in_weight_map = false;
+    std::map<std::string, bool> shard_paths_are_strings;
+    bool* current_shard_path_is_string = nullptr;
+
+    bool key(std::string& name) {
+        if (depth == 1) {
+            weight_map_key = name == "weight_map";
+            if (weight_map_key) {
+                // Match the loader's last-value-wins handling of duplicate keys.
+                shard_paths_are_strings.clear();
+                current_shard_path_is_string = nullptr;
+            }
+        } else if (in_weight_map && depth == 2) {
+            current_shard_path_is_string = &shard_paths_are_strings.insert_or_assign(name, false).first->second;
+        }
+        return true;
+    }
+    bool string(std::string&) {
+        if (in_weight_map && depth == 2) {
+            *current_shard_path_is_string = true;
+        }
+        return true;
+    }
+    bool start_object(size_t) {
+        if (depth == 1 && weight_map_key) {
+            in_weight_map = true;
+        }
+        ++depth;
+        return true;
+    }
+    bool end_object() {
+        if (--depth == 1) in_weight_map = false;
+        return true;
+    }
+    bool start_array(size_t) { ++depth; return true; }
+    bool end_array() { --depth; return true; }
+};
+}
+
+bool kcpp_file_probe::open_json(std::ifstream& fin) {
+    fin.clear();
     fin.seekg(0, std::ios::beg);
-    fin.read(head, sizeof(head));
-    const auto head_len = fin.gcount();
-    if (head_len <= 0) {
+    int first = fin.get();
+    if (first == 0xEF) {
+        if (fin.get() != 0xBB || fin.get() != 0xBF) {
+            return false;
+        }
+        first = fin.get();
+    }
+    while (first != std::char_traits<char>::eof() && is_json_ws(static_cast<char>(first))) {
+        first = fin.get();
+    }
+    if (first != '{' && first != '[') {
         return false;
     }
 
-    const char* first = nullptr;
-    // skip a UTF-8 BOM, if present (future-proofing)
-    std::streamoff offset = 0;
-    if (head_len >= 3 && head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF) {
-        offset = 3;
-    }
-    for (std::streamoff i = offset; i < head_len; i++) {
-        if (!is_json_ws(head[i])) {
-            first = &head[i];
-            break;
-        }
-    }
-    if (!first) {
-        return false;
-    }
-    const char closer = *first == '{' ? '}' : (*first == '[' ? ']' : 0);
-    if (!closer) {
-        return false;
-    }
+    // Validate without building a JSON object tree. Require stream EOF because
+    // the parser also accepts a NUL byte as an end-of-input token.
+    fin.seekg(0, std::ios::beg);
+    index_probe index;
+    if (!nlohmann::json::sax_parse(fin, &index) || !fin.eof()) return false;
 
-    const size_t window = std::min<uint64_t>(file_size, kJsonTailWindow);
-    std::vector<char> tail(window);
-    fin.seekg(static_cast<std::streamoff>(file_size - window), std::ios::beg);
-    fin.read(tail.data(), static_cast<std::streamsize>(window));
-    for (std::streamoff i = fin.gcount() - 1; i >= 0; i--) {
-        if (!is_json_ws(tail[i])) {
-            return tail[i] == closer;
+    format_ = kcpp_file_format::JSON;
+    const auto& shard_paths = index.shard_paths_are_strings;
+    if (!shard_paths.empty() && std::all_of(shard_paths.begin(), shard_paths.end(),
+                                           [](const auto& entry) { return entry.second; })) {
+        tensors_.reserve(shard_paths.size());
+        for (const auto& entry : shard_paths) {
+            tensors_.push_back({entry.first, {}, {}});
         }
+        format_ = kcpp_file_format::SAFETENSORS_INDEX;
     }
-    return false;
+    tensors_complete_ = true;
+    return true;
 }
 
 kcpp_file_probe::~kcpp_file_probe() {
@@ -287,10 +312,7 @@ kcpp_file_probe& kcpp_file_probe::operator=(kcpp_file_probe&& other) noexcept {
         tensors_          = std::move(other.tensors_);
         tensors_complete_ = other.tensors_complete_;
         metadata_         = std::move(other.metadata_);
-        gguf_ctx_         = other.gguf_ctx_;
-        other.gguf_ctx_   = nullptr;
-        gguf_meta_ctx_    = other.gguf_meta_ctx_;
-        other.gguf_meta_ctx_ = nullptr;
+        gguf_ctx_         = std::exchange(other.gguf_ctx_, nullptr);
     }
     return *this;
 }
@@ -299,10 +321,6 @@ void kcpp_file_probe::reset() {
     if (gguf_ctx_) {
         gguf_free(gguf_ctx_);
         gguf_ctx_ = nullptr;
-    }
-    if (gguf_meta_ctx_) {
-        ggml_free(gguf_meta_ctx_);
-        gguf_meta_ctx_ = nullptr;
     }
     path_.clear();
     error_.clear();
@@ -330,13 +348,9 @@ bool kcpp_file_probe::open(const std::string& path) {
     }
     fin.seekg(0, std::ios::beg);
 
-    if (static_cast<uint64_t>(file_size) < 8) {
-        error_ = "file too small to identify";
-        return true;  // readable, UNKNOWN
-    }
-
     uint8_t head[8] = {0};
-    fin.read(reinterpret_cast<char*>(head), sizeof(head));
+    const auto head_size = std::min<std::streamoff>(file_size, sizeof(head));
+    fin.read(reinterpret_cast<char*>(head), head_size);
     if (!fin) {
         error_ = "failed to read file header";
         return false;
@@ -351,13 +365,11 @@ bool kcpp_file_probe::open(const std::string& path) {
         return true;
     }
 
-    if (open_safetensors(*this, fin, static_cast<uint64_t>(file_size))) {
+    if (head_size == sizeof(head) && open_safetensors(*this, fin, static_cast<uint64_t>(file_size))) {
         return true;
     }
 
-    if (looks_like_json(fin, static_cast<uint64_t>(file_size))) {
-        format_           = kcpp_file_format::JSON;
-        tensors_complete_ = true;
+    if (open_json(fin)) {
         return true;
     }
 
@@ -371,11 +383,39 @@ bool kcpp_file_probe::open(const std::string& path) {
 }
 
 std::string kcpp_file_probe::metadata_get(const std::string& key) const {
+    if (gguf_ctx_) {
+        const int64_t index = gguf_find_key(gguf_ctx_, key.c_str());
+        return index >= 0 ? gguf_value_to_string(gguf_ctx_, index) : std::string();
+    }
     const auto it = metadata_.find(key);
     return (it == metadata_.end()) ? std::string() : it->second;
 }
 
+bool kcpp_file_probe::metadata_has_prefix(const std::string& prefix) const {
+    if (gguf_ctx_) {
+        for (int64_t i = 0, n = gguf_get_n_kv(gguf_ctx_); i < n; ++i) {
+            if (std::string_view(gguf_get_key(gguf_ctx_, i)).rfind(prefix, 0) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+    const auto it = metadata_.lower_bound(prefix);
+    return it != metadata_.end() && it->first.rfind(prefix, 0) == 0;
+}
+
 bool kcpp_file_probe::tensor_exists(const std::string& name, bool exact) const {
+    if (gguf_ctx_) {
+        if (exact) {
+            return gguf_find_tensor(gguf_ctx_, name.c_str()) >= 0;
+        }
+        for (int64_t i = 0, n = gguf_get_n_tensors(gguf_ctx_); i < n; ++i) {
+            if (std::string_view(gguf_get_tensor_name(gguf_ctx_, i)).find(name) != std::string_view::npos) {
+                return true;
+            }
+        }
+        return false;
+    }
     for (const auto& t : tensors_) {
         if (exact ? t.name == name : t.name.find(name) != std::string::npos) {
             return true;

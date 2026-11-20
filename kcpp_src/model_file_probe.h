@@ -8,7 +8,6 @@
 #include <vector>
 
 struct gguf_context;
-struct ggml_context;
 
 // Read-only probe for model-related files (weights, tokenizers, ...).
 //
@@ -33,6 +32,7 @@ enum class kcpp_file_format : int {
     SAFETENSORS,
     JSON,
     TORCH_ZIP,
+    SAFETENSORS_INDEX, // tensor names from weight_map, without shapes or dtypes
 };
 
 struct kcpp_probe_tensor {
@@ -50,8 +50,8 @@ public:
     kcpp_file_probe(kcpp_file_probe&& other) noexcept;
     kcpp_file_probe& operator=(kcpp_file_probe&& other) noexcept;
 
-    // Classify the file and fill tensors()/metadata(). See the class comment
-    // for the open()/format() contract.
+    // Classify the file and read its header. GGUF tensor descriptions and
+    // metadata strings are materialized on demand.
     bool open(const std::string& path);
 
     kcpp_file_format format() const { return format_; }
@@ -59,13 +59,13 @@ public:
     const std::string& path() const { return path_; }
     const std::string& error() const { return error_; }
 
-    const std::vector<kcpp_probe_tensor>& tensors() const { return tensors_; }
+    const std::vector<kcpp_probe_tensor>& tensors() const;
     // false when the format is known but the tensor list was not (or could
     // not) be extracted, e.g. TORCH_ZIP
     bool tensors_complete() const { return tensors_complete_; }
-    const std::map<std::string, std::string>& metadata() const { return metadata_; }
     // "" when the key is absent
     std::string metadata_get(const std::string& key) const;
+    bool metadata_has_prefix(const std::string& prefix) const;
 
     // exact: full name match; otherwise substring match (as in gguf_tensor_exists)
     bool tensor_exists(const std::string& name, bool exact = true) const;
@@ -74,18 +74,17 @@ private:
     void reset();
     static bool open_gguf(kcpp_file_probe& p, const std::string& path);
     static bool open_safetensors(kcpp_file_probe& p, std::ifstream& fin, uint64_t file_size);
-    static bool looks_like_json(std::ifstream& fin, uint64_t file_size);
+    bool open_json(std::ifstream& fin);
 
     std::string path_;
     std::string error_;
     kcpp_file_format format_ = kcpp_file_format::UNKNOWN;
     int version_             = 0;
-    std::vector<kcpp_probe_tensor> tensors_;
+    mutable std::vector<kcpp_probe_tensor> tensors_;
     bool tensors_complete_   = false;
     std::map<std::string, std::string> metadata_;
 
-    struct gguf_context*  gguf_ctx_      = nullptr;  // owned when format_ == GGUF
-    struct ggml_context*  gguf_meta_ctx_ = nullptr;  // ditto (dummy tensors, no data)
+    struct gguf_context* gguf_ctx_ = nullptr;
 };
 
 #endif  // KCPP_MODEL_FILE_PROBE_H
