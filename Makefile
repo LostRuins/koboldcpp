@@ -847,6 +847,9 @@ otherarch/sdcpp/sdtype_adapter.o: otherarch/sdcpp/sdtype_adapter.cpp $(if $(wild
 kcpp_sdcpp_tokenizer.o: kcpp_src/sdcpp_gguf_tokenizer.cpp kcpp_src/sdcpp_gguf_tokenizer.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+kcpp_src/model_file_probe.o: kcpp_src/model_file_probe.cpp kcpp_src/model_file_probe.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 otherarch/sdcpp/thirdparty/zip.o: otherarch/sdcpp/thirdparty/zip.c
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -1076,7 +1079,7 @@ endif
 # High-level objects are identical for every MinGW/Linux variant.  Keep these in
 # one shared library; the selected low-level variant supplies the GGML, CPU ISA,
 # legacy GGML and GPU symbols used by this code.
-KOBOLDCPP_ENGINE_HIGHLEVEL_OBJS = gpttype_adapter_default.o whispercpp_default.o $(MTMD_CORE_OBJS) expose.o chat.o chat-tts-norm.o llama.o llama-model.o embeddings_default.o music_default.o tts_default.o $(OBJS_AUDIOCPP) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o $(OBJS_SDTYPE) $(LIB_TINYLIBWEBP)
+KOBOLDCPP_ENGINE_HIGHLEVEL_OBJS = gpttype_adapter_default.o whispercpp_default.o $(MTMD_CORE_OBJS) expose.o kcpp_src/model_file_probe.o chat.o chat-tts-norm.o llama.o llama-model.o embeddings_default.o music_default.o tts_default.o $(OBJS_AUDIOCPP) mtmd.o mtmd-helper.o mtmd-helper-gen.o mtmd-image.o $(OBJS_SDTYPE) $(LIB_TINYLIBWEBP)
 
 # This is the invariant subset that used to be repeated verbatim in OBJS_FULL,
 # OBJS_SIMPLE, OBJS_SIMPLER and OBJS_FAILSAFE.
