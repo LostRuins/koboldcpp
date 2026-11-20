@@ -271,8 +271,9 @@ struct LoraMap {
 };
 
 
-struct SDParams {
-    int n_threads = -1;
+// local intermediate representation of the model loading parameters.
+struct SDLoadParams {
+    // model file slots
     std::string model_path;
     std::string clip_l_path;
     std::string clip_g_path;
@@ -281,10 +282,50 @@ struct SDParams {
     std::string vae_path;
     std::string audio_vae_path;
     std::string taesd_path;
-    std::string stacked_id_embeddings_path;
-    std::string tokenizer; // settled tokenizer config (was StableDiffusionGGML::kcpp_tokenizer_path)
+    std::string uncond_diffusion_model_path;
+    std::string clip_vision_path;
+    std::string llm_path;
+    std::string llm_vision_path;
+    std::string embeddings_connectors_path;
+    std::string photo_maker_path;
+    std::string tokenizer;
+
+    // device / runtime
+    std::string backend;
+    std::string params_backend;
+    std::string split_mode;
+    std::string conv_direct_mode;
+    std::string flash_attn_mode;
+    std::string max_vram;
+    std::string tensor_type_rules;
+    int n_threads = 0;    // if -1 use physical cores
     sd_type_t wtype = SD_TYPE_COUNT;
-    bool has_llm_vision = false; // LLM conditioner with a vision tower (set at load)
+    bool enable_mmap = false;
+    bool auto_fit = false;
+    lora_apply_mode_t lora_apply_mode = LORA_APPLY_AT_RUNTIME;
+};
+
+struct KcppLoadParams {
+    // tracks loading state that does not have a direct sd_ctx_params_t mapping
+
+    // LoRA
+    LoraMap lora_map;
+    bool lora_dynamic = false;
+    bool lora_cache = false;
+
+    int quant = 0;              // decoded into wtype
+    bool flash_attention = false;
+    bool taesd = false;
+    int tiled_vae_threshold = 0;
+    std::string upscaler_filename;
+    int img_hard_limit = 0;
+    int img_soft_limit = 0;
+    bool has_llm_vision = false;
+};
+
+struct SDParams {
+    SDLoadParams load_params;
+    KcppLoadParams kcpp_load_params;
 
     std::string prompt;
     std::string negative_prompt;
@@ -304,9 +345,6 @@ struct SDParams {
     float strength                = 0.75f;
     int64_t seed                  = 42;
     std::string ref_image_args    = "";
-
-    LoraMap lora_map;
-    bool lora_dynamic = false;
 
     std::string cache_mode;
     std::string cache_options;
@@ -1015,40 +1053,25 @@ static bool kcpp_is_mmproj(const kcpp_path_class& c)
 
 // read the model version from the file metadata using a temporary loader and
 // resolve model / diffusion_model and text encoder / llm / proj / vision paths
-static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, const sd_load_model_inputs& inputs)
+static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
 {
     kcpp_tokenizer_resources.reset();
 
     bool model_is_gguf = false;
-    if(sd_params.t5xxl_path!="" || sd_params.clip_l_path!="" || sd_params.clip_g_path!="")
+    if(lp.t5xxl_path!="" || lp.clip_l_path!="" || lp.clip_g_path!="")
     {
-        model_is_gguf = is_gguf_file(sd_params.model_path);
+        model_is_gguf = is_gguf_file(lp.model_path);
         //extra check - make sure there is no diffusion model prefix already inside!
-        if(model_is_gguf && !gguf_tensor_exists(sd_params.model_path,"model.diffusion_model.",false))
+        if(model_is_gguf && !gguf_tensor_exists(lp.model_path,"model.diffusion_model.",false))
         {
-            printf("\nSwap to Diffusion Model Path:%s",sd_params.model_path.c_str());
-            sd_params.diffusion_model_path = sd_params.model_path;
-            sd_params.model_path = "";
+            printf("\nSwap to Diffusion Model Path:%s",lp.model_path.c_str());
+            lp.diffusion_model_path = lp.model_path;
+            lp.model_path = "";
         }
     }
 
-    params.model_path = sd_params.model_path.c_str();
-    params.clip_l_path = sd_params.clip_l_path.c_str();
-    params.clip_g_path = sd_params.clip_g_path.c_str();
-    params.t5xxl_path = sd_params.t5xxl_path.c_str();
-    params.diffusion_model_path = sd_params.diffusion_model_path.c_str();
-    params.vae_path = sd_params.vae_path.c_str();
-    params.audio_vae_path = sd_params.audio_vae_path.c_str();
-    params.taesd_path = sd_params.taesd_path.c_str();
-    params.photo_maker_path = sd_params.stacked_id_embeddings_path.c_str();
-    params.tokenizer = "";
-
-    auto path_empty = [](const char* path) -> bool {
-        return path == nullptr || *path == '\0';
-    };
-
-    std::string& kcpp_tokenizer_path = sd_params.tokenizer;
-    std::string& kcpp_taesd_path     = sd_params.taesd_path;
+    std::string& kcpp_tokenizer_path = lp.tokenizer;
+    std::string& kcpp_taesd_path     = lp.taesd_path;
 
     SDVersion tempver = VERSION_COUNT;
 
@@ -1058,17 +1081,17 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         // later loaded in the same way by the sdcpp loader
         Kcpp_ModelLoader model_loader;
 
-        if (!path_empty(params.model_path)) {
-            printf("loading model from '%s'", params.model_path);
-            if (!model_loader.init_from_file(params.model_path)) {
-                printf("init model loader from file failed: '%s'", params.model_path);
+        if (!lp.model_path.empty()) {
+            printf("loading model from '%s'", lp.model_path.c_str());
+            if (!model_loader.init_from_file(lp.model_path)) {
+                printf("init model loader from file failed: '%s'", lp.model_path.c_str());
             }
         }
 
-        if (!path_empty(params.diffusion_model_path)) {
-            printf("loading diffusion model from '%s'", params.diffusion_model_path);
-            if (!model_loader.init_from_file(params.diffusion_model_path, "model.diffusion_model.")) {
-                printf("loading diffusion model from '%s' failed", params.diffusion_model_path);
+        if (!lp.diffusion_model_path.empty()) {
+            printf("loading diffusion model from '%s'", lp.diffusion_model_path.c_str());
+            if (!model_loader.init_from_file(lp.diffusion_model_path, "model.diffusion_model.")) {
+                printf("loading diffusion model from '%s' failed", lp.diffusion_model_path.c_str());
             }
         }
 
@@ -1077,42 +1100,42 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         bool fallback_prefixed = false;
 
         // kcpp fallback to separate diffusion model passed as model
-        if (!path_empty(params.model_path) &&
-            path_empty(params.diffusion_model_path) &&
-            (!path_empty(params.t5xxl_path)||!path_empty(params.clip_l_path)))
+        if (!lp.model_path.empty() &&
+            lp.diffusion_model_path.empty() &&
+            (!lp.t5xxl_path.empty()||!lp.clip_l_path.empty()))
         {
-            bool model_is_safetensors = !model_is_gguf && is_safetensors_file(sd_params.model_path);
+            bool model_is_safetensors = !model_is_gguf && is_safetensors_file(lp.model_path);
             if(model_is_safetensors && !model_loader.has_diffusion_model_tensors())
             {
                 printf("SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
-                if (!model_loader.init_from_file(params.model_path, "model.diffusion_model.")) {
-                    printf("loading diffusion model from '%s' failed", params.model_path);
+                if (!model_loader.init_from_file(lp.model_path, "model.diffusion_model.")) {
+                    printf("loading diffusion model from '%s' failed", lp.model_path.c_str());
                 }
                 fallback_prefixed = true;
                 // Keep both paths so VAE or conditioner tensors that must remain at their original names still work.
-                params.diffusion_model_path = params.model_path;
+                lp.diffusion_model_path = lp.model_path;
                 tempver = model_loader.get_sd_version();
             }
         }
 
         if (tempver == VERSION_ANIMA && !fallback_prefixed &&
-            !path_empty(params.model_path) &&
-            path_empty(params.diffusion_model_path) &&
+            !lp.model_path.empty() &&
+            lp.diffusion_model_path.empty() &&
             !model_loader.has_diffusion_model_tensors()
            )
         {
             printf("Anima: SD Diffusion Model tensors missing! Fallback trying alternative tensor names...\n");
-            if (!model_loader.init_from_file(params.model_path, "model.diffusion_model.")) {
-                printf("loading diffusion model from '%s' failed", params.model_path);
+            if (!model_loader.init_from_file(lp.model_path, "model.diffusion_model.")) {
+                printf("loading diffusion model from '%s' failed", lp.model_path.c_str());
             }
-            params.diffusion_model_path = params.model_path;
+            lp.diffusion_model_path = lp.model_path;
             tempver = model_loader.get_sd_version();
         }
 
     }
 
-    auto sibling_tokenizer_json = [&](const char* model_path) -> std::string {
-        if (path_empty(model_path)) {
+    auto sibling_tokenizer_json = [&](const std::string& model_path) -> std::string {
+        if (model_path.empty()) {
             return {};
         }
         std::error_code error;
@@ -1162,7 +1185,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         // Qwen 3.5
         is_mosi
     );
-    sd_params.has_llm_vision = has_llm_vision;
+    klp.has_llm_vision = has_llm_vision;
     bool has_tokenizer = (is_lens || is_pid || is_ming || is_mosi || is_llada);
 
     std::string kcpp_main_tokenizer;
@@ -1174,11 +1197,11 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     // kind is an error: the first one (in slot order) wins and the second
     // is left where it is.
     {
-        const char** slots[3] = {&params.t5xxl_path, &params.clip_l_path, &params.clip_g_path};
+        std::string* slots[3] = {&lp.t5xxl_path, &lp.clip_l_path, &lp.clip_g_path};
 
         for (auto slot: slots)
         {
-            if (path_empty(*slot)) continue;
+            if (slot->empty()) continue;
             const kcpp_path_class c = kcpp_classify_path(*slot);
             if (!c.valid) continue;
 
@@ -1195,26 +1218,26 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
                     catch (const std::exception& exception)
                     {
                         printf("\nKCPP: could not read UMT5 tokenizer JSON from %s: %s\n",
-                               *slot, exception.what());
+                               slot->c_str(), exception.what());
                     }
                 }
                 else
                 {
                     kcpp_main_tokenizer = *slot;
                 }
-                printf("\nKCPP: using tokenizer JSON found in %s\n", *slot);
+                printf("\nKCPP: using tokenizer JSON found in %s\n", slot->c_str());
                 *slot = "";
             }
             else if (c.is_mmproj)
             {
-                const char** target = nullptr;
-                if (has_llm_vision) target = &params.llm_vision_path;
-                else if (is_ltx || iswan) target = &params.clip_vision_path;
+                std::string* target = nullptr;
+                if (has_llm_vision) target = &lp.llm_vision_path;
+                else if (is_ltx || iswan) target = &lp.clip_vision_path;
                 // a second mmproj is an error: the first one wins, so the
                 // destination must still be empty
-                if (target != nullptr && path_empty(*target))
+                if (target != nullptr && target->empty())
                 {
-                    printf("\nKCPP: routing mmproj found in %s to %s\n", *slot, *target);
+                    printf("\nKCPP: routing mmproj found in %s to %s\n", slot->c_str(), target->c_str());
                     *target = *slot;
                     *slot = "";
                 }
@@ -1223,56 +1246,56 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
             {
                 // the P-H3 text connector belongs in the embeddings-connectors
                 // field; route it out before the llm swaps below can grab it
-                if (path_empty(params.embeddings_connectors_path))
+                if (lp.embeddings_connectors_path.empty())
                 {
-                    printf("\nKCPP: routing P-H3 text connector found in %s to the embeddings-connectors field\n", *slot);
-                    std::swap(params.embeddings_connectors_path, *slot);
+                    printf("\nKCPP: routing P-H3 text connector found in %s to the embeddings-connectors field\n", slot->c_str());
+                    std::swap(lp.embeddings_connectors_path, *slot);
                 }
                 else
                 {
-                    printf("\nKCPP: P-H3 text connector found in %s, but the embeddings-connectors field is already in use; leaving it as is\n", *slot);
+                    printf("\nKCPP: P-H3 text connector found in %s, but the embeddings-connectors field is already in use; leaving it as is\n", slot->c_str());
                 }
             }
             else if (c.is_safetensors && c.st.label)
             {
                 // safetensors are not rerouted: a combined VLM safetensors must
                 // stay in one piece for sd.cpp to split internally
-                printf("\nKCPP: %s looks like a %s (safetensors)\n", *slot, c.st.label);
+                printf("\nKCPP: %s looks like a %s (safetensors)\n", slot->c_str(), c.st.label);
             }
         }
     }
 
     //kcpp qol fallback: if a llm was loaded as t5 by mistake
-    if(conditioner_is_llm && !path_empty(params.t5xxl_path))
+    if(conditioner_is_llm && !lp.t5xxl_path.empty())
     {
-        if(path_empty(params.clip_l_path))
+        if(lp.clip_l_path.empty())
         {
-            std::swap(params.clip_l_path, params.t5xxl_path);
+            std::swap(lp.clip_l_path, lp.t5xxl_path);
         }
-        else if(path_empty(params.clip_g_path))
+        else if(lp.clip_g_path.empty())
         {
             //very tricky case. see if we can tell if clipl is an mmproj, if so move to right place
-            if(kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)) || is_ltx)
+            if(kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)) || is_ltx)
             {
                 // g = l, l = t, t = ""
-                std::swap(params.clip_g_path, params.clip_l_path);
-                std::swap(params.clip_l_path, params.t5xxl_path);
+                std::swap(lp.clip_g_path, lp.clip_l_path);
+                std::swap(lp.clip_l_path, lp.t5xxl_path);
             }
         }
     }
 
     //settle clip-l replacements
-    if (!path_empty(params.clip_l_path))
+    if (!lp.clip_l_path.empty())
     {
-        if(conditioner_is_llm && path_empty(params.llm_path))
+        if(conditioner_is_llm && lp.llm_path.empty())
         {
-            if (kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)))
+            if (kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)))
             {
                 // an mmproj in a text-encoder field: route it to the vision
                 // field when the model has one and it is free
-                if (has_llm_vision && path_empty(params.llm_vision_path))
+                if (has_llm_vision && lp.llm_vision_path.empty())
                 {
-                    std::swap(params.clip_l_path, params.llm_vision_path);
+                    std::swap(lp.clip_l_path, lp.llm_vision_path);
                 }
                 else
                 {
@@ -1281,64 +1304,64 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
             }
             else
             {
-                std::swap(params.llm_path, params.clip_l_path);
+                std::swap(lp.llm_path, lp.clip_l_path);
             }
         }
         else if(iswan)
         {
-            if(path_empty(params.t5xxl_path))
+            if(lp.t5xxl_path.empty())
             {
-                if (!kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)))
-                    std::swap(params.t5xxl_path, params.clip_l_path);
-            } else if (path_empty(params.clip_vision_path)) {
-                if (!kcpp_is_mmproj(kcpp_classify_path(params.clip_l_path)))
-                    std::swap(params.clip_vision_path, params.clip_l_path);
+                if (!kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)))
+                    std::swap(lp.t5xxl_path, lp.clip_l_path);
+            } else if (lp.clip_vision_path.empty()) {
+                if (!kcpp_is_mmproj(kcpp_classify_path(lp.clip_l_path)))
+                    std::swap(lp.clip_vision_path, lp.clip_l_path);
             }
         }
     }
 
     //settle clip-g replacements
-    if (!path_empty(params.clip_g_path))
+    if (!lp.clip_g_path.empty())
     {
-        if (kcpp_is_mmproj(kcpp_classify_path(params.clip_g_path)))
+        if (kcpp_is_mmproj(kcpp_classify_path(lp.clip_g_path)))
         {
-            if(iswan && path_empty(params.clip_vision_path))
+            if(iswan && lp.clip_vision_path.empty())
             {
-                std::swap(params.clip_vision_path, params.clip_g_path);
+                std::swap(lp.clip_vision_path, lp.clip_g_path);
             }
-            else if(has_llm_vision && path_empty(params.llm_vision_path))
+            else if(has_llm_vision && lp.llm_vision_path.empty())
             {
-                std::swap(params.llm_vision_path, params.clip_g_path);
+                std::swap(lp.llm_vision_path, lp.clip_g_path);
             }
         } else {
-            if(conditioner_is_llm && path_empty(params.llm_path))
+            if(conditioner_is_llm && lp.llm_path.empty())
             {
                 // a text model misplaced in clip_2
-                std::swap(params.llm_path, params.clip_g_path);
+                std::swap(lp.llm_path, lp.clip_g_path);
             }
             else if(is_ltx)
             {
-                std::swap(params.embeddings_connectors_path, params.clip_g_path);
+                std::swap(lp.embeddings_connectors_path, lp.clip_g_path);
             }
             else if(is_ideogram)
             {
-                std::swap(params.uncond_diffusion_model_path, params.clip_g_path);
+                std::swap(lp.uncond_diffusion_model_path, lp.clip_g_path);
             }
-            else if(sd_version_is_minimax_h3_image(tempver) && path_empty(params.embeddings_connectors_path))
+            else if(sd_version_is_minimax_h3_image(tempver) && lp.embeddings_connectors_path.empty())
             {
                 // the P-H3 text connector goes to the embeddings connectors field
-                std::swap(params.embeddings_connectors_path, params.clip_g_path);
+                std::swap(lp.embeddings_connectors_path, lp.clip_g_path);
             }
         }
     }
 
     //settle possible inversions for mmproj
-    if(!path_empty(params.llm_vision_path) && !path_empty(params.llm_path))
+    if(!lp.llm_vision_path.empty() && !lp.llm_path.empty())
     {
-        if(!kcpp_is_mmproj(kcpp_classify_path(params.llm_vision_path)) &&
-        kcpp_is_mmproj(kcpp_classify_path(params.llm_path)))
+        if(!kcpp_is_mmproj(kcpp_classify_path(lp.llm_vision_path)) &&
+        kcpp_is_mmproj(kcpp_classify_path(lp.llm_path)))
         {
-            std::swap(params.llm_path, params.llm_vision_path);
+            std::swap(lp.llm_path, lp.llm_vision_path);
         }
     }
 
@@ -1346,9 +1369,9 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     // use a tokenizer.json placed directly beside the selected text encoder.
     // Never probe beside GGUF files; their tokenizer comes from GGUF metadata.
     if (iswan && kcpp_tokenizer_resources.explicit_umt5_json.empty()) {
-        const char* tokenizer_source = !path_empty(params.t5xxl_path) ? params.t5xxl_path : params.model_path;
+        const std::string tokenizer_source = !lp.t5xxl_path.empty() ? lp.t5xxl_path : lp.model_path;
         const std::string tokenizer_path =
-            !path_empty(tokenizer_source) && is_safetensors_file(tokenizer_source)
+            !tokenizer_source.empty() && is_safetensors_file(tokenizer_source)
                 ? sibling_tokenizer_json(tokenizer_source)
                 : std::string();
         if (!tokenizer_path.empty()) {
@@ -1363,8 +1386,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         }
     }
     if (is_ltx && kcpp_main_tokenizer.empty()) {
-        const char* tokenizer_source = !path_empty(params.llm_path) ? params.llm_path : params.model_path;
-        if (!path_empty(tokenizer_source) && is_safetensors_file(tokenizer_source)) {
+        const std::string tokenizer_source = !lp.llm_path.empty() ? lp.llm_path : lp.model_path;
+        if (!tokenizer_source.empty() && is_safetensors_file(tokenizer_source)) {
             kcpp_main_tokenizer = sibling_tokenizer_json(tokenizer_source);
         }
         if (!kcpp_main_tokenizer.empty()) {
@@ -1373,7 +1396,7 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     }
 
     //settle tae: build the TAE path for the detected model version
-    if(inputs.taesd)
+    if(klp.taesd)
     {
         const char* tae_name = nullptr;
         if(sd_version_is_sd1(tempver) || sd_version_is_sd2(tempver))
@@ -1423,29 +1446,28 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
             printf("With TAE SD VAE: %s\n", kcpp_taesd_path.c_str());
         }
     }
-    if (!path_empty(params.photo_maker_path) > 0 && tempver != VERSION_SDXL) {
+    if (!lp.photo_maker_path.empty() > 0 && tempver != VERSION_SDXL) {
         printf("\nWARNING: PhotoMaker is only compatible with SDXL models. PhotoMaker will be disabled!\n");
-        params.photo_maker_path = "";
+        lp.photo_maker_path = "";
     }
 
     //for models with TAE suppport, if vae is set, tae is off, and it looks like a tae, swap to tae
-    if(kcpp_taesd_path=="" && !path_empty(params.vae_path) && toLowerCase(params.vae_path).rfind("tae")!=std::string::npos)
+    if(kcpp_taesd_path=="" && !lp.vae_path.empty() && toLowerCase(lp.vae_path).rfind("tae")!=std::string::npos)
     {
         try {
             const uintmax_t tae_size_limit = 64 * 1024 * 1024; //if its less than 64mb, it might be a TAE
             // Get the file size in bytes cross-platform
-            uintmax_t size = std::filesystem::file_size(params.vae_path);
+            uintmax_t size = std::filesystem::file_size(lp.vae_path);
             if (size > 0 && size < tae_size_limit) {
                 printf("\nVAE appears to be a TAE, loading as TAE instead!\n");
-                kcpp_taesd_path = params.vae_path;
-                params.vae_path = "";
+                kcpp_taesd_path = lp.vae_path;
+                lp.vae_path = "";
             }
         }
         catch (const std::filesystem::filesystem_error& e) {
             std::printf("Error accessing file: %s\n", e.what());
         }
     }
-    params.taesd_path = kcpp_taesd_path.c_str();
 
     const auto resource_missing = [&](const char* name) {
         return !file_exists(executable_path + "embd_res/" + name);
@@ -1454,8 +1476,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     // Reconstruct exactly what the existing tokenizer classes need from the
     // selected text encoder's GGUF metadata, entirely in memory.
     if (iswan && kcpp_tokenizer_resources.explicit_umt5_json.empty()) {
-        const char* tokenizer_gguf = !path_empty(params.t5xxl_path) ? params.t5xxl_path : params.model_path;
-        if (!path_empty(tokenizer_gguf) && is_gguf_file(tokenizer_gguf)) {
+        const std::string tokenizer_gguf = !lp.t5xxl_path.empty() ? lp.t5xxl_path : lp.model_path;
+        if (!tokenizer_gguf.empty() && is_gguf_file(tokenizer_gguf)) {
             std::string tokenizer_error;
             if (kcpp_sd::gguf_tokenizer_extractor::to_unigram_json(
                     tokenizer_gguf,
@@ -1471,8 +1493,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
     }
 
     if (is_ltx && kcpp_main_tokenizer.empty()) {
-        const char* tokenizer_gguf = !path_empty(params.llm_path) ? params.llm_path : params.model_path;
-        if (!path_empty(tokenizer_gguf) && is_gguf_file(tokenizer_gguf)) {
+        const std::string tokenizer_gguf = !lp.llm_path.empty() ? lp.llm_path : lp.model_path;
+        if (!tokenizer_gguf.empty() && is_gguf_file(tokenizer_gguf)) {
             std::string tokenizer_error;
             if (kcpp_sd::gguf_tokenizer_extractor::to_vocab_and_merges(
                     tokenizer_gguf,
@@ -1498,7 +1520,6 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
         }
         kcpp_tokenizer_path += "main=";
         kcpp_tokenizer_path += kcpp_main_tokenizer;
-        params.tokenizer = kcpp_tokenizer_path.c_str();
     } else if (kcpp_tokenizer_path.empty()) {
         // Explicit tokenizer JSON wins. Models with built-in tokenizer assets
         // keep using them; GGUF metadata is only the final in-memory fallback.
@@ -1510,8 +1531,8 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
              (resource_missing("mistral2_merges_utf8_c_str.embd") || resource_missing("mistral2_vocab_json.embd")));
 
         if (has_tokenizer || baked_missing) {
-            const char* tokenizer_gguf = !path_empty(params.llm_path) ? params.llm_path : params.model_path;
-            if (!path_empty(tokenizer_gguf) && is_gguf_file(tokenizer_gguf)) {
+            const std::string tokenizer_gguf = !lp.llm_path.empty() ? lp.llm_path : lp.model_path;
+            if (!tokenizer_gguf.empty() && is_gguf_file(tokenizer_gguf)) {
                 std::string tokenizer_error;
                 const auto profile = is_mosi ? kcpp_sd::tokenizer_profile::MOSS_IMAGE
                                              : kcpp_sd::tokenizer_profile::DEFAULT;
@@ -1519,7 +1540,6 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
                                                                   kcpp_tokenizer_path,
                                                                   tokenizer_error,
                                                                   profile)) {
-                    params.tokenizer = kcpp_tokenizer_path.c_str();
                     printf("\nKCPP: using tokenizer metadata from %s\n", tokenizer_gguf);
                 } else {
                     printf("\nKCPP: could not use tokenizer metadata from %s: %s\n",
@@ -1532,90 +1552,113 @@ static void kcpp_set_model_paths(sd_ctx_params_t& params, SDParams& sd_params, c
 
     // patch hidream to fix broken images on vulkan
     // https://github.com/leejet/stable-diffusion.cpp/issues/1496
-    if(tempver == VERSION_HIDREAM_O1 && path_empty(params.tensor_type_rules))
+    if(tempver == VERSION_HIDREAM_O1 && lp.tensor_type_rules.empty())
     {
-        params.tensor_type_rules = "^model.language_model.layers.[0-9]+.mlp.down_proj.weight=bf16";
+        lp.tensor_type_rules = "^model.language_model.layers.[0-9]+.mlp.down_proj.weight=bf16";
     }
 
-    params.flash_attn_mode = "off";
-    if(inputs.flash_attention) {
+    lp.flash_attn_mode = "off";
+    if(klp.flash_attention) {
         if(sd_version_is_qwen_image(tempver)) {
             // edit 14feb, breaks qwen image edit (moved from diffusion_engine)
-            params.flash_attn_mode = "on,te=off";
+            lp.flash_attn_mode = "on,te=off";
         } else {
-            params.flash_attn_mode = "on";
+            lp.flash_attn_mode = "on";
         }
     }
 
     //debug print
     // printf("\n\nclip_g: %s\nclip_l: %s\nclip_vision: %s\nllm: %s\nllm_vision: %s\nt5xxl: %s\ntaesd: %s\n",
-    // params.clip_g_path, params.clip_l_path, params.clip_vision_path,
-    // params.llm_path, params.llm_vision_path, params.t5xxl_path,
-    // params.taesd_path);
+    // lp.clip_g_path, lp.clip_l_path, lp.clip_vision_path,
+    // lp.llm_path, lp.llm_vision_path, lp.t5xxl_path,
+    // lp.taesd_path);
 }
 
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
+    // globals
     sddebugmode = inputs.debugmode;
     set_sd_log_level(sddebugmode);
-
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
-    executable_path = sd_get_u8path(inputs.executable_path);
-    LoraMap lora_map;
-    for(int i=0;i<inputs.lora_len;++i)
-    {
-        lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
-    }
-    std::string vaefilename = inputs.vae_filename;
-    std::string audiovaefilename = inputs.audio_vae_filename;
-    std::string t5xxl_filename = inputs.llm_filename;
-    std::string clip1_filename = inputs.clip1_filename;
-    std::string clip2_filename = inputs.clip2_filename;
-    std::string photomaker_filename = inputs.photomaker_filename;
-    std::string upscaler_filename = inputs.upscaler_filename;
-    cfg_tiled_vae_threshold = inputs.tiled_vae_threshold;
+    executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
+
+    // TODO: do we really need a struct allocated with new?
+    sd_params = new SDParams();
+    SDLoadParams& lp = sd_params->load_params;
+    KcppLoadParams& klp = sd_params->kcpp_load_params;
+
+    lp.model_path = SAFE_STR(inputs.model_filename);
+    lp.vae_path = SAFE_STR(inputs.vae_filename);
+    lp.audio_vae_path = SAFE_STR(inputs.audio_vae_filename);
+    lp.t5xxl_path = SAFE_STR(inputs.llm_filename);
+    lp.clip_l_path = SAFE_STR(inputs.clip1_filename);
+    lp.clip_g_path = SAFE_STR(inputs.clip2_filename);
+    lp.photo_maker_path = SAFE_STR(inputs.photomaker_filename);
+    klp.upscaler_filename = SAFE_STR(inputs.upscaler_filename);
+    klp.tiled_vae_threshold = inputs.tiled_vae_threshold;
+    cfg_tiled_vae_threshold = klp.tiled_vae_threshold;
     cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold > 8192 ? 8192 : cfg_tiled_vae_threshold);
     cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold <= 0 ? 8192 : cfg_tiled_vae_threshold); //if negative dont tile
-    cfg_side_limit = inputs.img_hard_limit;
-    cfg_square_limit = inputs.img_soft_limit;
-    printf("\nImageGen Init - Load Model: %s\n",inputs.model_filename);
+    klp.img_hard_limit = inputs.img_hard_limit;
+    klp.img_soft_limit = inputs.img_soft_limit;
+    cfg_side_limit = klp.img_hard_limit;
+    cfg_square_limit = klp.img_soft_limit;
 
-    std::string backend = inputs.backend ? inputs.backend : "";
-    std::string params_backend = inputs.params_backend ? inputs.params_backend : "";
-    std::string split_mode = inputs.split_mode ? inputs.split_mode : "";
-    std::string conv_direct_mode = inputs.conv_direct_mode ? inputs.conv_direct_mode : "";
-
-    int lora_apply_mode = LORA_APPLY_AT_RUNTIME;
-    bool lora_dynamic = false;
-    bool lora_cache = false;
-    if(inputs.lora_apply_mode >= 1 && inputs.lora_apply_mode <= 2) {
-        lora_apply_mode = inputs.lora_apply_mode;
+    lp.backend = SAFE_STR(inputs.backend);
+    lp.params_backend = SAFE_STR(inputs.params_backend);
+    lp.split_mode = SAFE_STR(inputs.split_mode);
+    lp.conv_direct_mode = SAFE_STR(inputs.conv_direct_mode);
+    lp.n_threads = inputs.threads; //if -1 use physical cores
+    lp.enable_mmap = inputs.use_mmap;
+    lp.auto_fit = inputs.auto_fit;
+    klp.quant = inputs.quant;
+    if (klp.quant > 0) {
+        lp.wtype = (klp.quant==1?SD_TYPE_Q8_0:SD_TYPE_Q4_0);
     }
-    else {
-        // bit 3: LoRAs can be changed dynamically
-        // bit 4: cache the initial LoRA list in VRAM
-        lora_dynamic = !!(inputs.lora_apply_mode & (1<<3));
-        lora_cache   = lora_dynamic && !!(inputs.lora_apply_mode & (1<<4));
-    }
-    // TODO: LoRA caching produces errors after a preloaded LoRA is later removed on a request
-    lora_cache = false;
+    klp.flash_attention = inputs.flash_attention;
+    klp.taesd = inputs.taesd;
+    lp.max_vram = SAFE_STR(inputs.max_vram);
 
-    if(lora_map.items.size() > 0)
-    {
-        const char* lora_apply_mode_name = lora_apply_mode == 1 ? "immediately"
-                                         : lora_apply_mode == 2 ? "at runtime"
-                                         : "auto";
-        const char * lora_dynamic_name = lora_dynamic ? ", dynamic" : "";
-        const char * lora_cache_name = lora_cache ? ", with caching" : "";
-        printf("With LoRAs in apply mode %s%s%s:\n", lora_apply_mode_name, lora_dynamic_name, lora_cache_name);
-        for(auto lora: lora_map.items)
+    for(int i=0;i<inputs.lora_len;++i) {
+        klp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
+    }
+
+    printf("\nImageGen Init - Load Model: %s\n", lp.model_path.c_str());
+
+    { // LoRA parameters and initial list
+        lp.lora_apply_mode = LORA_APPLY_AT_RUNTIME;
+        klp.lora_dynamic = false;
+
+        int lora_apply_mode = inputs.lora_apply_mode;
+        if(lora_apply_mode >= 1 && lora_apply_mode <= 2) {
+            lp.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
+        }
+        else {
+            // bit 3: LoRAs can be changed dynamically
+            // bit 4: cache the initial LoRA list in VRAM
+            klp.lora_dynamic = !!(lora_apply_mode & (1<<3));
+            klp.lora_cache   = klp.lora_dynamic && !!(lora_apply_mode & (1<<4));
+        }
+        // TODO: LoRA caching produces errors after a preloaded LoRA is later removed on a request
+        klp.lora_cache = false;
+
+        if(klp.lora_map.items.size() > 0)
         {
-            printf("  %s at %f power\n", lora.first.c_str(), lora.second);
+            const char* lora_apply_mode_name = lp.lora_apply_mode == LORA_APPLY_IMMEDIATELY ? "immediately"
+                : lp.lora_apply_mode == LORA_APPLY_AT_RUNTIME ? "at runtime"
+                : "auto";
+            const char * lora_dynamic_name = klp.lora_dynamic ? ", dynamic" : "";
+            const char * lora_cache_name = klp.lora_cache ? ", with caching" : "";
+            printf("With LoRAs in apply mode %s%s%s:\n", lora_apply_mode_name, lora_dynamic_name, lora_cache_name);
+            for(auto lora: klp.lora_map.items)
+            {
+                printf("  %s at %f power\n", lora.first.c_str(), lora.second);
+            }
         }
     }
 
-    if(inputs.taesd)
+    if(klp.taesd)
     {
         printf("With Tiny Autoencoder (TAE)\n");
         if (cfg_tiled_vae_threshold < 8192) {
@@ -1623,117 +1666,117 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
             cfg_tiled_vae_threshold = 8192;
         }
     }
-    else if(vaefilename!="")
+    else if(lp.vae_path!="")
     {
-        printf("With Custom VAE: %s\n",vaefilename.c_str());
+        printf("With Custom VAE: %s\n",lp.vae_path.c_str());
     }
-    if(audiovaefilename!="")
+    if(lp.audio_vae_path!="")
     {
-        printf("With Audio VAE: %s\n",audiovaefilename.c_str());
+        printf("With Audio VAE: %s\n",lp.audio_vae_path.c_str());
     }
-    if(t5xxl_filename!="")
+    if(lp.t5xxl_path!="")
     {
-        printf("With Custom Text Encoder LLM Model: %s\n",t5xxl_filename.c_str());
+        printf("With Custom Text Encoder LLM Model: %s\n",lp.t5xxl_path.c_str());
     }
-    if(clip1_filename!="")
+    if(lp.clip_l_path!="")
     {
-        printf("With Custom Clip-1 Model: %s\n",clip1_filename.c_str());
+        printf("With Custom Clip-1 Model: %s\n",lp.clip_l_path.c_str());
     }
-    if(clip2_filename!="")
+    if(lp.clip_g_path!="")
     {
-        printf("With Custom Clip-2 Model: %s\n",clip2_filename.c_str());
+        printf("With Custom Clip-2 Model: %s\n",lp.clip_g_path.c_str());
     }
-    if(photomaker_filename!="")
+    if(lp.photo_maker_path!="")
     {
-        printf("With PhotoMaker Model: %s\n",photomaker_filename.c_str());
+        printf("With PhotoMaker Model: %s\n",lp.photo_maker_path.c_str());
         photomaker_enabled = true;
     }
-    if(upscaler_filename!="")
+    if(klp.upscaler_filename!="")
     {
-        printf("With Upscaler Model: %s\n",upscaler_filename.c_str());
+        printf("With Upscaler Model: %s\n",klp.upscaler_filename.c_str());
     }
-    if(inputs.flash_attention)
+    if(klp.flash_attention)
     {
         printf("Flash Attention is enabled\n");
     }
-    if(!conv_direct_mode.empty())
+    if(!lp.conv_direct_mode.empty())
     {
-        printf("Conv2D Direct mode: \"%s\"\n", conv_direct_mode.c_str());
+        printf("Conv2D Direct mode: \"%s\"\n", lp.conv_direct_mode.c_str());
     }
-    if(backend != "")
+    if(lp.backend != "")
     {
-        printf("Backend assignment: \"%s\"\n", backend.c_str());
+        printf("Backend assignment: \"%s\"\n", lp.backend.c_str());
     }
-    if (inputs.use_mmap && params_backend == "CPU") {
+    if (lp.enable_mmap && lp.params_backend == "CPU") {
         printf("Offloading weights to system RAM with mmap\n");
-        if (!lora_dynamic && inputs.lora_len > 0) {
+        if (!klp.lora_dynamic && klp.lora_map.items.size() > 0) {
             printf("Note: static LoRAs can reduce mmap memory savings!\n");
         }
-    } else if (params_backend == "CPU") {
+    } else if (lp.params_backend == "CPU") {
         printf("Offloading weights to system RAM\n");
-    } else if (inputs.use_mmap) {
+    } else if (lp.enable_mmap) {
         printf("Using mmap for I/O\n");
     }
-    if(inputs.auto_fit) {
+    if(lp.auto_fit) {
         printf("Using auto-fit");
     }
-    if(params_backend != "" && params_backend != "CPU") {
-        printf("Parameters backend assignment: \"%s\"\n", params_backend.c_str());
+    if(lp.params_backend != "" && lp.params_backend != "CPU") {
+        printf("Parameters backend assignment: \"%s\"\n", lp.params_backend.c_str());
     }
-    if(split_mode != "") {
-        printf("Using split mode: \"%s\"\n", split_mode.c_str());
+    if(lp.split_mode != "") {
+        printf("Using split mode: \"%s\"\n", lp.split_mode.c_str());
     }
-    std::string max_vram;
-    if(inputs.max_vram && *inputs.max_vram) {
-        max_vram = inputs.max_vram;
-        printf("Using max VRAM = %s GB\n", max_vram.c_str());
-        if (params_backend == "") {
+    if(!lp.max_vram.empty()) {
+        printf("Using max VRAM = %s GB\n", lp.max_vram.c_str());
+        if (lp.params_backend == "") {
             printf("Note: a VRAM limit may not be effective without offloading!\n");
         }
     }
-    if(inputs.quant > 0)
+    if(lp.wtype != SD_TYPE_COUNT)
     {
+        printf("Diffusion Model quantized to %s\n", sd_type_name(lp.wtype));
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
     }
 
-    sd_params = new SDParams();
-    sd_params->model_path = inputs.model_filename;
-    sd_params->wtype = SD_TYPE_COUNT;
-    if (inputs.quant > 0) {
-        sd_params->wtype = (inputs.quant==1?SD_TYPE_Q8_0:SD_TYPE_Q4_0);
-        printf("Diffusion Model quantized to %s\n", sd_type_name(sd_params->wtype));
-    }
-    sd_params->n_threads = inputs.threads; //if -1 use physical cores
-    sd_params->vae_path = vaefilename;
-    sd_params->audio_vae_path = audiovaefilename;
-    sd_params->t5xxl_path = t5xxl_filename;
-    sd_params->clip_l_path = clip1_filename;
-    sd_params->clip_g_path = clip2_filename;
-    sd_params->stacked_id_embeddings_path = photomaker_filename;
-    sd_params->lora_map = lora_map;
-    sd_params->lora_dynamic = lora_dynamic;
+
+    kcpp_set_model_paths(lp, klp);
 
     sd_ctx_params_t params = {};
     sd_ctx_params_init(&params);
 
     params.rng_type = CUDA_RNG;
-
-    params.n_threads = sd_params->n_threads;
-    params.wtype = sd_params->wtype;
-    params.conv_direct_mode = conv_direct_mode.c_str();
     params.model_args = "chroma_use_dit_mask=true";
-    params.max_vram = max_vram.c_str();
-    params.eager_load = true; //kcpp should preload everything
-    params.enable_mmap = inputs.use_mmap;
-    params.backend = backend.c_str();
-    params.params_backend = params_backend.c_str();
-    params.split_mode = split_mode.c_str();
-    params.auto_fit = inputs.auto_fit;
-    params.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
+    params.eager_load = true; //klp should preload everything
 
-    kcpp_set_model_paths(params, *sd_params, inputs);
+    params.n_threads = lp.n_threads;
+    params.wtype = lp.wtype;
+    params.conv_direct_mode = lp.conv_direct_mode.c_str();
+    params.max_vram = lp.max_vram.c_str();
+    params.enable_mmap = lp.enable_mmap;
+    params.backend = lp.backend.c_str();
+    params.params_backend = lp.params_backend.c_str();
+    params.split_mode = lp.split_mode.c_str();
+    params.auto_fit = lp.auto_fit;
+    params.lora_apply_mode = lp.lora_apply_mode;
+    params.model_path = lp.model_path.c_str();
+    params.clip_l_path = lp.clip_l_path.c_str();
+    params.clip_g_path = lp.clip_g_path.c_str();
+    params.t5xxl_path = lp.t5xxl_path.c_str();
+    params.diffusion_model_path = lp.diffusion_model_path.c_str();
+    params.vae_path = lp.vae_path.c_str();
+    params.audio_vae_path = lp.audio_vae_path.c_str();
+    params.taesd_path = lp.taesd_path.c_str();
+    params.photo_maker_path = lp.photo_maker_path.c_str();
+    params.tokenizer = lp.tokenizer.c_str();
+    params.clip_vision_path = lp.clip_vision_path.c_str();
+    params.llm_path = lp.llm_path.c_str();
+    params.llm_vision_path = lp.llm_vision_path.c_str();
+    params.embeddings_connectors_path = lp.embeddings_connectors_path.c_str();
+    params.uncond_diffusion_model_path = lp.uncond_diffusion_model_path.c_str();
+    params.tensor_type_rules = lp.tensor_type_rules.c_str();
+    params.flash_attn_mode = lp.flash_attn_mode.c_str();
 
-    if(inputs.debugmode==1)
+    if(sddebugmode==1)
     {
         const char* tokenizer = params.tokenizer;
         if (tokenizer != nullptr && *tokenizer == '{') {
@@ -1764,11 +1807,11 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     }
 
     // preload the LoRAs with the initial multipliers
-    std::vector<sd_lora_t> lora_specs = sd_params->lora_map.get_lora_specs(lora_dynamic&& lora_cache);
+    std::vector<sd_lora_t> lora_specs = klp.lora_map.get_lora_specs(klp.lora_dynamic && klp.lora_cache);
     if(lora_specs.size()>0)
     {
         printf("  applying %zu LoRAs...\n", lora_specs.size());
-        set_lora_cache(sd_ctx, lora_cache);
+        set_lora_cache(sd_ctx, klp.lora_cache);
         apply_loras(sd_ctx, lora_specs);
         set_lora_cache(sd_ctx, false);
     }
@@ -1776,10 +1819,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     input_extraimage_buffers.reserve(max_extra_images);
 
     //load upscaler if provided
-    if (upscaler_filename!="") {
+    if (sd_params->kcpp_load_params.upscaler_filename!="") {
         const int upscale_tile_size = 128;
-        upscaler_ctx = new_upscaler_ctx(upscaler_filename.c_str(),
-                                        conv_direct_mode == "on",
+        upscaler_ctx = new_upscaler_ctx(klp.upscaler_filename.c_str(),
+                                        lp.conv_direct_mode == "on",
                                         params.n_threads,
                                         upscale_tile_size,
                                         params.backend,
@@ -1817,9 +1860,9 @@ static std::string get_scheduler_name(scheduler_t scheduler, bool as_sampler_suf
 }
 
 static std::string get_image_params(const sd_img_gen_params_t & params, const std::string& lora_meta, int seed_offset) {
-    std::string model = sd_params->model_path;
+    std::string model = sd_params->load_params.model_path;
     if (model.empty())
-        model = sd_params->diffusion_model_path;
+        model = sd_params->load_params.diffusion_model_path;
     model = friendly_model_name(model);
     std::stringstream ss;
     ss << std::setprecision(3)
@@ -1840,8 +1883,8 @@ static std::string get_image_params(const sd_img_gen_params_t & params, const st
         ss << "| Flow Shift: " << params.sample_params.flow_shift;
     ss  << " | Clip skip: " << params.clip_skip
         << " | Model: " << model;
-    if (sd_params->vae_path != "")
-        ss << " | VAE: " << friendly_model_name(sd_params->vae_path);
+    if (sd_params->load_params.vae_path != "")
+        ss << " | VAE: " << friendly_model_name(sd_params->load_params.vae_path);
     ss << " | Version: KoboldCpp";
     return ss.str();
 }
@@ -2282,6 +2325,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         return sd_generation.error("Warning: KCPP image generation not initialized!");
     }
 
+    auto& klp = sd_params->kcpp_load_params;
+
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
         geninfo.start_time = std::chrono::steady_clock::now();
@@ -2322,6 +2367,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     // and route the images to the VLM conditioner; images will be removed from
     // the ref_images parameter unless a reference has a '+' tag
     image_tag_refs image_tags;
+    bool has_llm_vision = klp.has_llm_vision;
     bool vision_tags_active = false;
     {
         size_t ref_count = std::min(extra_image_data.size(), (size_t)max_extra_images);
@@ -2330,7 +2376,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             return sd_generation.error(("KCPP SD: " + tag_err).c_str());
         }
         if (image_tags.has_tags) {
-            if (sd_params->has_llm_vision) {
+            if (has_llm_vision) {
                 vision_tags_active = true;
             } else {
                 // the conditioner can't see images: replace the tags with plain
@@ -2745,11 +2791,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.circular_x = inputs.circular_x;
     params.circular_y = inputs.circular_y;
 
-    LoraMap lora_map = sd_params->lora_map;
-    if (sd_params->lora_dynamic) {
+    LoraMap lora_map = klp.lora_map;
+    if (klp.lora_dynamic) {
         for (int i = 0; i < inputs.lora_len; i++) {
             std::string path = inputs.lora_filenames[i];
-            float preloaded_mult = sd_params->lora_map.get_mult(path);
+            float preloaded_mult = klp.lora_map.get_mult(path);
             lora_map.add_lora(path, inputs.lora_multipliers[i]);
         }
     }
@@ -2995,12 +3041,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             jsoninfo["eta"] = round_for_info(params.sample_params.eta);
         if (is_img2img)
             jsoninfo["denoising_strength"] = round_for_info(params.strength);
-        if (sd_params->model_path.empty())
-            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->diffusion_model_path);
+        if (sd_params->load_params.model_path.empty())
+            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.diffusion_model_path);
         else
-            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->model_path);
-        if (sd_params->vae_path != "")
-            jsoninfo["sd_vae_name"] = friendly_model_name(sd_params->vae_path);
+            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.model_path);
+        if (sd_params->load_params.vae_path != "")
+            jsoninfo["sd_vae_name"] = friendly_model_name(sd_params->load_params.vae_path);
         jsoninfo["infotexts"] = nlohmann::json::array();
         jsoninfo["all_prompts"] = nlohmann::json::array();
         jsoninfo["all_negative_prompts"] = nlohmann::json::array();
