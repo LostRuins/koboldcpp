@@ -13,7 +13,7 @@ Current version indicated by LITEVER below.
 <head>
 	<script id="init-config">
 	/* split: src/config/init-config.js */
-	const LITEVER = 357;
+	const LITEVER = 358;
 	const urlParams = new URLSearchParams(window.location.search);
 	var localflag = urlParams.get('local'); //this will be replaced automatically in embedded kcpp
 	const STORAGE_PREFIX = (localflag?"e_":"")+"kaihordewebui_";
@@ -4494,6 +4494,7 @@ Current version indicated by LITEVER below.
 	var kobold_endpoint_version = ""; //used to track problematic versions to avoid sending extra fields
 	var koboldcpp_version = ""; //detect if we are using koboldcpp
 	var koboldcpp_version_obj = {};
+	var koboldcpp_true_maxctx = 0;
 	var koboldcpp_has_vision = false;
 	var koboldcpp_has_audio = false;
 	var koboldcpp_has_multiplayer = false;
@@ -4672,7 +4673,7 @@ Current version indicated by LITEVER below.
 		save_images: true,
 		save_remote_images: false,
 		prompt_for_savename: false,
-		last_known_filename: "saved_story.json",
+		last_known_filename: "",
 		case_sensitive_wi: false,
 		last_selected_preset: 0,
 		gui_type_story: 0, //0=standard, 1=messenger, 2=aesthetic, 3=corpo
@@ -5824,6 +5825,7 @@ Current version indicated by LITEVER below.
 	});
 
 	document.getElementById("lastreq1lp").innerHTML = document.getElementById("lastreq2lp").innerHTML =	document.getElementById("lastreq3lp").innerHTML = "";
+	document.getElementById("lastreq1ctx").innerHTML = document.getElementById("lastreq2ctx").innerHTML = document.getElementById("lastreq3ctx").innerHTML = "";
 
 	let webbeta = is_using_web_lite_beta();
 	let LITEBETATAG = (webbeta?" Beta":"");
@@ -7817,6 +7819,7 @@ Current version indicated by LITEVER below.
 		synchro_pending_stream = "";
 		streaming_was_thinking = false;
 		let logprobs_content_arr = [];
+		let stream_usage = null;
 		let pending_toolcall_objs = [];
 		let pending_toolcall_last_obj = null;
 		let responses_output_items = [];
@@ -8000,7 +8003,8 @@ Current version indicated by LITEVER below.
 								continue;
 							}
 
-							//for oai
+							//OpenAI can send usage in a final chunk with no choices.
+							if(event.data && event.data.usage) stream_usage = event.data.usage;
 							if (event.data && event.data.choices && event.data.choices.length>0) {
 								if(event.data.choices[0].text)
 								{
@@ -8231,13 +8235,10 @@ Current version indicated by LITEVER below.
 						}
 					}
 					synchro_pending_stream = "";
-					if (logprobs_content_arr.length>0 && last_response_obj==null) {
-						//fake a last response obj
-						let fakedresponse = {
-							"artificial_response": true,
-							"results":[{"logprobs":{"content":logprobs_content_arr}}]
-						};
-						last_response_obj = fakedresponse;
+					if (last_response_obj==null && (stream_usage || logprobs_content_arr.length>0)) {
+						last_response_obj = {"artificial_response": true};
+						if(stream_usage) last_response_obj.usage = stream_usage;
+						if(logprobs_content_arr.length>0) last_response_obj.results = [{"logprobs":{"content":logprobs_content_arr}}];
 					}
 					poll_pending_response();
 					//handle gen failures
@@ -8752,6 +8753,7 @@ Current version indicated by LITEVER below.
 			document.getElementById("lastreq3").innerHTML = document.getElementById("lastreq2").innerHTML = document.getElementById("lastreq1").innerHTML =
 			`<a href="#" class="color_footer" onclick="msgbox('Source code is available at https://github.com/LostRuins/lite.koboldai.net \\nPlease report any bugs you find there.','Information')">KoboldAI Lite</a> v${LITEVER} Embedded`;
 			document.getElementById("lastreq1lp").innerHTML = document.getElementById("lastreq2lp").innerHTML =	document.getElementById("lastreq3lp").innerHTML = "";
+			document.getElementById("lastreq1ctx").innerHTML = document.getElementById("lastreq2ctx").innerHTML = document.getElementById("lastreq3ctx").innerHTML = "";
 			read_url_params_data();
 		}
 		else
@@ -11504,13 +11506,14 @@ Current version indicated by LITEVER below.
 	function save_file_button(save_file_obj=null,nameprompt="") //if null, generate new savefile, otherwise use provided
 	{
 		warn_unsaved = false;
+		const defaultname = `saved_session_${new Date().toLocaleDateString('sv-SE')}.json`;
 		const save_file = function()
 		{
 			if(!save_file_obj)
 			{
 				save_file_obj = generate_savefile(localsettings.save_images, localsettings.export_settings, localsettings.export_settings);
 			}
-			let suggestname = localsettings.last_known_filename;
+			let suggestname = localsettings.last_known_filename || defaultname;
 			if(nameprompt!="" && !localsettings.prompt_for_savename)
 			{
 				suggestname = sanitizeAlphanumeric(sanitizeAlphanumeric(nameprompt," ").trim(),"_");
@@ -11520,7 +11523,7 @@ Current version indicated by LITEVER below.
 
 		if(localsettings.prompt_for_savename)
 		{
-			inputBox("Enter a Filename","Save File",localsettings.last_known_filename,"Input Filename", ()=>{
+			inputBox("Enter a Filename","Save File",localsettings.last_known_filename || defaultname,"Input Filename", ()=>{
 				let userinput = getInputBoxValue();
 				if (userinput != null && userinput.trim()!="") {
 					let tmp = userinput.trim();
@@ -16204,6 +16207,10 @@ Current version indicated by LITEVER below.
 		custom_oai_key = "";
 		custom_claude_key = "";
 		custom_cohere_key = "";
+		koboldcpp_version = "";
+		koboldcpp_version_obj = {};
+		koboldcpp_true_maxctx = 0;
+		document.getElementById("lastreq1ctx").innerHTML = document.getElementById("lastreq2ctx").innerHTML = document.getElementById("lastreq3ctx").innerHTML = "";
 
 		let epchoice = document.getElementById("customapidropdown").value;
 		document.getElementById("connectstatusproxied").classList.add("hidden");
@@ -16387,6 +16394,7 @@ Current version indicated by LITEVER below.
 									.then(values4 => {
 										console.log(values4);
 										let ep_maxctx = values4.value;
+										koboldcpp_true_maxctx = (ep_maxctx?ep_maxctx:0);
 										if(ep_maxctx && ep_maxctx>document.getElementById("max_context_length_slide").max)
 										{
 											document.getElementById("max_context_length_slide").max = ep_maxctx;
@@ -24264,8 +24272,6 @@ Current version indicated by LITEVER below.
 					oai_payload = oai_prepare_responses_payload(oai_payload);
 				}
 
-				last_request_str = JSON.stringify(oai_payload);
-				last_request_timestamp = get_current_timestamp();
 				last_response_obj = null;
 				last_response_streamlog = "";
 				let oaiheaders = get_oai_header(custom_oai_key);
@@ -24319,6 +24325,10 @@ Current version indicated by LITEVER below.
 				if(is_browser_supports_sse() && localsettings.tokenstreammode!=0)
 				{
 					oai_payload.stream = true;
+					if(custom_oai_endpoint.toLowerCase()===default_oai_base && !is_oai_responses_selected())
+					{
+						oai_payload.stream_options = Object.assign({include_usage:true}, oai_payload.stream_options);
+					}
 				}
 
 				//if we enable websearch and its gemini, we are FORCED to use the dedicated gemini API endpoints instead, the openai one does not support it.
@@ -24443,6 +24453,8 @@ Current version indicated by LITEVER below.
 					oaiheaders = geminiheaders;
 				}
 
+				last_request_str = JSON.stringify(oai_payload);
+				last_request_timestamp = get_current_timestamp();
 				if(is_browser_supports_sse() && localsettings.tokenstreammode!=0)
 				{
 					oai_api_stream_sse(targetep,oai_payload,oaiheaders);
@@ -26067,7 +26079,9 @@ Current version indicated by LITEVER below.
 		document.getElementById("lastreq2").innerHTML = lastreq;
 		document.getElementById("lastreq3").innerHTML = lastreq;
 		document.getElementById("lastreq1lp").innerHTML = document.getElementById("lastreq2lp").innerHTML =	document.getElementById("lastreq3lp").innerHTML = "";
+		document.getElementById("lastreq1ctx").innerHTML = document.getElementById("lastreq2ctx").innerHTML = document.getElementById("lastreq3ctx").innerHTML = "";
 		update_logprobs_link();
+		update_context_usage();
 	}
 
 	/* split: src/generation/inspect.js */
@@ -26078,6 +26092,62 @@ Current version indicated by LITEVER below.
 		let oai_has_logprobs = (last_response_obj!=null && last_response_obj.choices && last_response_obj.choices.length > 0 && last_response_obj.choices[0].logprobs!=null);
 		let lastresptxt = `${(last_response_obj!=null && (kcpp_has_logprobs || oai_has_logprobs)?lastresp:"")}`;
 		document.getElementById("lastreq1lp").innerHTML = document.getElementById("lastreq2lp").innerHTML =	document.getElementById("lastreq3lp").innerHTML = lastresptxt;
+	}
+	function render_usage(used, tip, maxctx=null)
+	{
+		let label = `Context Tokens: ${used.toLocaleString()}`;
+		let color = "";
+		if(maxctx!==null)
+		{
+			let pct = Math.round(used*100/maxctx);
+			const shortnum = (n) => (n<1000?n:(Math.round(n/102.4)/10)+"k");
+			label = `Context: ${shortnum(used)} / ${shortnum(maxctx)} (${pct}%)`;
+			color = (pct>=90?` class="color_red"`:``);
+		}
+		let ctxtxt = ` &middot; <span${color} title="${tip}">${label}</span>`;
+		document.getElementById("lastreq1ctx").innerHTML = document.getElementById("lastreq2ctx").innerHTML = document.getElementById("lastreq3ctx").innerHTML = ctxtxt;
+	}
+	function update_context_usage()
+	{
+		if(custom_oai_key!="")
+		{
+			let usage = last_response_obj && last_response_obj.usage;
+			if(!usage) return;
+			let input = usage.prompt_tokens != null ? usage.prompt_tokens : usage.input_tokens;
+			let output = usage.completion_tokens != null ? usage.completion_tokens : usage.output_tokens;
+			let total = usage.total_tokens != null ? usage.total_tokens : input + output;
+			if([input, output, total].every(count => Number.isFinite(count) && count>=0))
+			{
+				render_usage(total, `Prompt ${input} + generated ${output} tokens reported for the last request.`);
+			}
+			return;
+		}
+		if(custom_kobold_endpoint=="" || !koboldcpp_version || koboldcpp_version_obj.parallelrequests>1)
+		{
+			return;
+		}
+		fetch(apply_proxy_url(custom_kobold_endpoint + koboldcpp_perf_endpoint),
+		{
+			method: 'GET',
+			headers: get_kobold_header(),
+		})
+		.then(x => x.json())
+		.then(resp => {
+			//on a busy or parallel server the last request may be someone else's, so nothing is shown
+			if(resp && typeof resp.last_input_count === 'number' && typeof resp.last_token_count === 'number' && !(resp.queue>0))
+			{
+				let used = resp.last_input_count + resp.last_token_count;
+				let maxctx = localsettings.max_context_length;
+				if(koboldcpp_true_maxctx>0 && koboldcpp_true_maxctx<maxctx) //the server never uses more than it was started with
+				{
+					maxctx = koboldcpp_true_maxctx;
+				}
+				let tip = `Prompt ${resp.last_input_count} + generated ${resp.last_token_count} tokens (reported by the server for the last request). The oldest text is trimmed once this reaches the context size.`;
+				render_usage(used, tip, maxctx);
+			}
+		}).catch((error) => {
+			console.log("Context usage error: " + error);
+		});
 	}
 
 	/* split: src/media/vision.js */
@@ -33040,7 +33110,7 @@ Current version indicated by LITEVER below.
 				</div>
 			</div>
 		</div>
-		<div class="lastreq color_muted"><span id="lastreq1"></span><span id="lastreq1lp"></span></div>
+		<div class="lastreq color_muted"><span id="lastreq1"></span><span id="lastreq1lp"></span><span id="lastreq1ctx"></span></div>
 		</div>
 		<!-- /split: src/ui/classic/classic.html -->
 
@@ -33080,7 +33150,7 @@ Current version indicated by LITEVER below.
 					</div>
 				</div>
 
-				<div class="lastreq color_footer"><span id="lastreq2"></span><span id="lastreq2lp"></span></div>
+				<div class="lastreq color_footer"><span id="lastreq2"></span><span id="lastreq2lp"></span><span id="lastreq2ctx"></span></div>
 			</div>
 		</div>
 		<!-- /split: src/ui/messenger/messenger.html -->
@@ -33132,7 +33202,7 @@ Current version indicated by LITEVER below.
 							<button title="Submit" onclick="submit_generation_button(true)" id="corpo_chat_send_btn" class="corpo_chat_send_btn mainnav" type="button"></button>
 							<button title="Abort" onclick="abort_generation()" id="corpo_chat_send_btn_abort" class="hidden corpo_chat_send_btn_abort mainnav" type="button"></button>
 						</div>
-						<div class="corpolastreq color_muted"><span id="lastreq3"></span><span id="lastreq3lp"></span></div>
+						<div class="corpolastreq color_muted"><span id="lastreq3"></span><span id="lastreq3lp"></span><span id="lastreq3ctx"></span></div>
 					</div>
 				</div>
 			</div>
