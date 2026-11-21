@@ -258,7 +258,7 @@ thinkformats = [{"start":"<|channel|>analysis<|message|>","end":"<|start|>assist
                 {"start":"<|START_THINKING|>","end":"<|END_THINKING|>"},
                 {"start":"<|channel>thought","end":"<channel|>"},
                 {"start":"[THINK]","end":"[/THINK]"},
-                {"start":"<|content_thinking|>","end":"<|content_text|>"}]
+                {"start":"<|content_thinking|>","end":"<|end_message|>","shared_end":True}]
 tool_call_pairs = [ #third element is optional str to match in chat template before we use this pair, fourth element is whether its stream-handleable
     ("<tool_call>", "</tool_call>", None, True), #qwen, glm
     ("<seed:tool_call>", "</seed:tool_call>", None, True), #seed oss
@@ -282,6 +282,10 @@ address_header_formats = [
         "tail_message_pattern": r'(?:^|<\|start\|>assistant)\s*to=[^\s<]*',
         "tail_message_tag": "<|message|>",
     },
+    {
+        "required": ["<|message_model|>"],
+        "markers": ["<|message_model|>", "<|content_text|>", "<|end_message|>"],
+    },
 ]
 
 def active_address_header_formats():
@@ -293,7 +297,10 @@ def strip_address_headers(text):
     if not text:
         return text
     for fmt in active_address_header_formats():
-        text = re.sub(fmt["pattern"], '', text)
+        if fmt.get("pattern"):
+            text = re.sub(fmt["pattern"], '', text)
+        for marker in fmt.get("markers", []):
+            text = text.replace(marker, '')
     return text
 
 def split_address_header_tail(text, stream_done=False):
@@ -301,6 +308,12 @@ def split_address_header_tail(text, stream_done=False):
         return text, ""
     tail = ""
     for fmt in active_address_header_formats():
+        for marker in fmt.get("markers", []):
+            for n in range(1, len(marker)):
+                if text.endswith(marker[:n]) and n > len(tail):
+                    tail = marker[:n]
+        if not fmt.get("tail_start_pattern"):
+            continue
         start_match = re.search(fmt["tail_start_pattern"], text)
         msg_tail = fmt["tail_message_tag"]
         for n in range(1, len(msg_tail)):
@@ -6613,7 +6626,8 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                         reasoningtxt = recvtxt[start_idx + len(starter):end_idx]
                         recvtxt = recvtxt[:start_idx] + recvtxt[end_idx + len(ender):]
                         break
-                    elif starter not in recvtxt and ender in recvtxt:
+                    # A shared message terminator alone does not imply reasoning.
+                    elif starter not in recvtxt and ender in recvtxt and (not pair.get('shared_end', False) or genparams.get('already_started_thinking', False)):
                         parts = recvtxt.split(ender, 1)
                         reasoningtxt = parts[0]
                         recvtxt = parts[1]
@@ -7096,7 +7110,7 @@ class KcppServerRequestHandler(http.server.SimpleHTTPRequestHandler):
                                             out1, out2 = tokenStr.split(pair["start"], 1)
                                             # Preserve text that came BEFORE the start tag
                                             if out1:
-                                                delta['content'] = out1
+                                                delta['content'] = strip_address_headers(out1)
                                             if out2:
                                                 delta['reasoning_content'] = out2
                                             # Edge Case: The end tag is ALSO in this exact same chunk (in out2)

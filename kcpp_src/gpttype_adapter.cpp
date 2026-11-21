@@ -2389,7 +2389,7 @@ static ReasoningBudgetTokenSequences get_reasoning_budget_token_sequences()
         case llm_arch::LLM_ARCH_INKLING2:
         case llm_arch::LLM_ARCH_INKLING2_LOOP:
             start = "<|content_thinking|>";
-            end = "<|content_text|>";
+            end = "<|end_message|>";
             budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<|end_message|><|message_model|><|content_text|>";
             break;
         case llm_arch::LLM_ARCH_MUSE_GLIMMER:

@@ -3567,6 +3567,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 || t.first == "<|eom|>" // muse-glimmer mid-turn delimiter
                 || t.first == "<think>" || t.first == "</think>"
                 || t.first == "<|content_thinking|>" || t.first == "<|content_text|>"
+                || t.first == "<|message_model|>" || t.first == "<|end_message|>" || t.first == "<|content_invoke_tool_json|>" // inkling block boundaries
                 || t.first == "<function" || t.first == "<param" || t.first == "</param>" || t.first == "</function>" //minicpm5
                 // || t.first == "<|tool_calls_section_begin|>" || t.first == "<|tool_calls_section_end|>" // kimi-k2
                 || t.first == "<|tool_call_begin|>" || t.first == "<|tool_call_argument_begin|>" // kimi-k2
