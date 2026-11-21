@@ -907,7 +907,7 @@ struct kcpp_path_class
     bool is_safetensors     = false;
     bool is_json            = false;
     bool is_mmproj          = false;
-    bool is_mmproj_filename = false;  // name heuristic: "mmproj" in the path (fallback only)
+    bool is_mmproj_filename = false;  // name heuristic: "mmproj" in the filename (fallback only)
     bool is_connector       = false;  // connector file; currently only MiniMax P-H3 text connector
     bool is_text_encoder    = false;
     kcpp_st_class st;                 // safetensors only
@@ -1072,7 +1072,7 @@ static kcpp_path_class kcpp_classify_path(const std::string& path)
     // the name heuristic is tracked separately: should only apply if
     // metadata couldn't identify it
     if (!identified) {
-        const auto basename = path.substr(path.find_last_of("/\\") + 1);
+        const auto basename = std::filesystem::u8path(path).filename().u8string();
         c.is_mmproj_filename = toLowerCase(basename).find("mmproj") != std::string::npos;
     }
 
