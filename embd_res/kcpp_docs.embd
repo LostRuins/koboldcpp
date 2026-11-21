@@ -3305,6 +3305,10 @@
                                         "type": "string",
                                         "description": "If filename is a gguf, this allows other kcpps settings to be overlaid on top of that gguf."
                                      },
+                                     "keepstates": {
+                                        "type": "boolean",
+                                        "description": "Optional. Keep the KV cache save states (SmartCache slots) across this reload: true for all of them, or a number N for only the N most recently used. They are written to the admin directory before the reload and read back once the same text model is loaded again (for example unload_model, then initial_model). Ignored for a different model."
+                                     },
                                   },
                                   "type": "object"
                                }
@@ -3424,6 +3428,10 @@
                                         "type": "number",
                                         "description": "Which slot index to save/load the state to/from."
                                      },
+                                     "file": {
+                                        "type": "string",
+                                        "description": "Optional. Also write the state to <name>.kvstate in the admin directory, so it outlives a model reload. A plain name only; paths are reduced to their base name."
+                                     },
                                   },
                                   "type": "object"
                                }
@@ -3482,6 +3490,10 @@
                                      "slot": {
                                         "type": "number",
                                         "description": "Which slot index to save/load the state to/from."
+                                     },
+                                     "file": {
+                                        "type": "string",
+                                        "description": "Optional. Read the state from <name>.kvstate in the admin directory into the slot first. Refused if it was saved from another model or context size."
                                      },
                                   },
                                   "type": "object"
