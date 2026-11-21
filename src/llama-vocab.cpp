@@ -3566,6 +3566,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 || t.first == "[THINK]" || t.first == "[/THINK]"
                 || t.first == "<|eom|>" // muse-glimmer mid-turn delimiter
                 || t.first == "<think>" || t.first == "</think>"
+                || t.first == "<tool_call>" || t.first == "</tool_call>"
                 || t.first == "<|content_thinking|>" || t.first == "<|content_text|>"
                 || t.first == "<|message_model|>" || t.first == "<|end_message|>" || t.first == "<|content_invoke_tool_json|>" // inkling block boundaries
                 || t.first == "<function" || t.first == "<param" || t.first == "</param>" || t.first == "</function>" //minicpm5
