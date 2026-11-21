@@ -305,8 +305,34 @@ struct SDLoadParams {
     lora_apply_mode_t lora_apply_mode = LORA_APPLY_AT_RUNTIME;
 };
 
+struct model_info: public sd_model_info {
+    /* from base class:
+        int version;
+        int vae_scale_factor;
+        int spatial_multiple;
+    */
+
+    bool is_flux1;
+    bool is_flux2;
+    bool is_kontext;
+    bool is_qwenimg;
+    bool is_sd1;
+    bool is_sd2;
+    bool is_sdxs;
+    bool is_sdxl;
+    bool is_wan;
+    bool is_zimage;
+    bool is_ltx;
+    bool is_minimaxh3;
+    bool is_boogu;
+    bool supports_ref_image;
+    bool is_video_model;
+};
+
 struct KcppLoadParams {
     // tracks loading state that does not have a direct sd_ctx_params_t mapping
+
+    model_info info {};
 
     // LoRA
     LoraMap lora_map;
@@ -637,31 +663,6 @@ static void progress_callback(int step, int steps, float time, void* data)
     printf("\r%s: %d/%d steps, %.2f %s\033[K%s", phase, step, steps, speed, unit, (step == steps || sddebugmode==1) ? "\n" : "");
     fflush(stdout);
 }
-
-struct model_info: public sd_model_info {
-    /* from base class:
-        int version;
-        int vae_scale_factor;
-        int spatial_multiple;
-    */
-
-    bool is_flux1;
-    bool is_flux2;
-    bool is_kontext;
-    bool is_qwenimg;
-    bool is_sd1;
-    bool is_sd2;
-    bool is_sdxs;
-    bool is_sdxl;
-    bool is_wan;
-    bool is_zimage;
-    bool is_ltx;
-    bool is_minimaxh3;
-    bool is_boogu;
-    bool supports_ref_image;
-    bool is_video_model;
-};
-
 
 static model_info get_model_info(sd_ctx_t* ctx)
 {
@@ -1858,7 +1859,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         return false;
     }
 
-    auto info = get_model_info(sd_ctx);
+    const auto& info = klp.info = get_model_info(sd_ctx);
 
     if (info.is_video_model)
     {
@@ -2445,7 +2446,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         ref_audio_data.push_back(std::string(inputs.ref_audios[i]));
     }
 
-    const auto info = get_model_info(sd_ctx);
+    const auto& info = klp.info;
     const bool supports_reference_images = (info.is_video_model || info.supports_ref_image || info.is_kontext || klp.photomaker_enabled);
     const bool remove_limits = inputs.remove_limits;
 
