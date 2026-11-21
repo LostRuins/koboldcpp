@@ -321,6 +321,7 @@ struct KcppLoadParams {
     int img_hard_limit = 0;
     int img_soft_limit = 0;
     bool has_llm_vision = false;
+    bool photomaker_enabled = false;
 };
 
 // local intermediate representation of a generation request: decoded from
@@ -401,7 +402,6 @@ static int cfg_tiled_vae_threshold = 0;
 static int cfg_square_limit = 0;
 static int cfg_side_limit = 0;
 static bool sd_is_quiet = false;
-static bool photomaker_enabled = false;
 
 static bool is_vid_model = false;
 static bool remove_limits = false;
@@ -1508,9 +1508,10 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
             printf("With TAE SD VAE: %s\n", kcpp_taesd_path.c_str());
         }
     }
-    if (!lp.photo_maker_path.empty() > 0 && tempver != VERSION_SDXL) {
+    if (!lp.photo_maker_path.empty() && tempver != VERSION_SDXL) {
         printf("\nWARNING: PhotoMaker is only compatible with SDXL models. PhotoMaker will be disabled!\n");
         lp.photo_maker_path = "";
+        klp.photomaker_enabled = false;
     }
 
     //for models with TAE suppport, if vae is set, tae is off, and it looks like a tae, swap to tae
@@ -1751,7 +1752,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(lp.photo_maker_path!="")
     {
         printf("With PhotoMaker Model: %s\n",lp.photo_maker_path.c_str());
-        photomaker_enabled = true;
+        klp.photomaker_enabled = true;
     }
     if(klp.upscaler_filename!="")
     {
@@ -2338,12 +2339,6 @@ static sd_audio_t load_audio_from_b64(const std::string& b64audio) {
     return audio;
 }
 
-static bool supports_reference_images(model_info info)
-{
-    bool supported = (info.is_video_model || info.supports_ref_image || info.is_kontext || photomaker_enabled);
-    return supported;
-}
-
 static std::string upscale_image_to_png_base64(upscaler_ctx_t* upscaler_ctx, const sd_image_t& input_image, int upscale_factor = 2, const std::string& meta_image_info = "")
 {
     std::string gen_data;
@@ -2498,7 +2493,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         gp.sample_method = sd_get_default_sample_method(sd_ctx);
     }
 
-    auto info = get_model_info(sd_ctx);
+    const auto info = get_model_info(sd_ctx);
+    const bool supports_reference_images = (info.is_video_model || info.supports_ref_image || info.is_kontext || klp.photomaker_enabled);
+
     bool is_img2img = img2img_data != "";
 
     if (!remove_limits && info.is_flux1)
@@ -2550,7 +2547,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             // a single extra image is provided, and mask is NOT provided
             && extra_image_data.size()==1 && img2img_mask==""
             // the model does not support references natively, or through an edit mode/LoRa
-            && !supports_reference_images(info) && !gp.force_image_edit
+            && !supports_reference_images && !gp.force_image_edit
             // the model can't handle image tags, or the user didn't ask for them
             && !vision_tags_active);
 
@@ -2692,7 +2689,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             const bool duplicates_video_frame = info.is_video_model && info.is_minimaxh3
                 && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data);
             sd_image_t image = {0,0,0,nullptr};
-            if(supports_reference_images(info)||gp.force_image_edit||vision_tags_active)
+            if(supports_reference_images||gp.force_image_edit||vision_tags_active)
             {
                 int nx2, ny2, nc2;
                 int desiredchannels = 3;
@@ -2735,7 +2732,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         }
                     }
                 }
-                else if (info.is_kontext || photomaker_enabled || vision_tags_active)
+                else if (info.is_kontext || klp.photomaker_enabled || vision_tags_active)
                 {
                     uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2);
                     if(loaded)
@@ -2758,7 +2755,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                     continue; // used only as VLM context, kept out of the ref list
                 }
             }
-            if (duplicates_video_frame || !(supports_reference_images(info)||gp.force_image_edit)) {
+            if (duplicates_video_frame || !(supports_reference_images||gp.force_image_edit)) {
                 continue; // Keep frame deduplication in the diffusion reference list.
             }
             if (info.is_video_model) {
@@ -2771,7 +2768,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             else if (info.is_kontext) {
                 reference_imgs.push_back(image);
             }
-            else if (photomaker_enabled) {
+            else if (klp.photomaker_enabled) {
                 photomaker_imgs.push_back(image);
             }
             else {
@@ -2780,7 +2777,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
 
         //ensure prompt has img keyword, otherwise append it
-        if(photomaker_enabled)
+        if(klp.photomaker_enabled)
         {
             if (gp.prompt.find("img") == std::string::npos) {
                 gp.prompt += " img";
