@@ -104,6 +104,7 @@ void gpttype_batch_generate_release(int request_id);
 int gpttype_get_stream_count();
 const char * gpttype_new_token(int idx);
 const std::string & gpttype_get_pending_output();
+std::string gpttype_get_lookahead_standins();
 std::vector<int> gpttype_get_token_arr(const std::string & input, bool addbos);
 std::string gpttype_detokenize(const std::vector<int> & input, bool render_special);
 const std::vector<TopPicksData> gpttype_get_top_picks_data();
