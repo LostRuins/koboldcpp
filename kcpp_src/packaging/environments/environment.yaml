@@ -7,6 +7,7 @@ dependencies:
   - python=3.8
   - cuda-nvcc
   - cuda-libraries-dev
+  - cuda-nvml-dev
   - cxx-compiler
   - gxx=10
   - pip
