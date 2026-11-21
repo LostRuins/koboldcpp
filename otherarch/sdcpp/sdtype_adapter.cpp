@@ -1545,10 +1545,10 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
                     tokenizer_gguf,
                     kcpp_tokenizer_resources.extracted_umt5_json,
                     tokenizer_error)) {
-                printf("\nKCPP: using UMT5 tokenizer metadata from %s\n", tokenizer_gguf);
+                printf("\nKCPP: using UMT5 tokenizer metadata from %s\n", tokenizer_gguf.c_str());
             } else {
                 printf("\nKCPP: could not use UMT5 tokenizer metadata from %s: %s\n",
-                       tokenizer_gguf,
+                       tokenizer_gguf.c_str(),
                        tokenizer_error.c_str());
             }
         }
@@ -1563,10 +1563,10 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
                     kcpp_tokenizer_resources.extracted_gemma_vocab,
                     kcpp_tokenizer_resources.extracted_gemma_merges,
                     tokenizer_error)) {
-                printf("\nKCPP: using Gemma tokenizer metadata from %s\n", tokenizer_gguf);
+                printf("\nKCPP: using Gemma tokenizer metadata from %s\n", tokenizer_gguf.c_str());
             } else {
                 printf("\nKCPP: could not use Gemma tokenizer metadata from %s: %s\n",
-                       tokenizer_gguf,
+                       tokenizer_gguf.c_str(),
                        tokenizer_error.c_str());
             }
         }
@@ -1602,10 +1602,10 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
                                                                   kcpp_tokenizer_path,
                                                                   tokenizer_error,
                                                                   profile)) {
-                    printf("\nKCPP: using tokenizer metadata from %s\n", tokenizer_gguf);
+                    printf("\nKCPP: using tokenizer metadata from %s\n", tokenizer_gguf.c_str());
                 } else {
                     printf("\nKCPP: could not use tokenizer metadata from %s: %s\n",
-                           tokenizer_gguf,
+                           tokenizer_gguf.c_str(),
                            tokenizer_error.c_str());
                 }
             }
