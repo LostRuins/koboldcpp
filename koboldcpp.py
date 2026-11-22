@@ -4492,16 +4492,16 @@ def toolcall_to_normalized_json(text,start_tag,end_tag,required_match_txt): #con
                 continue
             params[key] = value.strip()
         return json.dumps({"name": fn_name, "arguments": params})
-    def parse_glm(text: str) -> str:
+    def parse_tagged_arguments(text: str, prefix="arg") -> str:
         text = text.strip()
-        # Extract function name: it's the first thing before any <arg_key>
+        # The function name precedes the tagged key/value pairs.
         fn_match = re.match(r"^\s*([^\<\s]+)", text)
         if not fn_match:
             return text
         fn_name = fn_match.group(1).strip()
         # Extract all key/value pairs
-        keys = re.findall(r"<arg_key>(.*?)</arg_key>", text)
-        values = re.findall(r"<arg_value>(.*?)</arg_value>", text)
+        keys = re.findall(fr"<{prefix}_key>(.*?)</{prefix}_key>", text, re.DOTALL)
+        values = re.findall(fr"<{prefix}_value>(.*?)</{prefix}_value>", text, re.DOTALL)
         params = {}
         for i in range(min(len(keys), len(values))):
             params[keys[i].strip()] = values[i].strip()
@@ -4657,8 +4657,9 @@ def toolcall_to_normalized_json(text,start_tag,end_tag,required_match_txt): #con
     if check_ok and len(check_ok)>0:
         return text #is valid JSON or parsable
 
-    if "<arg_key>" in text and "<arg_value>" in text: # handle glm with args
-        return parse_glm(text)
+    for prefix in ("arg", "param"): # GLM and Xing tagged arguments
+        if f"<{prefix}_key>" in text and f"<{prefix}_value>" in text:
+            return parse_tagged_arguments(text, prefix)
 
     if "<function=" in text: # handle qwen3.5
         return parse_qwen35(text)
@@ -4673,7 +4674,7 @@ def toolcall_to_normalized_json(text,start_tag,end_tag,required_match_txt): #con
         return parse_deepseek_r1_sep(text)
 
     if ' ' not in text and '\n' not in text: # handle glm without args
-        return parse_glm(text)
+        return parse_tagged_arguments(text)
 
     if 'functions.' in text and "commentary" in start_tag:  # handle GPT-OSS
         return parse_gpt_oss(text)
