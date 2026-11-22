@@ -450,7 +450,8 @@ class load_model_inputs(ctypes.Structure):
                 ("rpc_targets", ctypes.c_char_p),
                 ("lazy_mode", ctypes.c_int),
                 ("moe_cache_mib", ctypes.c_int),
-                ("parallel_total_context", ctypes.c_int)]
+                ("parallel_total_context", ctypes.c_int),
+                ("no_op_offload", ctypes.c_bool)]
 
 class generation_inputs(ctypes.Structure):
     _fields_ = [("seed", ctypes.c_int),
@@ -2309,6 +2310,7 @@ def load_model(model_filename):
     inputs.max_context_length = maxctx #initial value to use for ctx, can be overwritten
     inputs.threads = args.threads
     inputs.low_vram = True if args.lowvram else False
+    inputs.no_op_offload = args.no_op_offload
     inputs.use_mmq = False if args.nommq else True
     inputs.splitmode = splitmode_choices_to_int(args.splitmode) #layer=1, row=2, tensor=3
     inputs.blasthreads = args.blasthreads
@@ -10230,6 +10232,7 @@ def show_gui():
     nocertifymode = ctk.IntVar(value=0)
 
     lowvram_var = ctk.IntVar()
+    no_op_offload_var = ctk.IntVar()
     mmq_var = ctk.IntVar(value=1)
     quantkv_var = ctk.IntVar(value=0)
     blas_threads_var = ctk.StringVar()
@@ -11019,6 +11022,7 @@ def show_gui():
         "Direct I/O": [usedirectio, "Use direct I/O when loading GGUF models. May improve cold-load times on some storage."],
         "Keep Foreground": [keepforeground, "Bring KoboldCpp to the foreground every time there is a new generation."],
         "CLI Terminal Only": [terminalonly, "Does not launch KoboldCpp HTTP server. Instead, enables KoboldCpp from the command line, accepting interactive console input and displaying responses to the terminal."],
+        "No Op offload": [no_op_offload_var, "Disable offloading host tensor operations to the GPU for GGUF models.\nModel layer and KV cache offloading are controlled separately."],
     }
 
     for idx, (name, properties) in enumerate(hardware_boxes.items()):
@@ -11609,6 +11613,7 @@ def show_gui():
         qkvopt = quantkv_text[quantkv_var.get()].lower() if (quantkv_var.get()>=0 and quantkv_var.get() < len(quantkv_text)) else "f16"
         args.quantkv = qkvopt
         args.lowvram = lowvram_var.get()==1
+        args.no_op_offload = no_op_offload_var.get()==1
         args.nommq = mmq_var.get()==0
         args.splitmode = splitmode_var.get() if splitmode_var.get() in splitmode_choices else splitmode_choices[0]
 
@@ -11870,6 +11875,7 @@ def show_gui():
         nocertifymode.set(1 if "nocertify" in mydict and mydict["nocertify"] else 0)
         nomodel.set(1 if "nomodel" in mydict and mydict["nomodel"] else 0)
         lowvram_var.set(1 if "lowvram" in mydict and mydict["lowvram"] else 0)
+        no_op_offload_var.set(1 if mydict.get("no_op_offload", False) else 0)
         if "quantkv" in mydict:
             qkvstr = str(mydict["quantkv"]).lower()
             qkvval = 0
@@ -15906,6 +15912,7 @@ if __name__ == '__main__':
     advparser.add_argument("--lora", help="GGUF models only, applies a lora file on top of model.", metavar=('[lora_filename]'), nargs='+')
     advparser.add_argument("--loramult", metavar=('[amount]'), help="Multiplier for the Text LORA model to be applied.", type=float, default=1.0)
     advparser.add_argument("--lowvram","-nkvo","--no-kv-offload", help="If supported by the backend, do not offload KV to GPU (lowvram mode). Not recommended, will be slow.", action='store_true')
+    advparser.add_argument("--noopoffload", "--no-op-offload", "-noo", dest="no_op_offload", help="GGUF models only. Disable offloading host tensor operations to the GPU. Model layer and KV cache offloading are controlled separately.", action='store_true')
     advparser.add_argument("--maingpu","--main-gpu","-mg", help="Only used in a multi-gpu setup. Sets the index of the main GPU that will be used.",metavar=('[Device ID]'), type=int, default=-1)
     advparser.add_argument("--maxrequestsize", metavar=('[size in MB]'), help="Specify a max request payload size. Any requests to the server larger than this size will be dropped. Do not change if unsure.", type=int, default=32)
     advparser.add_argument("--mcpfile", metavar=('[mcp json file]'), help="Specify path to mcp.json which contains the Cladue Desktop compatible MCP server config.", default="")
