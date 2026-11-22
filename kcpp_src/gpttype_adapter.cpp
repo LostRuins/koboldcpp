@@ -936,13 +936,18 @@ static int lookahead_word_start(int from)
 {
     const int ctxsz = (int)current_context_tokens.size();
     const int dsz = (int)delayed_generated_tokens.size();
-    const int lowest = std::max(lookahead_st.gen_start, ctxsz - dsz); //never past the prompt or the text already sent
+    const int lowest = std::max(lookahead_st.gen_start, ctxsz - dsz);
     auto tok = [&](int i) -> const std::string & { return delayed_generated_tokens[dsz - (ctxsz - i)]; };
     for(int i = std::min(from, ctxsz - 1); i > lowest; --i)
     {
         const std::string & s = tok(i);
         bool has_word = false;
-        for(unsigned char c : s) { if(std::isalnum(c) || c >= 128) { has_word = true; break; } }
+        for(unsigned char c : s) {
+            if(std::isalnum(c) || c >= 128) {
+                has_word = true;
+                break;
+            }
+        }
         if(!has_word) { continue; }
         const std::string & prev = tok(i - 1);
         if(std::isspace((unsigned char)s[0]) || (!prev.empty() && std::isspace((unsigned char)prev.back())))
@@ -8924,8 +8929,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
 
                     delayed_generated_tokens.push_back(tokenizedstr);
-                    const int la_pending = (lookahead_st.active ? lookahead_on_token(lookahead_tok_prob) : 0); //held railroad
-                    while(delayed_generated_tokens.size() > (size_t)(delayed_generated_tokens_limit + la_pending) && delayed_generated_tokens.size() > 0)
+                    const int la_pending = (lookahead_st.active ? lookahead_on_token(lookahead_tok_prob) : 0); // check for railroad
+                    while(delayed_generated_tokens.size() > (delayed_generated_tokens_limit + la_pending) && delayed_generated_tokens.size() > 0)
                     {
                         concat_output_mtx.lock();
                         generated_tokens.push_back(delayed_generated_tokens[0]);
