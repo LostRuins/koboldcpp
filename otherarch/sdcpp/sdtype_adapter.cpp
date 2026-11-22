@@ -3048,7 +3048,24 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         vid_result = nullptr;
         generated_audio = nullptr;
         int output_fps = gp.vid.fps;
-        if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
+        if (is_passthrough) {
+            // passthrough: skip generation and return the start frame (the img2img
+            // input, swapped in above) as-is. input_image feeds the passthrough block
+            // below; generated_num_results stays 0 so the result loop is skipped.
+            if (video_start_image.data) {
+                input_image = video_start_image;
+            } else if (gp.img.init_image != "") {
+                // a mask prevented the init->start-frame swap; load the input directly
+                image_buffer.input = load_image_from_b64(gp.img.init_image, nx, ny, img2imgW, img2imgH, 3);
+                input_image.width = img2imgW;
+                input_image.height = img2imgH;
+                input_image.channel = 3;
+                input_image.data = image_buffer.input;
+            }
+            if (!input_image.data) {
+                return sd_generation.error("KCPP SD: load image from memory failed!");
+            }
+        } else if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
             vid_result = nullptr;
         }
         if (vid_result) {
