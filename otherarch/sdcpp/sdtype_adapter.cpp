@@ -3098,6 +3098,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             int nx2, ny2, nc2;
             image_buffer.mask = load_image_from_b64(gp.img.mask,nx2,ny2,img2imgW,img2imgH,1);
 
+            if (!image_buffer.mask) {
+                return sd_generation.error("KCPP SD: load mask from memory failed!");
+            }
+
             if(gp.img.flip_mask)
             {
                 int bufsiz = nx2 * ny2 * 1; //1 channel
@@ -3113,8 +3117,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         input_image.data = image_buffer.input;
 
         uint8_t* mask_image_buffer    = NULL;
-        std::vector<uint8_t> default_mask_image_vec(img2imgW * img2imgH * img2imgC, 255);
-        if (gp.img.mask != "") {
+        std::vector<uint8_t> default_mask_image_vec(img2imgW * img2imgH, 255);
+        if (image_buffer.mask) {
             mask_image_buffer = image_buffer.mask;
         } else {
             mask_image_buffer = default_mask_image_vec.data();
