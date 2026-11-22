@@ -12849,6 +12849,12 @@ def run_beavernet_worker(args, api_key, worker_slots=None):
                 registered_model[0] = registration
 
     print(f"\n===\nEmbedded BeaverNet Worker Starting with {max_inflight} parallel request(s)...\n")
+    # Best-effort provider resume on boot; do not block startup or repeat on reconnect.
+    threading.Thread(
+        target=_beavernet_api_request,
+        args=(api_key, "PATCH", "/provider", {"status": "active"}),
+        daemon=True,
+    ).start()
     while exitcounter < 100:
         websocket = None
         max_body_size = local_size_limit
