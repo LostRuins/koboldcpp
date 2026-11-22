@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <iomanip>
@@ -419,15 +420,35 @@ struct SDGenParams {
 struct SDParams {
     SDLoadParams load_params;
     KcppLoadParams kcpp_load_params;
+
+    // owned sd_* resources of the loaded model, released here
+    sd_ctx_t* sd_ctx = nullptr;
+    upscaler_ctx_t* upscaler_ctx = nullptr;
+
+    ~SDParams() {
+        // only runs on model reload: the sd_params global is a raw pointer,
+        // so the model is intentionally leaked at process exit
+        if (sd_ctx != nullptr) {
+            free_sd_ctx(sd_ctx);
+            sd_ctx = nullptr;
+        }
+        if (upscaler_ctx != nullptr) {
+            free_upscaler_ctx(upscaler_ctx);
+            upscaler_ctx = nullptr;
+        }
+    }
 };
 
 //shared
 int total_img_gens = 0;
 
 //global static vars for SD
-static SDParams * sd_params = nullptr;
-static sd_ctx_t * sd_ctx = nullptr;
-static upscaler_ctx_t* upscaler_ctx = nullptr;
+static std::mutex g_sd_params_mux;
+// raw pointer on purpose: a static unique_ptr would destroy the model during
+// process exit, when free_sd_ctx()/free_upscaler_ctx() may touch global state
+// that is already gone (crashes, particularly on Windows). Leaking the model
+// at exit is harmless.
+static SDParams* sd_params = nullptr;
 static int sddebugmode = 0;
 static uint8_t * input_image_buffer = NULL;
 static uint8_t * input_mask_buffer = NULL;
@@ -454,7 +475,14 @@ struct {
     gendata_st gendata;
 } geninfo;
 
-static struct {
+// this mutex, and thread_local return buffer declarations, are intended as
+// safety nets: although the generation can concur with preview and cancellation
+// functions, generations can't be called concurrently (sd_ctx_t does not
+// support it)
+static std::mutex g_sd_op_mutex;
+using TryLocker = std::unique_lock<std::mutex>;
+
+static thread_local struct {
     std::string data;
     std::string data_extra;
     std::string final_frame;
@@ -1655,6 +1683,13 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
 
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        // shouldn't happen
+        printf("\nError: ImageGen Init - another operation is in progress\n");
+        return false;
+    }
+
     // globals
     sddebugmode = inputs.debugmode;
     set_sd_log_level(sddebugmode);
@@ -1662,10 +1697,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     set_sd_quiet(sd_is_quiet);
     executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
 
-    // TODO: do we really need a struct allocated with new?
-    sd_params = new SDParams();
-    SDLoadParams& lp = sd_params->load_params;
-    KcppLoadParams& klp = sd_params->kcpp_load_params;
+    auto new_params = std::make_unique<SDParams>();
+    SDLoadParams& lp = new_params->load_params;
+    KcppLoadParams& klp = new_params->kcpp_load_params;
 
     lp.model_path = SAFE_STR(inputs.model_filename);
     lp.vae_path = SAFE_STR(inputs.vae_filename);
@@ -1867,14 +1901,27 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         }
     }
 
-    sd_ctx = new_sd_ctx(&params);
+    {
+        // release the previous model (if any) to free resources, before building
+        // the new one; we can't risk a failure to load the new one due to low VRAM
+        std::unique_ptr<SDParams> old_params;
+        {
+            std::lock_guard<std::mutex> lock(g_sd_params_mux);
+            // take ownership so the old model is destroyed when the
+            // temporary goes out of scope
+            old_params.reset(sd_params);
+            sd_params = nullptr;
+        }
+    }
 
-    if (sd_ctx == NULL) {
+    new_params->sd_ctx = new_sd_ctx(&params);
+
+    if (new_params->sd_ctx == NULL) {
         printf("\nError: Image generation failed to setup!\nMake sure you have ALL files required (e.g. VAE, T5, Clip...) or baked into the model!\n");
         return false;
     }
 
-    const auto& info = klp.info = get_model_info(sd_ctx);
+    const auto& info = klp.info = get_model_info(new_params->sd_ctx);
 
     if (info.is_video_model)
     {
@@ -1886,24 +1933,24 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(lora_specs.size()>0)
     {
         printf("  applying %zu LoRAs...\n", lora_specs.size());
-        set_lora_cache(sd_ctx, klp.lora_cache);
-        apply_loras(sd_ctx, lora_specs);
-        set_lora_cache(sd_ctx, false);
+        set_lora_cache(new_params->sd_ctx, klp.lora_cache);
+        apply_loras(new_params->sd_ctx, lora_specs);
+        set_lora_cache(new_params->sd_ctx, false);
     }
 
     input_extraimage_buffers.reserve(max_extra_images);
 
     //load upscaler if provided
-    if (sd_params->kcpp_load_params.upscaler_filename!="") {
+    if (klp.upscaler_filename!="") {
         const int upscale_tile_size = 128;
-        upscaler_ctx = new_upscaler_ctx(klp.upscaler_filename.c_str(),
+        new_params->upscaler_ctx = new_upscaler_ctx(klp.upscaler_filename.c_str(),
                                         lp.conv_direct_mode == "on",
                                         params.n_threads,
                                         upscale_tile_size,
                                         params.backend,
                                         params.params_backend);
 
-        if (upscaler_ctx == nullptr) {
+        if (new_params->upscaler_ctx == nullptr) {
              printf("\nError: KCPP failed to load upscaler!\n");
         } else {
             printf("\nUpscaler has been loaded.\n");
@@ -1913,7 +1960,13 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     set_preview_images(0);
 
     sd_set_progress_callback(progress_callback, nullptr);
-    sd_set_generation_progress_callback(sd_ctx, generation_progress_callback, nullptr);
+    sd_set_generation_progress_callback(new_params->sd_ctx, generation_progress_callback, nullptr);
+
+    {
+        std::lock_guard<std::mutex> lock(g_sd_params_mux);
+        // publish the new model (the previous one, if any, was released above)
+        sd_params = new_params.release();
+    }
 
     return true;
 }
@@ -2372,11 +2425,20 @@ void sdtype_abort_generation() {
         geninfo.preview_requested = false;
         geninfo.preview_enabled = false;
     }
-    sd_cancel_generation(sd_ctx, SD_CANCEL_ALL);
+    {
+        std::lock_guard<std::mutex> lock(g_sd_params_mux);
+        // safe to call while holding the mutex: it's a signal-safe flag store
+        sd_cancel_generation(sd_params ? sd_params->sd_ctx : nullptr, SD_CANCEL_ALL);
+    }
 }
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        return sd_generation.error("Error: Generate: another operation is in progress");
+    }
+
     struct CleanupInfoOnExit {
         ~CleanupInfoOnExit() {
             {
@@ -2391,7 +2453,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     } cleanup_info_on_exit;
 
-    if(sd_ctx == nullptr || sd_params == nullptr)
+    if(!sd_params)
     {
         return sd_generation.error("Warning: KCPP image generation not initialized!");
     }
@@ -2505,12 +2567,15 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
+    sd_ctx_t* sd_ctx = sd_params->sd_ctx; // protected by no_concurrency mutex
+
     PromptImageRef prompt_image_ref;
     struct CleanupImageCallbackOnExit {
+        sd_ctx_t* sd_ctx;
         ~CleanupImageCallbackOnExit() {
             sd_set_prompt_image_callback(sd_ctx, nullptr, nullptr);
         }
-    } cleanup_image_callback_onexit;
+    } cleanup_image_callback_onexit{sd_ctx};
     sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, &prompt_image_ref);
     prompt_image_ref.zero_based = image_tags.zero_based;
 
@@ -3145,9 +3210,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     std::string gen_data2;
     std::string final_frame_data;
 
+    auto upscaler_ctx = gp.upscale ? sd_params->upscaler_ctx : nullptr;
+
     if (is_passthrough)
     {
-        if(gp.upscale && upscaler_ctx != nullptr)
+        if(upscaler_ctx != nullptr)
         {
             printf("Upscaling original image (passthrough)...\n");
             gen_data = upscale_image_to_png_base64(upscaler_ctx, input_image, 2);
@@ -3234,7 +3301,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 continue;
             }
             std::string meta_image_info = get_image_params(params, gp.lora_meta, i);
-            if(gp.upscale && upscaler_ctx != nullptr)
+            if(upscaler_ctx != nullptr)
             {
                 printf("Upscaling output image...\n");
                 gen_data = upscale_image_to_png_base64(upscaler_ctx, result_image, 2, meta_image_info);
@@ -3371,9 +3438,15 @@ void sdtype_request_ongoing_generation_preview()
 
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        return sd_generation.error("Error: Upscale: another operation is in progress");
+    }
+    auto upscaler_ctx = sd_params ? sd_params->upscaler_ctx : nullptr;
+
     sd_generation.reset();
 
-    if(sd_ctx == nullptr || upscaler_ctx == nullptr || sd_params == nullptr)
+    if(!upscaler_ctx)
     {
         return sd_generation.error("Warning: KCPP image upscaling not initialized!");
     }
@@ -3454,7 +3527,7 @@ sd_info_outputs sdtype_get_info()
     }
     j["devices"] = devices;
 
-    static std::string recent_info = j.dump();
+    static thread_local std::string recent_info = j.dump();
     sd_info_outputs output;
     output.status = 0;
     output.data = recent_info.c_str();
