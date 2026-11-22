@@ -441,10 +441,6 @@ const int max_extra_images = 4;
 static std::vector<sd_image_t> prompt_ref_image_pool;
 static bool prompt_refs_zero_based = false;
 
-static std::string sdmaingpuenv;
-static int cfg_tiled_vae_threshold = 0;
-static int cfg_square_limit = 0;
-static int cfg_side_limit = 0;
 static bool sd_is_quiet = false;
 
 struct gendata_st {
@@ -1676,13 +1672,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     lp.photo_maker_path = SAFE_STR(inputs.photomaker_filename);
     klp.upscaler_filename = SAFE_STR(inputs.upscaler_filename);
     klp.tiled_vae_threshold = inputs.tiled_vae_threshold;
-    cfg_tiled_vae_threshold = klp.tiled_vae_threshold;
-    cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold > 8192 ? 8192 : cfg_tiled_vae_threshold);
-    cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold <= 0 ? 8192 : cfg_tiled_vae_threshold); //if negative dont tile
+    klp.tiled_vae_threshold = (klp.tiled_vae_threshold > 8192 ? 8192 : klp.tiled_vae_threshold);
+    klp.tiled_vae_threshold = (klp.tiled_vae_threshold <= 0 ? 8192 : klp.tiled_vae_threshold); //if negative dont tile
     klp.img_hard_limit = inputs.img_hard_limit;
     klp.img_soft_limit = inputs.img_soft_limit;
-    cfg_side_limit = klp.img_hard_limit;
-    cfg_square_limit = klp.img_soft_limit;
 
     lp.backend = SAFE_STR(inputs.backend);
     lp.params_backend = SAFE_STR(inputs.params_backend);
@@ -1740,9 +1733,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(klp.taesd)
     {
         printf("With Tiny Autoencoder (TAE)\n");
-        if (cfg_tiled_vae_threshold < 8192) {
+        if (klp.tiled_vae_threshold < 8192) {
             printf("  disabling VAE tiling for TAESD\n");
-            cfg_tiled_vae_threshold = 8192;
+            klp.tiled_vae_threshold = 8192;
         }
     }
     else if(lp.vae_path!="")
@@ -2589,20 +2582,20 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     // limit by image side
     int img_hard_limit = 8192; // "large enough", just to simplify the code
-    if (cfg_side_limit > 0) {
-        img_hard_limit = std::max(std::min(cfg_side_limit, img_hard_limit), img_side_min);
+    if (klp.img_hard_limit > 0) {
+        img_hard_limit = std::max(std::min(klp.img_hard_limit, img_hard_limit), img_side_min);
     }
 
     // limit by image area: avoid crashes due to bugs/limitations on certain models
     // a single side can be larger, but width*height are limited by img_soft_limit²
     int img_soft_limit;
     int hard_megapixel_res_limit = 2048; // hard area limit, no matter the config
-    if (cfg_square_limit <= 0) {
+    if (klp.img_soft_limit <= 0) {
         // default limit is model dependent: ~0.66 megapixel for SD1.5/SD2, 1 megapixel for most models
         img_soft_limit = (info.is_sd1 || info.is_sd2)?832:1024;
     } else {
         // force img_side_min <= limit <= hard_megapixel_res_limit
-        img_soft_limit = std::max(std::min(cfg_square_limit, hard_megapixel_res_limit), img_side_min);
+        img_soft_limit = std::max(std::min(klp.img_soft_limit, hard_megapixel_res_limit), img_side_min);
     }
 
     // unet is limited to multiples of 64; dit models vary
@@ -2615,14 +2608,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
-    bool dotile = (gp.width*gp.height > cfg_tiled_vae_threshold*cfg_tiled_vae_threshold);
+    bool dotile = (gp.width*gp.height > klp.tiled_vae_threshold*klp.tiled_vae_threshold);
 
     int vae_tile_size = -1;
     if (dotile) {
         // bump tile size to 1/4 of the configured maximum non-tiled image size
         // (so 1/4 of the memory that would be used for that image)
         const int minimum_tile_size = 256; // from mainline sdcpp
-        int new_vae_tile_size = cfg_tiled_vae_threshold;
+        int new_vae_tile_size = klp.tiled_vae_threshold;
         new_vae_tile_size = new_vae_tile_size / 2;
         new_vae_tile_size = roundup_to(new_vae_tile_size, 64);
         if (new_vae_tile_size > minimum_tile_size) {
