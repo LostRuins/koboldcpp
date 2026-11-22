@@ -178,7 +178,7 @@ namespace sd {
             disable();
             return;
         }
-        switch (manager->prefetch_params(owner_id_, params)) {
+        switch (manager->prepare_prefetch_params(owner_id_, params)) {
             case WeightPrefetchResult::Scheduled:
                 queued_params_  = std::move(params);
                 queued_segment_ = next_segment;
@@ -193,6 +193,14 @@ namespace sd {
                 return;
         }
         disable();
+    }
+
+    void SegmentWeightPipeline::submit_next() {
+        if (queued_segment_ != SIZE_MAX) {
+            if (auto manager = residency_manager_.lock()) {
+                manager->submit_prefetched_params(owner_id_);
+            }
+        }
     }
 
     void SegmentWeightPipeline::clear() {

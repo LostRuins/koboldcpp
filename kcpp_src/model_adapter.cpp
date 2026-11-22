@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kcpp_src/model_adapter.h"
+#include "kcpp_src/model_file_probe.h"
 #include "ggml.h"
 #include "ggml-cpu.h"
 #include "gguf.h"
@@ -85,43 +86,15 @@ void print_tok_vec(std::vector<float> &embd)
 
 bool gguf_tensor_exists(const std::string & gguf_filename, std::string tensor_name, bool exactmatch)
 {
-    struct gguf_init_params ggufparams;
-    ggufparams.no_alloc = true;
-    ggufparams.ctx = NULL;
-    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), ggufparams);
-    if (!ctx) return false;
-
-    bool found = false;
-
-    int n_tensors = gguf_get_n_tensors(ctx);
-    for (int i = 0; i < n_tensors; i++) {
-        std::string curr_name = gguf_get_tensor_name(ctx, i);
-        if(exactmatch)
-        {
-            if (curr_name == tensor_name) {
-                found = true;
-                break;
-            }
-        }
-        else
-        {
-            if (curr_name.find(tensor_name) != std::string::npos) {
-                found = true;
-                break;
-            }
-        }
-    }
-
-    gguf_free(ctx);
-    return found;
+    kcpp_file_probe probe;
+    if (!probe.open(gguf_filename) || probe.format() != kcpp_file_format::GGUF)
+        return false;
+    return probe.tensor_exists(tensor_name, exactmatch);
 }
 
 std::string gguf_get_string(const std::string & gguf_filename, const std::string & key)
 {
-    struct gguf_init_params ggufparams;
-    ggufparams.no_alloc = true;
-    ggufparams.ctx = NULL;
-    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), ggufparams);
+    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), {true, nullptr});
     if (!ctx) return "";
 
     const int64_t keyidx = gguf_find_key(ctx, key.c_str());
@@ -129,6 +102,21 @@ std::string gguf_get_string(const std::string & gguf_filename, const std::string
     if (keyidx >= 0 && gguf_get_kv_type(ctx, keyidx) == GGUF_TYPE_STRING) {
         value = gguf_get_val_str(ctx, keyidx);
     }
+    gguf_free(ctx);
+    return value;
+}
+
+bool gguf_get_bool(const std::string & gguf_filename, const std::string & key)
+{
+    struct gguf_init_params ggufparams;
+    ggufparams.no_alloc = true;
+    ggufparams.ctx = NULL;
+    struct gguf_context * ctx = gguf_init_from_file(gguf_filename.c_str(), ggufparams);
+    if (!ctx) return false;
+
+    const int64_t keyidx = gguf_find_key(ctx, key.c_str());
+    const bool value = keyidx >= 0 && gguf_get_kv_type(ctx, keyidx) == GGUF_TYPE_BOOL
+        ? gguf_get_val_bool(ctx, keyidx) : false;
     gguf_free(ctx);
     return value;
 }

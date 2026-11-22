@@ -135,6 +135,7 @@ namespace sd::pipeline {
         shifted_timestep            = sd_img_gen_params->sample_params.shifted_timestep;
         strength                    = sd_img_gen_params->strength;
         control_strength            = sd_img_gen_params->control_strength;
+        control_type                = sd_img_gen_params->control_type;
         eta                         = sd_img_gen_params->sample_params.eta;
         has_ref_images              = sd_img_gen_params->ref_images_count > 0;
         guidance                    = sd_img_gen_params->sample_params.guidance;
@@ -519,14 +520,10 @@ namespace sd::pipeline {
                                                              scheduler,
                                                              sd->version,
                                                              sample_params.extra_sample_args);
-        size_t t_enc              = static_cast<size_t>(scheduler_steps * hires.denoising_strength);
-        if (t_enc >= static_cast<size_t>(scheduler_steps)) {
-            t_enc = static_cast<size_t>(scheduler_steps) - 1;
-        }
         if (scheduler_steps_out != nullptr) {
             *scheduler_steps_out = scheduler_steps;
         }
-        return std::vector<float>(sigmas.begin() + scheduler_steps - static_cast<int>(t_enc) - 1,
+        return std::vector<float>(sigmas.begin() + std::max(0, scheduler_steps - effective_steps),
                                   sigmas.end());
     }
 

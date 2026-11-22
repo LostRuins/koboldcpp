@@ -620,6 +620,7 @@ static size_t estimate_draft_autofit_tax_mb(
 
     draft_ctx_params.n_ctx = base_ctx_params.n_ctx;
     draft_ctx_params.offload_kqv = base_ctx_params.offload_kqv;
+    draft_ctx_params.op_offload = base_ctx_params.op_offload;
     draft_ctx_params.kv_unified = base_ctx_params.kv_unified;
     draft_ctx_params.n_batch = base_ctx_params.n_batch;
     draft_ctx_params.n_ubatch = base_ctx_params.n_ubatch;
@@ -1094,6 +1095,7 @@ static void speculative_decoding_setup(std::string spec_model_filename, llama_co
     draft_model_params.load_mtp = true;
     draft_ctx_params.n_ctx = base_ctx_params.n_ctx;
     draft_ctx_params.offload_kqv = base_ctx_params.offload_kqv;
+    draft_ctx_params.op_offload = base_ctx_params.op_offload;
     draft_model_params.main_gpu = base_model_params.main_gpu;
     draft_model_params.split_mode = llama_split_mode::LLAMA_SPLIT_MODE_LAYER;
     draft_ctx_params.kv_unified = base_ctx_params.kv_unified;
@@ -2455,6 +2457,12 @@ static ReasoningBudgetTokenSequences get_reasoning_budget_token_sequences()
             end = "[/THINK]";
             budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n[/THINK]";
             break;
+        case llm_arch::LLM_ARCH_INKLING2:
+        case llm_arch::LLM_ARCH_INKLING2_LOOP:
+            start = "<|content_thinking|>";
+            end = "<|end_message|>";
+            budget_exceeded = "\n(Reasoning budget exceeded)\nTime to respond now.\n<|end_message|><|message_model|><|content_text|>";
+            break;
         case llm_arch::LLM_ARCH_MUSE_GLIMMER:
             start = " to=self<|message|>";
             end = "<|eom|>";
@@ -3564,6 +3572,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         }
 
         llama_ctx_params.offload_kqv = !inputs.low_vram;
+        llama_ctx_params.op_offload = !inputs.no_op_offload;
         llama_ctx_params.kv_unified = true;
         if((inputs.use_mtp || draftmodel_filename != "") && inputs.draft_amount > 0)
         {

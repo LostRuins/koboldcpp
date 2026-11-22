@@ -127,7 +127,7 @@ public:
         x_cat      = ggml_concat(ctx->ggml_ctx, x_cat, x4, 2);
         auto x5    = conv5->forward(ctx, x_cat);
 
-        x5 = ggml_add(ctx->ggml_ctx, ggml_ext_scale(ctx->ggml_ctx, x5, 0.2f), x);
+        x5 = ggml_add(ctx->ggml_ctx, ggml_ext_scale(ctx, x5, 0.2f), x);
         return x5;
     }
 };
@@ -152,7 +152,7 @@ public:
         out      = rdb2->forward(ctx, out);
         out      = rdb3->forward(ctx, out);
 
-        out = ggml_add(ctx->ggml_ctx, ggml_ext_scale(ctx->ggml_ctx, out, 0.2f), x);
+        out = ggml_add(ctx->ggml_ctx, ggml_ext_scale(ctx, out, 0.2f), x);
         return out;
     }
 };

@@ -128,4 +128,11 @@ bool load_wav_from_file(const std::string& path,
                         uint32_t& sample_rate,
                         uint32_t& channels);
 
+/** Decodes a WAV buffer (PCM 8/16/24/32 or IEEE float 32/64) into interleaved samples. */
+bool load_wav_from_memory(const uint8_t* data,
+                          size_t size,
+                          std::vector<float>& interleaved_samples,
+                          uint32_t& sample_rate,
+                          uint32_t& channels);
+
 #endif  // __MEDIA_IO_H__

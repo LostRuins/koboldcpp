@@ -1,6 +1,7 @@
 #ifndef __SD_MODEL_DIFFUSION_QWEN_IMAGE_2_1_H__
 #define __SD_MODEL_DIFFUSION_QWEN_IMAGE_2_1_H__
 
+#include "core/pe_cache.h"
 #include "model/diffusion/qwen_image.hpp"
 
 namespace Qwen {
@@ -23,14 +24,14 @@ namespace Qwen {
                 return it == weights.end() ? nullptr : &it->second;
             };
             if (auto w = find("img_in.weight")) {
-                config.in_channels = w->ne[0];
+                config.in_channels = w->logical_ne0();
                 config.hidden_size = w->ne[1];
             }
             if (auto w = find("proj_out.weight")) {
                 config.out_channels = w->ne[1];
             }
             if (auto w = find("txt_in.in_layer.weight")) {
-                config.context_dim = w->ne[0];
+                config.context_dim = w->logical_ne0();
             }
             if (auto w = find("transformer_blocks.0.attn.norm_q.weight")) {
                 config.head_dim = w->ne[0];
@@ -145,7 +146,7 @@ namespace Qwen {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
             auto weight = params["weight"];
             if (ctx->weight_adapter) {
-                weight = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, weight, prefix + "weight");
+                weight = ctx->weight_adapter->patch_weight(ctx, weight, prefix + "weight");
             }
             weight = ggml_scale_bias(ctx->ggml_ctx, weight, 1.f, 1.f);
             return ggml_mul(ctx->ggml_ctx, ggml_rms_norm(ctx->ggml_ctx, x, eps), weight);
@@ -163,7 +164,7 @@ namespace Qwen {
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) {
             x = std::dynamic_pointer_cast<QwenImage21ZeroCenterRMSNorm>(blocks["text_norm"])->forward(ctx, x);
             x = std::dynamic_pointer_cast<Linear>(blocks["in_layer"])->forward(ctx, x);
-            x = ggml_ext_gelu(ctx->ggml_ctx, x);
+            x = ggml_ext_gelu(ctx, x);
             return std::dynamic_pointer_cast<Linear>(blocks["out_layer"])->forward(ctx, x);
         }
     };
@@ -195,7 +196,7 @@ namespace Qwen {
                 // prefix before its full-sequence K/V can accumulate across layers.
                 ctx->expand_graph(q);
                 auto persist = [&](ggml_tensor* tensor, int axis, const char* name) {
-                    auto part = ggml_ext_slice(ctx->ggml_ctx, tensor, axis, 0, cache.prefix_length);
+                    auto part = ggml_ext_slice(ctx, tensor, axis, 0, cache.prefix_length);
                     // Pack the contiguous data into wider rows so quantization blocks
                     // can exceed head_dim without padding or changing element order.
                     part      = ggml_reshape_2d(ctx->ggml_ctx, part, x->ne[0], cache.prefix_length);
@@ -235,17 +236,15 @@ namespace Qwen {
             } else {
                 for (size_t i = 0; i < segments.size(); ++i) {
                     const auto& segment = segments[i];
-                    auto sq             = ggml_ext_slice(ctx->ggml_ctx, q, 1, segment.start, segment.end);
-                    auto sk             = ggml_ext_slice(ctx->ggml_ctx, k, 1, 0, segment.end);
-                    auto sv             = ggml_ext_slice(ctx->ggml_ctx, v, 2, 0, segment.end);
+                    auto sq             = ggml_ext_slice(ctx, q, 1, segment.start, segment.end);
+                    auto sk             = ggml_ext_slice(ctx, k, 1, 0, segment.end);
+                    auto sv             = ggml_ext_slice(ctx, v, 2, 0, segment.end);
                     auto out            = attend(sq, sk, sv, masks[i]);
                     result              = result == nullptr ? out : ggml_concat(ctx->ggml_ctx, result, out, 1);
                 }
             }
             auto to_out = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                to_out->set_force_prec_f32(true);
-            }
+            to_out->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
             return to_out->forward(ctx, result);
         }
     };
@@ -265,42 +264,41 @@ namespace Qwen {
             blocks["img_mlp.out"] = std::make_shared<Linear>(config.intermediate_size, config.hidden_size, false);
         }
 
-        static ggml_tensor* modulate(ggml_context* ctx, ggml_tensor* x, ggml_tensor* params, int64_t prefix_length, bool gate = false) {
-            auto rows  = ggml_ext_chunk(ctx, params, 2, 1);
+        static ggml_tensor* modulate(GGMLRunnerContext* runner_ctx, ggml_tensor* x, ggml_tensor* params, int64_t prefix_length, bool gate = false) {
+            auto ctx   = runner_ctx->ggml_ctx;
+            auto rows  = ggml_ext_chunk(runner_ctx, params, 2, 1);
             auto apply = [&](ggml_tensor* part, ggml_tensor* row) {
                 row = gate ? ggml_tanh(ctx, row) : ggml_scale_bias(ctx, row, 1.f, 1.f);
+                runner_ctx->expand_graph(row);
                 return ggml_mul(ctx, part, row);
             };
-            auto target = apply(ggml_ext_slice(ctx, x, 1, prefix_length, x->ne[1]), rows[0]);
             if (prefix_length == 0) {
-                return target;
+                return apply(x, rows[0]);
             }
-            auto prefix = apply(ggml_ext_slice(ctx, x, 1, 0, prefix_length), rows[1]);
+            auto target = apply(ggml_ext_slice(runner_ctx, x, 1, prefix_length, x->ne[1]), rows[0]);
+            auto prefix = apply(ggml_ext_slice(runner_ctx, x, 1, 0, prefix_length), rows[1]);
             return ggml_concat(ctx, prefix, target, 1);
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, const std::vector<ggml_tensor*>& modulation, ggml_tensor* pe, const QwenImage21Layout& layout, const std::vector<ggml_tensor*>& masks, const QwenImage21PrefixCache& cache) {
             const int64_t prefix_length = cache.mode == QwenImage21PrefixCache::Mode::REUSE ? 0 : layout.prefix_length;
             auto h                      = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm1"])->forward(ctx, x);
-            h                           = modulate(ctx->ggml_ctx, h, modulation[0], prefix_length);
+            h                           = modulate(ctx, h, modulation[0], prefix_length);
             h                           = std::dynamic_pointer_cast<QwenImage21Attention>(blocks["attn"])->forward(ctx, h, pe, layout.segments, masks, cache);
-            x                           = ggml_add(ctx->ggml_ctx, x, modulate(ctx->ggml_ctx, h, modulation[1], prefix_length, true));
+            x                           = ggml_add(ctx->ggml_ctx, x, modulate(ctx, h, modulation[1], prefix_length, true));
             h                           = std::dynamic_pointer_cast<LayerNorm>(blocks["img_norm2"])->forward(ctx, x);
-            h                           = modulate(ctx->ggml_ctx, h, modulation[2], prefix_length);
-            ggml_tensor* gate;
-            auto fused = blocks.find("img_mlp.gate_up");
+            h                           = modulate(ctx, h, modulation[2], prefix_length);
+            auto fused                  = blocks.find("img_mlp.gate_up");
             if (fused != blocks.end()) {
                 auto gate_up = std::dynamic_pointer_cast<Linear>(fused->second)->forward(ctx, h);
-                auto parts   = ggml_ext_chunk(ctx->ggml_ctx, gate_up, 2, 0);
-                gate         = parts[0];
-                h            = parts[1];
+                h            = ggml_swiglu(ctx->ggml_ctx, gate_up);
             } else {
-                gate = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.gate_layer"])->forward(ctx, h);
-                h    = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.proj"])->forward(ctx, h);
+                auto gate = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.gate_layer"])->forward(ctx, h);
+                h         = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.proj"])->forward(ctx, h);
+                h         = ggml_swiglu_split(ctx->ggml_ctx, gate, h);
             }
-            h = ggml_mul(ctx->ggml_ctx, h, ggml_silu(ctx->ggml_ctx, gate));
             h = std::dynamic_pointer_cast<Linear>(blocks["img_mlp.out"])->forward(ctx, h);
-            return ggml_add(ctx->ggml_ctx, x, modulate(ctx->ggml_ctx, h, modulation[3], prefix_length, true));
+            return ggml_add(ctx->ggml_ctx, x, modulate(ctx, h, modulation[3], prefix_length, true));
         }
     };
 
@@ -323,27 +321,27 @@ namespace Qwen {
         }
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* timestep, ggml_tensor* context, const std::vector<ggml_tensor*>& refs, ggml_tensor* pe, const QwenImage21Layout& layout, const std::vector<ggml_tensor*>& masks, const QwenImage21PrefixCache& cache) {
-            auto time = ggml_concat(ctx->ggml_ctx, timestep, ggml_ext_zeros_like(ctx->ggml_ctx, timestep), 0);
+            auto time = ggml_concat(ctx->ggml_ctx, timestep, ggml_ext_zeros_like(ctx, timestep), 0);
             // Runtime flow timesteps already use the [0, 1000] scale.
-            time               = ggml_ext_timestep_embedding(ctx->ggml_ctx, time, 256, 10000, 1.f);
+            time               = ggml_ext_timestep_embedding(ctx, time, 256, 10000, 1.f);
             time               = std::dynamic_pointer_cast<TimestepEmbedding>(blocks["time_text_embed.timestep_embedder"])->forward(ctx, time);
             time               = ggml_silu(ctx->ggml_ctx, time);
             auto modulation    = std::dynamic_pointer_cast<Linear>(blocks["modulation.1"])->forward(ctx, time);
-            auto mod           = ggml_ext_chunk(ctx->ggml_ctx, modulation, 4, 0);
+            auto mod           = ggml_ext_chunk(ctx, modulation, 4, 0);
             auto img_in        = std::dynamic_pointer_cast<Linear>(blocks["img_in"]);
             ggml_tensor* joint = nullptr;
             if (cache.mode == QwenImage21PrefixCache::Mode::REUSE) {
-                joint = img_in->forward(ctx, DiT::patchify(ctx->ggml_ctx, x, 1, 1));
+                joint = img_in->forward(ctx, DiT::patchify(ctx, x, 1, 1));
             } else {
                 auto text = std::dynamic_pointer_cast<QwenImage21TextProjection>(blocks["txt_in"])->forward(ctx, context);
                 for (const auto& segment : layout.segments) {
                     ggml_tensor* h;
                     if (segment.image_index < 0) {
-                        h = ggml_ext_slice(ctx->ggml_ctx, text, 1, segment.context_start,
+                        h = ggml_ext_slice(ctx, text, 1, segment.context_start,
                                            segment.context_start + segment.end - segment.start);
                     } else {
                         auto image = segment.image_index == static_cast<int>(refs.size()) ? x : refs[segment.image_index];
-                        h          = img_in->forward(ctx, DiT::patchify(ctx->ggml_ctx, image, 1, 1));
+                        h          = img_in->forward(ctx, DiT::patchify(ctx, image, 1, 1));
                     }
                     joint = joint == nullptr ? h : ggml_concat(ctx->ggml_ctx, joint, h, 1);
                 }
@@ -359,20 +357,20 @@ namespace Qwen {
                 sd::ggml_graph_cut::mark_graph_cut(joint, layer_cache.cut_group, "joint");
             }
             if (cache.mode != QwenImage21PrefixCache::Mode::REUSE) {
-                joint = ggml_ext_slice(ctx->ggml_ctx, joint, 1, layout.prefix_length, joint->ne[1]);
+                joint = ggml_ext_slice(ctx, joint, 1, layout.prefix_length, joint->ne[1]);
             }
-            auto scale = std::dynamic_pointer_cast<Linear>(blocks["norm_out.linear"])->forward(ctx, ggml_ext_chunk(ctx->ggml_ctx, time, 2, 1)[0]);
+            auto scale = std::dynamic_pointer_cast<Linear>(blocks["norm_out.linear"])->forward(ctx, ggml_ext_chunk(ctx, time, 2, 1)[0]);
             joint      = std::dynamic_pointer_cast<LayerNorm>(blocks["norm_out.norm"])->forward(ctx, joint);
             joint      = ggml_mul(ctx->ggml_ctx, joint, ggml_scale_bias(ctx->ggml_ctx, scale, 1.f, 1.f));
             joint      = std::dynamic_pointer_cast<Linear>(blocks["proj_out"])->forward(ctx, joint);
-            return DiT::unpatchify_and_crop(ctx->ggml_ctx, joint, x->ne[1], x->ne[0], 1, 1);
+            return DiT::unpatchify_and_crop(ctx, joint, x->ne[1], x->ne[0], 1, 1);
         }
     };
 
     struct QwenImage21Runner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         QwenImage21Config config;
         QwenImage21Model model;
-        std::vector<float> pe_data;
         std::vector<sd::Tensor<float>> mask_data;
         ggml_type prefix_cache_type = GGML_TYPE_COUNT;
         bool prefix_cache_enabled   = true;
@@ -504,20 +502,7 @@ namespace Qwen {
                 if (prefix_cache_type == GGML_TYPE_COUNT && active_cache.type == GGML_TYPE_F16) {
                     checked_cache.flash_attn_used = &flash_attn_used;
                 }
-                const bool cached         = active_cache.mode == QwenImage21PrefixCache::Mode::REUSE;
-                const auto first_position = layout.positions.begin() + (cached ? layout.prefix_length : 0);
-                Rope::Embedding embedding;
-                embedding.ids.assign(first_position, layout.positions.end());
-                const size_t offset             = cached ? static_cast<size_t>(layout.prefix_length) : 0;
-                embedding.positions.token_count = embedding.ids.size();
-                for (auto region : layout.rope_layout.images) {
-                    if (region.begin >= offset) {
-                        region.begin -= offset;
-                        embedding.positions.images.push_back(region);
-                    }
-                }
-                embedding.values = Rope::embed_nd(embedding.ids, 1, 10000.f, config.axes_dim, embedding.layout, &embedding.frequencies);
-                pe_data          = finish_rope_pe(std::move(embedding));
+                const bool cached = active_cache.mode == QwenImage21PrefixCache::Mode::REUSE;
                 mask_data.clear();
                 if (!cached) {
                     for (const auto& segment : layout.segments) {
@@ -535,9 +520,30 @@ namespace Qwen {
                 }
                 auto build = [&]() {
                     auto graph = new_graph_custom(QWEN_IMAGE_GRAPH_SIZE * 2);
-                    auto pe    = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.head_dim / 2,
-                                                    layout.positions.size() - (cached ? layout.prefix_length : 0));
-                    set_backend_tensor_data(pe, pe_data.data());
+                    sd::PECacheKey pe_key("qwen_image_2_1.pe");
+                    pe_key.add(layout.positions).add(cached).add(layout.prefix_length).add(config.axes_dim).add(config.head_dim);
+                    pe_key.add(circular_x_enabled).add(circular_y_enabled);
+                    for (const auto& region : layout.rope_layout.images) {
+                        pe_key.add(region.begin).add(region.count).add(region.height_period).add(region.width_period);
+                        pe_key.add(region.height_axis).add(region.width_axis);
+                    }
+                    auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                        const auto first_position = layout.positions.begin() + (cached ? layout.prefix_length : 0);
+                        Rope::Embedding embedding;
+                        embedding.ids.assign(first_position, layout.positions.end());
+                        const size_t offset             = cached ? static_cast<size_t>(layout.prefix_length) : 0;
+                        embedding.positions.token_count = embedding.ids.size();
+                        for (auto region : layout.rope_layout.images) {
+                            if (region.begin >= offset) {
+                                region.begin -= offset;
+                                embedding.positions.images.push_back(region);
+                            }
+                        }
+                        embedding.values     = Rope::embed_nd(embedding.ids, 1, 10000.f, config.axes_dim, embedding.layout, &embedding.frequencies);
+                        auto values          = finish_rope_pe(std::move(embedding));
+                        const int64_t tokens = static_cast<int64_t>(layout.positions.size()) - (cached ? layout.prefix_length : 0);
+                        return sd::Tensor<float>({2, 2, config.head_dim / 2, tokens}, std::move(values));
+                    }));
                     std::vector<ggml_tensor*> masks, ref_inputs;
                     for (const auto& mask : mask_data) {
                         masks.push_back(mask.empty() ? nullptr : make_input(mask));
@@ -570,7 +576,7 @@ namespace Qwen {
                 result = run(cache);
             }
             if (result.empty() && last_compute_status() == GGML_STATUS_ALLOC_FAILED &&
-                (cache.mode != QwenImage21PrefixCache::Mode::NONE || !cache_.empty())) {
+                (cache.mode != QwenImage21PrefixCache::Mode::NONE || has_cache_tensors())) {
                 // The failed graph has ended before persistent inputs are released.
                 free_cache_ctx_and_buffer();
                 prefix_cache_disabled = true;

@@ -22,7 +22,7 @@ std::string argv_to_utf8(int index, const char** argv);
 #define BOOL_STR(b) ((b) ? "true" : "false")
 
 extern const char* const modes_str[];
-#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, convert, upscale, metadata"
+#define SD_ALL_MODES_STR "img_gen, adetailer, vid_gen, convert, upscale, metadata, vid_upscale"
 
 enum SDMode {
     IMG_GEN,
@@ -31,6 +31,7 @@ enum SDMode {
     CONVERT,
     UPSCALE,
     METADATA,
+    VID_UPSCALE,
     MODE_COUNT
 };
 
@@ -227,6 +228,7 @@ struct SDGenerationParams {
     std::string end_image_path;
     std::string mask_image_path;
     std::string control_image_path;
+    std::string control_type;
     std::string ip_adapter_image_path;
     std::vector<std::string> ref_image_paths;
     std::vector<std::string> ref_video_paths;
@@ -291,11 +293,13 @@ struct SDGenerationParams {
     std::string prompt_with_lora;  // for metadata record only
     std::vector<sd_lora_t> lora_vec;
     sd_hires_upscaler_t resolved_hires_upscaler;
+    sd_control_type_t resolved_control_type = SD_CONTROL_TYPE_NONE;
 
     // Owned execution payload.
     SDImageOwner init_image;
     SDImageOwner end_image;
     std::vector<SDImageOwner> ref_images;
+    std::map<std::string, SDImageOwner> prompt_images;
     std::vector<std::vector<SDImageOwner>> ref_videos;
     std::vector<SDAudioOwner> ref_video_audios;
     std::vector<SDAudioOwner> ref_audios;
@@ -322,6 +326,7 @@ struct SDGenerationParams {
     bool from_json_str(const std::string& json_str,
                        const std::function<std::string(const std::string&)>& lora_path_resolver = {});
     bool parse_image_preprocess_json(const std::string& json_str);
+    bool parse_prompt_images_json(const std::string& json_str);
     bool initialize_cache_params();
     bool extract_and_remove_lora(const std::string& lora_model_dir);
     bool width_and_height_are_set() const;

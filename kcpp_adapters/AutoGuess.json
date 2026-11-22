@@ -368,5 +368,29 @@
 		"assistant_start": "<role>ASSISTANT</role>",
 		"assistant_end": "<|role_end|>"
     }
+}, {
+    "search": ["<|message_user|>", "<|message_model|>", "<|content_text|>", "<|end_message|>"],
+    "name": "Inkling2",
+    "adapter": {
+        "system_start": "<|message_system|><|content_text|>",
+        "system_end": "<|end_message|>",
+        "user_start": "<|message_user|><|content_text|>",
+        "user_end": "<|end_message|>",
+        "assistant_start": "<|message_model|><|content_text|>",
+        "assistant_gen": "",
+        "assistant_end": "<|end_message|><|content_model_end_sampling|>"
+    }
+}, {
+    "search": ["<_system>", "<_user>", "<_bot>", "<_end>"],
+    "name": "Xing 4.0",
+    "adapter": {
+        "system_start": "<_system>",
+        "system_end": "",
+        "user_start": "<_user>",
+        "user_end": "",
+        "assistant_start": "<_bot></think>",
+        "assistant_gen": "<_bot><think>\n",
+        "assistant_end": "<_end>\n"
+    }
 }
 ]

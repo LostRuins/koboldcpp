@@ -32,28 +32,26 @@ namespace LTXVAE {
         return ggml_reshape_4d(ctx, x, 1, 1, 1, ggml_nelements(x));
     }
 
-    static inline std::pair<ggml_tensor*, ggml_tensor*> get_shift_scale(ggml_context* ctx,
-                                                                        ggml_tensor* table,
-                                                                        ggml_tensor* timestep,
-                                                                        int64_t channels,
-                                                                        int parts) {
+    static inline std::pair<ggml_tensor*, ggml_tensor*> get_shift_scale(GGMLRunnerContext* runner_ctx, ggml_tensor* table, ggml_tensor* timestep, int64_t channels, int parts) {
+        auto ctx = runner_ctx->ggml_ctx;
         GGML_ASSERT(timestep != nullptr);
         GGML_ASSERT(ggml_nelements(timestep) == channels * parts);
 
         auto timestep_view = ggml_reshape_2d(ctx, timestep, channels, parts);
         auto values        = ggml_add(ctx, table, timestep_view);
-        auto chunks        = ggml_ext_chunk(ctx, values, parts, 1, false);
+        auto chunks        = ggml_ext_chunk(runner_ctx, values, parts, 1, false);
         auto shift         = reshape_channel_broadcast(ctx, ggml_cont(ctx, chunks[0]));
         auto scale         = reshape_channel_broadcast(ctx, ggml_cont(ctx, chunks[1]));
         return {shift, scale};
     }
 
-    static inline ggml_tensor* depth_to_space_3d(ggml_context* ctx,
+    static inline ggml_tensor* depth_to_space_3d(GGMLRunnerContext* runner_ctx,
                                                  ggml_tensor* x,
                                                  int64_t c,
                                                  int factor_t,
                                                  int factor_s,
                                                  bool drop_first_temporal_frame) {
+        auto ctx = runner_ctx->ggml_ctx;
         // x: [B*c*p1*p2*p3, T, H, W], B == 1, p2 == p3 == factor_s, p1 == factor_t
         // return: [B*c, T*p1, H*p2, W*p2]
         // Match: rearrange(x, "b (c p1 p2 p3) d h w -> b c (d p1) (h p2) (w p3)")
@@ -61,26 +59,24 @@ namespace LTXVAE {
         const int64_t H = x->ne[1];
         const int64_t W = x->ne[0];
 
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));        // [T, C, H, W]
-        x = ggml_reshape_4d(ctx, x, W, H, factor_s, factor_s * factor_t * c * T);  // [T*c*p1*p2, p3, H, W]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));        // [T*c*p1*p2, H, W, p3]
-        x = ggml_reshape_4d(ctx, x, factor_s * W, H, factor_s, factor_t * c * T);  // [T*c*p1, p2, H, W*p3]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));        // [T*c*p1, H, p2, W*p3]
-        x = ggml_reshape_4d(ctx, x, factor_s * W * factor_s * H, factor_t, c, T);  // [T, c, p1, H*p2*W*p3]
-        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));        // [c, T, p1, H*p2*W*p3]
-        x = ggml_reshape_4d(ctx, x, factor_s * W, factor_s * H, factor_t * T, c);  // [T, c, T*p1, H*p2*W*p3]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 1, 3, 2));  // [T, C, H, W]
+        x = ggml_reshape_4d(ctx, x, W, H, factor_s, factor_s * factor_t * c * T);          // [T*c*p1*p2, p3, H, W]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 2, 0, 1, 3));  // [T*c*p1*p2, H, W, p3]
+        x = ggml_reshape_4d(ctx, x, factor_s * W, H, factor_s, factor_t * c * T);          // [T*c*p1, p2, H, W*p3]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 2, 1, 3));  // [T*c*p1, H, p2, W*p3]
+        x = ggml_reshape_4d(ctx, x, factor_s * W * factor_s * H, factor_t, c, T);          // [T, c, p1, H*p2*W*p3]
+        x = ggml_ext_cont(runner_ctx, ggml_ext_torch_permute(runner_ctx, x, 0, 1, 3, 2));  // [c, T, p1, H*p2*W*p3]
+        x = ggml_reshape_4d(ctx, x, factor_s * W, factor_s * H, factor_t * T, c);          // [T, c, T*p1, H*p2*W*p3]
 
         if (drop_first_temporal_frame && factor_t > 1 && x->ne[2] > 0) {
-            x = ggml_ext_slice(ctx, x, 2, 1, x->ne[2]);
+            x = ggml_ext_slice(runner_ctx, x, 2, 1, x->ne[2]);
         }
 
         return x;
     }
 
-    static inline ggml_tensor* patchify(ggml_context* ctx,
-                                        ggml_tensor* x,
-                                        int patch_size) {
-        return WAN::WanVAE::patchify(ctx, x, patch_size, 1);
+    static inline ggml_tensor* patchify(GGMLRunnerContext* runner_ctx, ggml_tensor* x, int patch_size) {
+        return WAN::WanVAE::patchify(runner_ctx, x, patch_size, 1);
     }
 
     class CausalConv3d : public GGMLBlock {
@@ -113,20 +109,20 @@ namespace LTXVAE {
             auto conv = std::dynamic_pointer_cast<Conv3d>(blocks["conv"]);
 
             if (causal) {
-                auto first_frame     = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                auto first_frame     = ggml_ext_slice(ctx, x, 2, 0, 1);
                 auto first_frame_pad = first_frame;
                 for (int i = 1; i < time_kernel_size - 1; i++) {
                     first_frame_pad = ggml_concat(ctx->ggml_ctx, first_frame_pad, first_frame, 2);
                 }
                 x = ggml_concat(ctx->ggml_ctx, first_frame_pad, x, 2);
             } else {
-                auto first_frame     = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                auto first_frame     = ggml_ext_slice(ctx, x, 2, 0, 1);
                 auto first_frame_pad = first_frame;
                 for (int i = 1; i < (time_kernel_size - 1) / 2; i++) {
                     first_frame_pad = ggml_concat(ctx->ggml_ctx, first_frame_pad, first_frame, 2);
                 }
 
-                auto last_frame     = ggml_ext_slice(ctx->ggml_ctx, x, 2, x->ne[2] - 1, x->ne[2]);
+                auto last_frame     = ggml_ext_slice(ctx, x, 2, x->ne[2] - 1, x->ne[2]);
                 auto last_frame_pad = last_frame;
                 for (int i = 1; i < (time_kernel_size - 1) / 2; i++) {
                     last_frame_pad = ggml_concat(ctx->ggml_ctx, last_frame_pad, last_frame, 2);
@@ -165,7 +161,7 @@ namespace LTXVAE {
                 GGML_ASSERT(start_idx >= 0);
                 GGML_ASSERT(end_idx > 0);
 
-                auto slice         = ggml_ext_slice(ctx->ggml_ctx, x, 2, start_idx, end_idx);
+                auto slice         = ggml_ext_slice(ctx, x, 2, start_idx, end_idx);
                 feat_map[feat_idx] = ggml_cont(ctx->ggml_ctx, slice);
             }
             feat_idx++;
@@ -175,7 +171,7 @@ namespace LTXVAE {
                 if (prev != nullptr) {
                     left_pad = prev;
                 } else {
-                    auto first_frame = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                    auto first_frame = ggml_ext_slice(ctx, x, 2, 0, 1);
                     left_pad         = first_frame;
                     for (int i = 1; i < pad; i++) {
                         left_pad = ggml_concat(ctx->ggml_ctx, left_pad, first_frame, 2);
@@ -185,7 +181,7 @@ namespace LTXVAE {
             }
 
             if (!causal && pad > 0) {
-                auto last_frame = ggml_ext_slice(ctx->ggml_ctx, x, 2, x->ne[2] - 1, x->ne[2]);
+                auto last_frame = ggml_ext_slice(ctx, x, 2, x->ne[2] - 1, x->ne[2]);
                 auto right_pad  = last_frame;
                 for (int i = 1; i < pad; i++) {
                     right_pad = ggml_concat(ctx->ggml_ctx, right_pad, last_frame, 2);
@@ -204,9 +200,9 @@ namespace LTXVAE {
             : eps(eps) {}
 
         ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
-            auto h = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 3, 0, 1, 2));
+            auto h = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 3, 0, 1, 2));
             h      = ggml_rms_norm(ctx->ggml_ctx, h, eps);
-            h      = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, h, 1, 2, 3, 0));
+            h      = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, h, 1, 2, 3, 0));
             return h;
         }
     };
@@ -267,7 +263,7 @@ namespace LTXVAE {
                 auto values = ggml_add(ctx->ggml_ctx,
                                        params["scale_shift_table"],
                                        ggml_reshape_2d(ctx->ggml_ctx, timestep, channels, 4));
-                auto chunks = ggml_ext_chunk(ctx->ggml_ctx, values, 4, 1, false);
+                auto chunks = ggml_ext_chunk(ctx, values, 4, 1, false);
                 shift1      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[0]));
                 scale1      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[1]));
                 shift2      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[2]));
@@ -313,7 +309,7 @@ namespace LTXVAE {
                 auto values = ggml_add(ctx->ggml_ctx,
                                        params["scale_shift_table"],
                                        ggml_reshape_2d(ctx->ggml_ctx, timestep, channels, 4));
-                auto chunks = ggml_ext_chunk(ctx->ggml_ctx, values, 4, 1, false);
+                auto chunks = ggml_ext_chunk(ctx, values, 4, 1, false);
                 shift1      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[0]));
                 scale1      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[1]));
                 shift2      = reshape_channel_broadcast(ctx->ggml_ctx, ggml_cont(ctx->ggml_ctx, chunks[2]));
@@ -430,7 +426,7 @@ namespace LTXVAE {
 
             ggml_tensor* x_in = nullptr;
             if (residual) {
-                x_in       = depth_to_space_3d(ctx->ggml_ctx, x, in_channels / (factor_t * factor_s * factor_s), factor_t, factor_s, factor_t > 1);
+                x_in       = depth_to_space_3d(ctx, x, in_channels / (factor_t * factor_s * factor_s), factor_t, factor_s, factor_t > 1);
                 int repeat = (factor_t * factor_s * factor_s) / out_channels_reduction_factor;
                 auto res   = x_in;
                 for (int i = 1; i < repeat; i++) {
@@ -440,7 +436,7 @@ namespace LTXVAE {
             }
 
             x = conv->forward(ctx, x, causal);
-            x = depth_to_space_3d(ctx->ggml_ctx, x, get_output_channels(), factor_t, factor_s, factor_t > 1);
+            x = depth_to_space_3d(ctx, x, get_output_channels(), factor_t, factor_s, factor_t > 1);
             if (residual) {
                 x = ggml_add(ctx->ggml_ctx, x, x_in);
             }
@@ -460,7 +456,7 @@ namespace LTXVAE {
 
             ggml_tensor* x_in = nullptr;
             if (residual) {
-                x_in       = depth_to_space_3d(ctx->ggml_ctx, x, in_channels / (factor_t * factor_s * factor_s), factor_t, factor_s, drop_first);
+                x_in       = depth_to_space_3d(ctx, x, in_channels / (factor_t * factor_s * factor_s), factor_t, factor_s, drop_first);
                 int repeat = (factor_t * factor_s * factor_s) / out_channels_reduction_factor;
                 auto res   = x_in;
                 for (int i = 1; i < repeat; i++) {
@@ -470,7 +466,7 @@ namespace LTXVAE {
             }
 
             x = conv->forward(ctx, x, feat_map, feat_idx, chunk_idx, causal, temporal_pad);
-            x = depth_to_space_3d(ctx->ggml_ctx, x, get_output_channels(), factor_t, factor_s, drop_first);
+            x = depth_to_space_3d(ctx, x, get_output_channels(), factor_t, factor_s, drop_first);
             if (residual) {
                 x = ggml_add(ctx->ggml_ctx, x, x_in);
             }
@@ -515,7 +511,7 @@ namespace LTXVAE {
             auto conv_downsample = std::dynamic_pointer_cast<WAN::AvgDown3D>(blocks["conv_downsample"]);
 
             if (factor_t > 1 && x->ne[2] > 0) {
-                auto first_frame     = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                auto first_frame     = ggml_ext_slice(ctx, x, 2, 0, 1);
                 auto first_frame_pad = first_frame;
                 for (int i = 1; i < factor_t - 1; ++i) {
                     first_frame_pad = ggml_concat(ctx->ggml_ctx, first_frame_pad, first_frame, 2);
@@ -860,7 +856,7 @@ namespace LTXVAE {
             x = ggml_silu_inplace(ctx->ggml_ctx, x);
             x = conv_out->forward(ctx, x, true);
 
-            auto last_channel = ggml_ext_slice(ctx->ggml_ctx, x, 3, x->ne[3] - 1, x->ne[3]);
+            auto last_channel = ggml_ext_slice(ctx, x, 3, x->ne[3] - 1, x->ne[3]);
             auto repeat_shape = ggml_new_tensor_4d(ctx->ggml_ctx, last_channel->type, last_channel->ne[0], last_channel->ne[1], last_channel->ne[2], latent_channels - 1);
             auto repeated     = ggml_repeat(ctx->ggml_ctx, last_channel, repeat_shape);
             return ggml_concat(ctx->ggml_ctx, x, repeated, 3);
@@ -959,7 +955,7 @@ namespace LTXVAE {
 
             ggml_tensor* scaled_timestep = timestep;
             if (timestep_conditioning) {
-                auto multiplier = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["timestep_scale_multiplier"]);
+                auto multiplier = ggml_ext_cast_f32(ctx, params["timestep_scale_multiplier"]);
                 scaled_timestep = ggml_mul(ctx->ggml_ctx, timestep, multiplier);
             }
 
@@ -981,7 +977,7 @@ namespace LTXVAE {
             if (timestep_conditioning) {
                 auto last_time_embedder = std::dynamic_pointer_cast<PixArtAlphaCombinedTimestepSizeEmbeddings>(blocks["last_time_embedder"]);
                 auto timestep_embed     = last_time_embedder->forward(ctx, scaled_timestep);
-                auto [shift, scale]     = get_shift_scale(ctx->ggml_ctx,
+                auto [shift, scale]     = get_shift_scale(ctx,
                                                           params["last_scale_shift_table"],
                                                           timestep_embed,
                                                           hidden_channels,
@@ -1010,7 +1006,7 @@ namespace LTXVAE {
 
             ggml_tensor* scaled_timestep = timestep;
             if (timestep_conditioning && timestep != nullptr) {
-                auto multiplier = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, params["timestep_scale_multiplier"]);
+                auto multiplier = ggml_ext_cast_f32(ctx, params["timestep_scale_multiplier"]);
                 scaled_timestep = ggml_mul(ctx->ggml_ctx, timestep, multiplier);
             }
 
@@ -1038,7 +1034,7 @@ namespace LTXVAE {
             if (timestep_conditioning) {
                 auto last_time_embedder = std::dynamic_pointer_cast<PixArtAlphaCombinedTimestepSizeEmbeddings>(blocks["last_time_embedder"]);
                 auto timestep_embed     = last_time_embedder->forward(ctx, scaled_timestep);
-                auto [shift, scale]     = get_shift_scale(ctx->ggml_ctx,
+                auto [shift, scale]     = get_shift_scale(ctx,
                                                           params["last_scale_shift_table"],
                                                           timestep_embed,
                                                           hidden_channels,
@@ -1092,7 +1088,7 @@ namespace LTXVAE {
             auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
             auto latents   = processor->un_normalize(ctx, z);
             auto out       = decoder->forward(ctx, latents, timestep);
-            out            = WAN::WanVAE::unpatchify(ctx->ggml_ctx, out, patch_size, 1);
+            out            = WAN::WanVAE::unpatchify(ctx, out, patch_size, 1);
             return out;
         }
 
@@ -1112,7 +1108,7 @@ namespace LTXVAE {
             const int64_t T = z->ne[2];
             if (T <= 1) {
                 auto out = decoder->forward(ctx, latents, timestep);
-                return WAN::WanVAE::unpatchify(ctx->ggml_ctx, out, patch_size, 1);
+                return WAN::WanVAE::unpatchify(ctx, out, patch_size, 1);
             }
 
             // feat_map holds ggml_tensor* nodes (contiguous copies at each conv layer).
@@ -1145,20 +1141,20 @@ namespace LTXVAE {
 
                 int chunk_overlap = overlap;  // modified by forward_tiled_frame temporal inflation
 
-                auto z_chunk = ggml_ext_slice(ctx->ggml_ctx, latents, 2, i, end_i);
+                auto z_chunk = ggml_ext_slice(ctx, latents, 2, i, end_i);
 
                 auto out_chunk = decoder->forward_tiled_frame(ctx, z_chunk, timestep,
                                                               feat_map, feat_idx, i, chunk_overlap);
 
                 // discard overlap frames if it's not the final chunk
                 if (overlap > 0 && end_i < (int)T) {
-                    out_chunk = ggml_ext_slice(ctx->ggml_ctx, out_chunk, 2, 0, out_chunk->ne[2] - chunk_overlap);
+                    out_chunk = ggml_ext_slice(ctx, out_chunk, 2, 0, out_chunk->ne[2] - chunk_overlap);
                 }
 
                 out = (out == nullptr) ? out_chunk : ggml_concat(ctx->ggml_ctx, out, out_chunk, 2);
             }
 
-            return WAN::WanVAE::unpatchify(ctx->ggml_ctx, out, patch_size, 1);
+            return WAN::WanVAE::unpatchify(ctx, out, patch_size, 1);
         }
 
         ggml_tensor* decode_tiled_chunk(GGMLRunnerContext* ctx,
@@ -1177,9 +1173,9 @@ namespace LTXVAE {
             auto out_chunk    = decoder->forward_tiled_frame(ctx, latents, timestep,
                                                              feat_map, feat_idx, chunk_idx, chunk_overlap);
             if (chunk_overlap > 0) {
-                out_chunk = ggml_ext_slice(ctx->ggml_ctx, out_chunk, 2, 0, out_chunk->ne[2] - chunk_overlap);
+                out_chunk = ggml_ext_slice(ctx, out_chunk, 2, 0, out_chunk->ne[2] - chunk_overlap);
             }
-            return WAN::WanVAE::unpatchify(ctx->ggml_ctx, out_chunk, patch_size, 1);
+            return WAN::WanVAE::unpatchify(ctx, out_chunk, patch_size, 1);
         }
 
         ggml_tensor* encode(GGMLRunnerContext* ctx,
@@ -1188,9 +1184,9 @@ namespace LTXVAE {
             auto encoder   = std::dynamic_pointer_cast<Encoder>(blocks["encoder"]);
             auto processor = std::dynamic_pointer_cast<PerChannelStatistics>(blocks["per_channel_statistics"]);
 
-            x         = patchify(ctx->ggml_ctx, x, patch_size);
+            x         = patchify(ctx, x, patch_size);
             auto out  = encoder->forward(ctx, x);
-            auto mean = ggml_ext_chunk(ctx->ggml_ctx, out, 2, 3, false)[0];
+            auto mean = ggml_ext_chunk(ctx, out, 2, 3, false)[0];
             mean      = ggml_cont(ctx->ggml_ctx, mean);
             return processor->normalize(ctx, mean);
         }

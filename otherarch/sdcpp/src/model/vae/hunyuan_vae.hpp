@@ -96,20 +96,20 @@ namespace Hunyuan {
                     auto previous = carry->take();
                     GGML_ASSERT(previous->ne[2] <= pad_t);
                     for (int64_t frame = 0; frame < previous->ne[2]; frame++) {
-                        temporal_frames.push_back(ggml_ext_slice(ctx->ggml_ctx, previous, 2, frame, frame + 1));
+                        temporal_frames.push_back(ggml_ext_slice(ctx, previous, 2, frame, frame + 1));
                     }
                     for (int64_t frame = previous->ne[2]; frame < pad_t; frame++) {
-                        temporal_frames.push_back(ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1));
+                        temporal_frames.push_back(ggml_ext_slice(ctx, x, 2, 0, 1));
                     }
                 } else {
-                    auto first = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                    auto first = ggml_ext_slice(ctx, x, 2, 0, 1);
                     for (int frame = 0; frame < pad_t; frame++) {
                         temporal_frames.push_back(first);
                     }
                 }
             }
             for (int64_t frame = 0; frame < x->ne[2]; frame++) {
-                temporal_frames.push_back(ggml_ext_slice(ctx->ggml_ctx, x, 2, frame, frame + 1));
+                temporal_frames.push_back(ggml_ext_slice(ctx, x, 2, frame, frame + 1));
             }
 
             if (pad_t > 0 && carry != nullptr && carry->output != nullptr) {
@@ -127,13 +127,13 @@ namespace Hunyuan {
             }
             auto replicate_pad = [&](ggml_tensor* input, int dim, int left, int right) {
                 if (left > 0) {
-                    auto first = ggml_ext_slice(ctx->ggml_ctx, input, dim, 0, 1);
+                    auto first = ggml_ext_slice(ctx, input, dim, 0, 1);
                     for (int i = 0; i < left; i++) {
                         input = ggml_concat(ctx->ggml_ctx, first, input, dim);
                     }
                 }
                 if (right > 0) {
-                    auto last = ggml_ext_slice(ctx->ggml_ctx, input, dim, input->ne[dim] - 1, input->ne[dim]);
+                    auto last = ggml_ext_slice(ctx, input, dim, input->ne[dim] - 1, input->ne[dim]);
                     for (int i = 0; i < right; i++) {
                         input = ggml_concat(ctx->ggml_ctx, input, last, dim);
                     }
@@ -184,19 +184,19 @@ namespace Hunyuan {
             auto k = k_proj->forward(ctx, x);  // [b*c, t, h, w]
             auto v = v_proj->forward(ctx, x);  // [b*c, t, h, w]
 
-            q = ggml_reshape_3d(ctx->ggml_ctx, q, w * h * t, c, b);                                  // [b, c, t*h*w]
-            q = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, q, 1, 0, 2, 3));  // [b, t*h*w, c]
+            q = ggml_reshape_3d(ctx->ggml_ctx, q, w * h * t, c, b);              // [b, c, t*h*w]
+            q = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, q, 1, 0, 2, 3));  // [b, t*h*w, c]
 
-            k = ggml_reshape_3d(ctx->ggml_ctx, k, w * h * t, c, b);                                  // [b, c, t*h*w]
-            k = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, k, 1, 0, 2, 3));  // [b, t*h*w, c]
+            k = ggml_reshape_3d(ctx->ggml_ctx, k, w * h * t, c, b);              // [b, c, t*h*w]
+            k = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, k, 1, 0, 2, 3));  // [b, t*h*w, c]
 
-            v = ggml_reshape_3d(ctx->ggml_ctx, v, w * h * t, c, b);                                  // [b, c, t*h*w]
-            v = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, v, 1, 0, 2, 3));  // [b, t*h*w, c]
+            v = ggml_reshape_3d(ctx->ggml_ctx, v, w * h * t, c, b);              // [b, c, t*h*w]
+            v = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, v, 1, 0, 2, 3));  // [b, t*h*w, c]
 
             x = ggml_ext_attention_ext(ctx, q, k, v, 1, nullptr, false, ctx->flash_attn_enabled);  // [b, t*h*w, c]
 
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [b, c, t*h*w]
-            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, t, c * b);                         // [b*c, t, h, w]
+            x = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));  // [b, c, t*h*w]
+            x = ggml_reshape_4d(ctx->ggml_ctx, x, w, h, t, c * b);               // [b*c, t, h, w]
 
             x = proj_out->forward(ctx, x);
 
@@ -301,13 +301,13 @@ namespace Hunyuan {
             int64_t W      = x->ne[0];
 
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H * T, C, factor);                          // [factor, C, T*H, W]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // [C, factor, T*H, W]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));            // [C, factor, T*H, W]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H * T, factor_s, factor_s * factor_t * C);  // [C*factor_t*factor_s, factor_s, T*H, W]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));  // [C*factor_t*factor_s, T*H, W, factor_s]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));            // [C*factor_t*factor_s, T*H, W, factor_s]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W, H * T, factor_s, factor_t * C);  // [C*factor_t, factor_s, T*H, W*factor_s]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // [C*factor_t, T*H, factor_s, W*factor_s]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));            // [C*factor_t, T*H, factor_s, W*factor_s]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W * factor_s * H, T, factor_t, C);  // [C, factor_t, T, H*factor_s*W*factor_s]
-            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));  // [C, T, factor_t, H*factor_s*W*factor_s]
+            x = ggml_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));            // [C, T, factor_t, H*factor_s*W*factor_s]
             x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W, factor_s * H, factor_t * T, C);  // [C, T*factor_t, H*factor_s, W*factor_s]
 
             return x;
@@ -328,11 +328,11 @@ namespace Hunyuan {
 
             ggml_tensor* shortcut = nullptr;
             if (factor_t == 2 && !continuation) {
-                auto h_first = ggml_ext_slice(ctx->ggml_ctx, h, 2, 0, 1);                   // [B*factor*OC, 1, H, W]
-                h_first      = _pixel_shuffle_3d(ctx, h_first, 1, factor_s, B);             // [B*2*OC, 1, H*factor_s, W*factor_s]
-                h_first      = ggml_ext_slice(ctx->ggml_ctx, h_first, 3, 0, out_channels);  // [B*OC, 1, H*factor_s, W*factor_s]
+                auto h_first = ggml_ext_slice(ctx, h, 2, 0, 1);                   // [B*factor*OC, 1, H, W]
+                h_first      = _pixel_shuffle_3d(ctx, h_first, 1, factor_s, B);   // [B*2*OC, 1, H*factor_s, W*factor_s]
+                h_first      = ggml_ext_slice(ctx, h_first, 3, 0, out_channels);  // [B*OC, 1, H*factor_s, W*factor_s]
 
-                auto x_first = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                auto x_first = ggml_ext_slice(ctx, x, 2, 0, 1);
                 x_first      = repeat_interleave_channels(ctx, x_first, repeats / 2, x->ne[0], x->ne[1], 1);
                 x_first      = _pixel_shuffle_3d(ctx, x_first, 1, factor_s, B);
 
@@ -340,12 +340,12 @@ namespace Hunyuan {
                     return ggml_add(ctx->ggml_ctx, h_first, x_first);
                 }
 
-                auto h_next = ggml_ext_slice(ctx->ggml_ctx, h, 2, 1, h->ne[2]);       // [B*factor*OC, T - 1, H, W]
+                auto h_next = ggml_ext_slice(ctx, h, 2, 1, h->ne[2]);                 // [B*factor*OC, T - 1, H, W]
                 h_next      = _pixel_shuffle_3d(ctx, h_next, factor_t, factor_s, B);  // [B*OC, (T - 1)*factor_t, H*factor_s, W*factor_s]
 
                 h = ggml_concat(ctx->ggml_ctx, h_first, h_next, 2);  // [B*OC, 1 + (T - 1)*factor_t, H*factor_s, W*factor_s]
 
-                auto x_next = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1, x->ne[2]);
+                auto x_next = ggml_ext_slice(ctx, x, 2, 1, x->ne[2]);
                 x_next      = repeat_interleave_channels(ctx, x_next, repeats, x->ne[0], x->ne[1], x->ne[2] - 1);
                 x_next      = _pixel_shuffle_3d(ctx, x_next, factor_t, factor_s, B);
 
@@ -374,13 +374,13 @@ namespace Hunyuan {
         int64_t factor = factor_t * factor_s * factor_s;
 
         x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W * factor_s * H, factor_t, T, C);
-        x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));
         x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s * W, factor_s, H * T, factor_t * C);
-        x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 2, 1, 3));
         x = ggml_reshape_4d(ctx->ggml_ctx, x, factor_s, W, H * T, factor_s * factor_t * C);
-        x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 2, 0, 3));
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 2, 0, 3));
         x = ggml_reshape_4d(ctx->ggml_ctx, x, W, H * T, factor, C);
-        x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
+        x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));
         return ggml_reshape_4d(ctx->ggml_ctx, x, W, H, T, C * factor);
     }
 
@@ -398,9 +398,9 @@ namespace Hunyuan {
         int64_t spatial = W * H * T;
         int64_t groups  = x->ne[3] / group_size;
         x               = ggml_reshape_3d(ctx->ggml_ctx, x, spatial, group_size, groups);
-        x               = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+        x               = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 0, 2, 3));
         x               = ggml_sum_rows(ctx->ggml_ctx, x);
-        x               = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 1, 0, 2, 3));
+        x               = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 1, 0, 2, 3));
         x               = ggml_reshape_4d(ctx->ggml_ctx, x, W, H, T, groups);
         return ggml_scale(ctx->ggml_ctx, x, 1.f / static_cast<float>(group_size));
     }
@@ -435,19 +435,19 @@ namespace Hunyuan {
             ggml_tensor* h_first = nullptr;
             ggml_tensor* x_first = nullptr;
             if (factor_t == 2) {
-                h_first = ggml_ext_slice(ctx->ggml_ctx, h, 2, 0, 1);
+                h_first = ggml_ext_slice(ctx, h, 2, 0, 1);
                 h_first = pixel_unshuffle_3d(ctx, h_first, 1, factor_s);
                 h_first = ggml_concat(ctx->ggml_ctx, h_first, h_first, 3);
 
-                x_first = ggml_ext_slice(ctx->ggml_ctx, x, 2, 0, 1);
+                x_first = ggml_ext_slice(ctx, x, 2, 0, 1);
                 x_first = pixel_unshuffle_3d(ctx, x_first, 1, factor_s);
                 x_first = mean_channel_groups(ctx, x_first, group_size / 2);
 
                 if (x->ne[2] == 1) {
                     return ggml_add(ctx->ggml_ctx, h_first, x_first);
                 }
-                h = ggml_ext_slice(ctx->ggml_ctx, h, 2, 1, h->ne[2]);
-                x = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1, x->ne[2]);
+                h = ggml_ext_slice(ctx, h, 2, 1, h->ne[2]);
+                x = ggml_ext_slice(ctx, x, 2, 1, x->ne[2]);
             }
 
             GGML_ASSERT(h->ne[2] % factor_t == 0);
@@ -648,7 +648,7 @@ namespace Hunyuan {
             x             = ggml_silu_inplace(ctx->ggml_ctx, x);
             x             = conv_out->forward(ctx, x);
             x             = ggml_add(ctx->ggml_ctx, x, shortcut);
-            return ggml_ext_slice(ctx->ggml_ctx, x, 3, 0, z_channels);
+            return ggml_ext_slice(ctx, x, 3, 0, z_channels);
         }
     };
 
@@ -707,7 +707,7 @@ namespace Hunyuan {
             const int64_t frames = h->ne[2];
             for (int64_t start = 0; start < frames; start += HUNYUAN_VIDEO_VAE_TEMPORAL_CHUNK_SIZE) {
                 const int64_t end = std::min(start + HUNYUAN_VIDEO_VAE_TEMPORAL_CHUNK_SIZE, frames);
-                auto chunk        = ggml_ext_slice(ctx->ggml_ctx, h, 2, start, end);
+                auto chunk        = ggml_ext_slice(ctx, h, 2, start, end);
 
                 std::vector<ggml_tensor*> carry_output;
                 TemporalConvCarry carry{

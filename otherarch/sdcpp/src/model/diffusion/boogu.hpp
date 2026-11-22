@@ -6,6 +6,7 @@
 #include <cmath>
 #include <tuple>
 #include <vector>
+#include "core/pe_cache.h"
 
 #include "core/ggml_extend.h"
 #include "core/ggml_runner.h"
@@ -71,10 +72,10 @@ namespace Boogu {
                 }
                 if (ends_with(name, "x_embedder.weight") && tensor_storage.n_dims == 2) {
                     int64_t patch_area = config.patch_size * config.patch_size;
-                    config.in_channels = tensor_storage.ne[0] / patch_area;
+                    config.in_channels = tensor_storage.logical_ne0() / patch_area;
                     config.hidden_size = tensor_storage.ne[1];
                 } else if (ends_with(name, "time_caption_embed.caption_embedder.1.weight") && tensor_storage.n_dims == 2) {
-                    config.instruction_feat_dim = tensor_storage.ne[0];
+                    config.instruction_feat_dim = tensor_storage.logical_ne0();
                     config.hidden_size          = tensor_storage.ne[1];
                 } else if (ends_with(name, "single_stream_layers.0.attn.norm_q.weight") && tensor_storage.n_dims == 1) {
                     detected_head_dim = tensor_storage.ne[0];
@@ -127,9 +128,9 @@ namespace Boogu {
         }
     };
 
-    __STATIC_INLINE__ ggml_tensor* scale_modulate(ggml_context* ctx, ggml_tensor* x, ggml_tensor* scale) {
-        scale = ggml_reshape_3d(ctx, scale, scale->ne[0], 1, scale->ne[1]);
-        return ggml_add(ctx, x, ggml_mul(ctx, x, scale));
+    __STATIC_INLINE__ ggml_tensor* scale_modulate(GGMLRunnerContext* ctx, ggml_tensor* x, ggml_tensor* scale) {
+        scale = ggml_reshape_3d(ctx->ggml_ctx, scale, scale->ne[0], 1, scale->ne[1]);
+        return ggml_ext_modulate(ctx, x, nullptr, scale);
     }
 
     __STATIC_INLINE__ ggml_tensor* gate_residual(ggml_context* ctx, ggml_tensor* residual, ggml_tensor* x, ggml_tensor* gate) {
@@ -160,7 +161,7 @@ namespace Boogu {
             auto caption_embedder_0 = std::dynamic_pointer_cast<RMSNorm>(blocks["caption_embedder.0"]);
             auto caption_embedder_1 = std::dynamic_pointer_cast<Linear>(blocks["caption_embedder.1"]);
 
-            auto timestep_proj = ggml_ext_timestep_embedding(ctx->ggml_ctx, timestep, static_cast<int>(frequency_embedding_size), 10000, timestep_scale);
+            auto timestep_proj = ggml_ext_timestep_embedding(ctx, timestep, static_cast<int>(frequency_embedding_size), 10000, timestep_scale);
             auto time_embed    = timestep_embedder->forward(ctx, timestep_proj);
             auto caption_embed = caption_embedder_1->forward(ctx, caption_embedder_0->forward(ctx, text_hidden_states));
             return {time_embed, caption_embed};
@@ -178,14 +179,14 @@ namespace Boogu {
             auto norm   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm"]);
 
             emb       = linear->forward(ctx, ggml_silu(ctx->ggml_ctx, emb));
-            auto mods = ggml_ext_chunk(ctx->ggml_ctx, emb, 4, 0);
+            auto mods = ggml_ext_chunk(ctx, emb, 4, 0);
 
             auto scale_msa = mods[0];
             auto gate_msa  = mods[1];
             auto scale_mlp = mods[2];
             auto gate_mlp  = mods[3];
 
-            x = scale_modulate(ctx->ggml_ctx, norm->forward(ctx, x), scale_msa);
+            x = scale_modulate(ctx, norm->forward(ctx, x), scale_msa);
             return {x, gate_msa, scale_mlp, gate_mlp};
         }
     };
@@ -203,9 +204,7 @@ namespace Boogu {
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["linear_2"]);
             auto linear_3 = std::dynamic_pointer_cast<Linear>(blocks["linear_3"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                linear_2->set_force_prec_f32(true);
-            }
+            linear_2->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
             auto h1 = linear_1->forward(ctx, x);
             auto h2 = linear_3->forward(ctx, x);
@@ -230,7 +229,7 @@ namespace Boogu {
             auto linear_2 = std::dynamic_pointer_cast<Linear>(blocks["linear_2"]);
 
             auto emb = linear_1->forward(ctx, ggml_silu(ctx->ggml_ctx, conditioning_embedding));
-            x        = scale_modulate(ctx->ggml_ctx, norm->forward(ctx, x), emb);
+            x        = scale_modulate(ctx, norm->forward(ctx, x), emb);
             x        = linear_2->forward(ctx, x);
             return x;
         }
@@ -263,9 +262,7 @@ namespace Boogu {
             auto norm_k   = std::dynamic_pointer_cast<RMSNorm>(blocks["norm_k"]);
             auto to_out_0 = std::dynamic_pointer_cast<Linear>(blocks["to_out.0"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                to_out_0->set_force_prec_f32(true);
-            }
+            to_out_0->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
             int64_t N  = hidden_states->ne[2];
             int64_t Lq = hidden_states->ne[1];
@@ -333,7 +330,7 @@ namespace Boogu {
                 auto attn_output = attn->forward(ctx, norm_hidden_states, norm_hidden_states, rotary_emb, attention_mask);
                 hidden_states    = gate_residual(ctx->ggml_ctx, hidden_states, norm2->forward(ctx, attn_output), gate_msa);
 
-                auto mlp_input  = scale_modulate(ctx->ggml_ctx, ffn_norm1->forward(ctx, hidden_states), scale_mlp);
+                auto mlp_input  = scale_modulate(ctx, ffn_norm1->forward(ctx, hidden_states), scale_mlp);
                 auto mlp_output = feed_forward->forward(ctx, mlp_input);
                 hidden_states   = gate_residual(ctx->ggml_ctx, hidden_states, ffn_norm2->forward(ctx, mlp_output), gate_mlp);
             } else {
@@ -387,9 +384,7 @@ namespace Boogu {
             auto instruct_out  = std::dynamic_pointer_cast<Linear>(blocks["processor.instruct_out"]);
             auto img_out       = std::dynamic_pointer_cast<Linear>(blocks["processor.img_out"]);
 
-            if (sd_backend_is(ctx->backend, "Vulkan") || sd_backend_is(ctx->backend, "ROCm")) {
-                to_out_0->set_force_prec_f32(true);
-            }
+            to_out_0->set_precision_flags(GGML_PRECISION_F32_VULKAN | GGML_PRECISION_F32_ROCM);
 
             int64_t N          = img_hidden_states->ne[2];
             int64_t L_img      = img_hidden_states->ne[1];
@@ -416,8 +411,8 @@ namespace Boogu {
             k      = norm_k->forward(ctx, k);
 
             auto hidden_states = Rope::attention(ctx, q, k, v, rotary_emb, attention_mask);
-            auto instruct_attn = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, 0, L_instruct);
-            auto img_attn      = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, L_instruct, L_instruct + L_img);
+            auto instruct_attn = ggml_ext_slice(ctx, hidden_states, 1, 0, L_instruct);
+            auto img_attn      = ggml_ext_slice(ctx, hidden_states, 1, L_instruct, L_instruct + L_img);
 
             instruct_attn = instruct_out->forward(ctx, instruct_attn);
             img_attn      = img_out->forward(ctx, img_attn);
@@ -503,22 +498,22 @@ namespace Boogu {
             auto instruct_shift_mlp = std::get<1>(instruct_norm2_out_vec);
 
             auto joint_attn_out    = img_instruct_attn->forward(ctx, img_norm1_out, instruct_norm1_out, joint_rotary_emb);
-            auto instruct_attn_out = ggml_ext_slice(ctx->ggml_ctx, joint_attn_out, 1, 0, L_instruct);
-            auto img_attn_out      = ggml_ext_slice(ctx->ggml_ctx, joint_attn_out, 1, L_instruct, joint_attn_out->ne[1]);
+            auto instruct_attn_out = ggml_ext_slice(ctx, joint_attn_out, 1, 0, L_instruct);
+            auto img_attn_out      = ggml_ext_slice(ctx, joint_attn_out, 1, L_instruct, joint_attn_out->ne[1]);
 
             auto img_self_attn_out = img_self_attn->forward(ctx, img_norm3_out, img_norm3_out, img_rotary_emb);
 
             img_hidden_states = gate_residual(ctx->ggml_ctx, img_hidden_states, img_attn_norm->forward(ctx, img_attn_out), img_gate_msa);
             img_hidden_states = gate_residual(ctx->ggml_ctx, img_hidden_states, img_self_attn_norm->forward(ctx, img_self_attn_out), img_gate_self);
 
-            auto img_mlp_input = scale_modulate(ctx->ggml_ctx, img_norm2_out, img_scale_mlp);
+            auto img_mlp_input = scale_modulate(ctx, img_norm2_out, img_scale_mlp);
             img_shift_mlp      = ggml_reshape_3d(ctx->ggml_ctx, img_shift_mlp, img_shift_mlp->ne[0], 1, img_shift_mlp->ne[1]);
             img_mlp_input      = ggml_add(ctx->ggml_ctx, img_mlp_input, img_shift_mlp);
             auto img_mlp_out   = img_feed_forward->forward(ctx, img_ffn_norm1->forward(ctx, img_mlp_input));
             img_hidden_states  = gate_residual(ctx->ggml_ctx, img_hidden_states, img_ffn_norm2->forward(ctx, img_mlp_out), img_gate_mlp);
 
             instruct_hidden_states  = gate_residual(ctx->ggml_ctx, instruct_hidden_states, instruct_attn_norm->forward(ctx, instruct_attn_out), instruct_gate_msa);
-            auto instruct_mlp_input = scale_modulate(ctx->ggml_ctx, instruct_norm2_out, instruct_scale_mlp);
+            auto instruct_mlp_input = scale_modulate(ctx, instruct_norm2_out, instruct_scale_mlp);
             instruct_shift_mlp      = ggml_reshape_3d(ctx->ggml_ctx, instruct_shift_mlp, instruct_shift_mlp->ne[0], 1, instruct_shift_mlp->ne[1]);
             instruct_mlp_input      = ggml_add(ctx->ggml_ctx, instruct_mlp_input, instruct_shift_mlp);
             auto instruct_mlp_out   = instruct_feed_forward->forward(ctx, instruct_ffn_norm1->forward(ctx, instruct_mlp_input));
@@ -633,7 +628,7 @@ namespace Boogu {
             auto time_caption_embed = std::dynamic_pointer_cast<LuminaCombinedTimestepCaptionEmbedding>(blocks["time_caption_embed"]);
             auto norm_out           = std::dynamic_pointer_cast<LuminaLayerNormContinuous>(blocks["norm_out"]);
 
-            auto timestep = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx->ggml_ctx, timesteps), timesteps);
+            auto timestep = ggml_sub(ctx->ggml_ctx, ggml_ext_ones_like(ctx, timesteps), timesteps);
             auto embeds   = time_caption_embed->forward(ctx, timestep, context);
             auto temb     = embeds.first;
             auto txt      = embeds.second;
@@ -646,8 +641,8 @@ namespace Boogu {
             int64_t txt_len = txt->ne[1];
 
             GGML_ASSERT(pe->ne[3] == txt_len + ref_len + img_len);
-            auto txt_pe   = ggml_ext_slice(ctx->ggml_ctx, pe, 3, 0, txt_len);
-            auto noise_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt_len + ref_len, txt_len + ref_len + img_len);
+            auto txt_pe   = ggml_ext_slice(ctx, pe, 3, 0, txt_len);
+            auto noise_pe = ggml_ext_slice(ctx, pe, 3, txt_len + ref_len, txt_len + ref_len + img_len);
 
             for (int i = 0; i < config.num_refiner_layers; i++) {
                 auto block = std::dynamic_pointer_cast<BooguImageTransformerBlock>(blocks["context_refiner." + std::to_string(i)]);
@@ -663,7 +658,7 @@ namespace Boogu {
 
             ggml_tensor* combined_img = img;
             if (ref_img != nullptr) {
-                auto ref_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt_len, txt_len + ref_len);
+                auto ref_pe = ggml_ext_slice(ctx, pe, 3, txt_len, txt_len + ref_len);
                 for (int i = 0; i < config.num_refiner_layers; i++) {
                     auto block = std::dynamic_pointer_cast<BooguImageTransformerBlock>(blocks["ref_image_refiner." + std::to_string(i)]);
                     ref_img    = block->forward(ctx, ref_img, ref_pe, temb);
@@ -672,7 +667,7 @@ namespace Boogu {
                 combined_img = ggml_concat(ctx->ggml_ctx, ref_img, img, 1);
             }
 
-            auto img_pe = ggml_ext_slice(ctx->ggml_ctx, pe, 3, txt_len, txt_len + combined_img->ne[1]);
+            auto img_pe = ggml_ext_slice(ctx, pe, 3, txt_len, txt_len + combined_img->ne[1]);
             for (int i = 0; i < config.num_double_stream_layers; i++) {
                 auto block   = std::dynamic_pointer_cast<BooguImageDoubleStreamBlock>(blocks["double_stream_layers." + std::to_string(i)]);
                 auto result  = block->forward(ctx, combined_img, txt, pe, img_pe, temb);
@@ -690,9 +685,9 @@ namespace Boogu {
             }
 
             hidden_states = norm_out->forward(ctx, hidden_states, temb);
-            hidden_states = ggml_ext_slice(ctx->ggml_ctx, hidden_states, 1, hidden_states->ne[1] - img_len, hidden_states->ne[1]);
-            hidden_states = DiT::unpatchify_and_crop(ctx->ggml_ctx, hidden_states, H, W, config.patch_size, config.patch_size, false);
-            hidden_states = ggml_ext_scale(ctx->ggml_ctx, hidden_states, -1.f);
+            hidden_states = ggml_ext_slice(ctx, hidden_states, 1, hidden_states->ne[1] - img_len, hidden_states->ne[1]);
+            hidden_states = DiT::unpatchify_and_crop(ctx, hidden_states, H, W, config.patch_size, config.patch_size, false);
+            hidden_states = ggml_ext_scale(ctx, hidden_states, -1.f);
             return hidden_states;
         }
     };
@@ -759,9 +754,9 @@ namespace Boogu {
     }
 
     struct BooguImageRunner : public DiffusionModelRunner {
+        sd::PECache pe_cache_;
         BooguConfig config;
         BooguImageModel boogu;
-        std::vector<float> pe_vec;
 
         BooguImageRunner(ggml_backend_t backend,
                          const String2TensorStorage& tensor_storage_map      = {},
@@ -799,17 +794,21 @@ namespace Boogu {
                 ref_latents.push_back(make_input(ref_latent_tensor));
             }
 
-            pe_vec      = finish_rope_pe(gen_boogu_pe(static_cast<int>(x->ne[1]),
-                                                      static_cast<int>(x->ne[0]),
-                                                      config.patch_size,
-                                                      static_cast<int>(x->ne[3]),
-                                                      static_cast<int>(context->ne[1]),
-                                                      ref_latents,
-                                                      config.theta,
-                                                      config.axes_dim));
-            int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
-            auto pe     = ggml_new_tensor_4d(compute_ctx, GGML_TYPE_F32, 2, 2, config.axes_dim_sum / 2, pos_len);
-            set_backend_tensor_data(pe, pe_vec.data());
+            sd::PECacheKey pe_key("boogu.pe");
+            pe_key.add_shape(x).add_shape(context).add(config.theta).add(config.axes_dim).add(config.axes_dim_sum);
+            pe_key.add(circular_x_enabled).add(circular_y_enabled).add(config.patch_size).add_shapes(ref_latents);
+            auto pe = make_input(pe_cache_.get_or_create(pe_key, [&]() {
+                auto pe_vec = finish_rope_pe(gen_boogu_pe(static_cast<int>(x->ne[1]),
+                                                          static_cast<int>(x->ne[0]),
+                                                          config.patch_size,
+                                                          static_cast<int>(x->ne[3]),
+                                                          static_cast<int>(context->ne[1]),
+                                                          ref_latents,
+                                                          config.theta,
+                                                          config.axes_dim));
+                int pos_len = static_cast<int>(pe_vec.size() / config.axes_dim_sum / 2);
+                return sd::Tensor<float>({2, 2, config.axes_dim_sum / 2, pos_len}, std::move(pe_vec));
+            }));
 
             auto runner_ctx  = get_context();
             ggml_tensor* out = boogu.forward(&runner_ctx, x, timesteps, context, pe, ref_latents);

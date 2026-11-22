@@ -158,15 +158,15 @@ namespace LTXVUpsampler {
             const int64_t W = x->ne[0];
             const int64_t H = x->ne[1];
             const int64_t T = x->ne[2];
-            x               = ggml_ext_cont(ctx->ggml_ctx, x);
+            x               = ggml_ext_cont(ctx, x);
             x               = ggml_reshape_4d(ctx->ggml_ctx, x, W, H * T, num_channels, 1);
             x               = ggml_group_norm(ctx->ggml_ctx, x, num_groups, eps);
 
             ggml_tensor* weight = params["weight"];
             ggml_tensor* bias   = params["bias"];
             if (ctx->weight_adapter) {
-                weight = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, weight, prefix + "weight");
-                bias   = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, bias, prefix + "bias");
+                weight = ctx->weight_adapter->patch_weight(ctx, weight, prefix + "weight");
+                bias   = ctx->weight_adapter->patch_weight(ctx, bias, prefix + "bias");
             }
             weight = ggml_reshape_4d(ctx->ggml_ctx, weight, 1, 1, num_channels, 1);
             bias   = ggml_reshape_4d(ctx->ggml_ctx, bias, 1, 1, num_channels, 1);
@@ -218,9 +218,9 @@ namespace LTXVUpsampler {
             int64_t w = x->ne[0];
             GGML_ASSERT(x->ne[2] % (upscale_factor * upscale_factor) == 0);
             // x: [b*f, c*p1*p2, h, w] -> [b*f, c, h*p1, w*p2]
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 2, 0, 1, 3));  // [b*f, h, w, c*p1*p2]
-            x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0], x->ne[1] * x->ne[2], x->ne[3]);          // [b*f, h*w, c*p1*p2]
-            return DiT::unpatchify(ctx->ggml_ctx, x, h, w, upscale_factor, upscale_factor, true);
+            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 2, 0, 1, 3));              // [b*f, h, w, c*p1*p2]
+            x = ggml_reshape_3d(ctx->ggml_ctx, x, x->ne[0], x->ne[1] * x->ne[2], x->ne[3]);  // [b*f, h*w, c*p1*p2]
+            return DiT::unpatchify(ctx, x, h, w, upscale_factor, upscale_factor, true);
         }
     };
 
@@ -241,9 +241,9 @@ namespace LTXVUpsampler {
             const int64_t C = x->ne[3] / upscale_factor;
 
             // x: [b, c*p, f, h, w] -> [b, c, f*p, h, w]
-            x = ggml_ext_cont(ctx->ggml_ctx, x);
+            x = ggml_ext_cont(ctx, x);
             x = ggml_reshape_4d(ctx->ggml_ctx, x, W * H, F, upscale_factor, C);
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));
+            x = ggml_ext_cont(ctx, ggml_permute(ctx->ggml_ctx, x, 0, 2, 1, 3));
             return ggml_reshape_4d(ctx->ggml_ctx, x, W, H, F * upscale_factor, C);
         }
     };
@@ -324,11 +324,11 @@ namespace LTXVUpsampler {
             auto blur_down     = std::dynamic_pointer_cast<BlurDownsample>(blocks["blur_down"]);
 
             // rearrange(x, "b c f h w -> (b f) c h w")
-            x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
+            x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));
             x = conv->forward(ctx, x);
             x = pixel_shuffle->forward(ctx, x);
             x = blur_down->forward(ctx, x);
-            return ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));
+            return ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));
         }
     };
 
@@ -403,18 +403,18 @@ namespace LTXVUpsampler {
             } else if (config.temporal_upsample) {
                 auto upsample_conv = std::dynamic_pointer_cast<Conv3d>(blocks["upsampler.0"]);
                 auto pixel_shuffle = std::dynamic_pointer_cast<TemporalPixelShuffleND>(blocks["upsampler.1"]);
-                x                  = upsample_conv->forward(ctx, x);                    // [b, c*2, f, h, w]
-                x                  = pixel_shuffle->forward(ctx, x);                    // [b, c, f*2, h, w]
-                x                  = ggml_ext_slice(ctx->ggml_ctx, x, 2, 1, x->ne[2]);  // x[:, :, 1:, :, :]
+                x                  = upsample_conv->forward(ctx, x);          // [b, c*2, f, h, w]
+                x                  = pixel_shuffle->forward(ctx, x);          // [b, c, f*2, h, w]
+                x                  = ggml_ext_slice(ctx, x, 2, 1, x->ne[2]);  // x[:, :, 1:, :, :]
             } else {
                 auto upsample_conv = std::dynamic_pointer_cast<Conv2d>(blocks["upsampler.0"]);
                 auto pixel_shuffle = std::dynamic_pointer_cast<PixelShuffleND>(blocks["upsampler.1"]);
 
                 // rearrange(x, "b c f h w -> (b f) c h w"),
-                x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // [b*f, c, h, w]
-                x = upsample_conv->forward(ctx, x);                                                      // [b*f, c*4, h, w]
-                x = pixel_shuffle->forward(ctx, x);                                                      // [b*f, c, h*2, w*2]
-                x = ggml_ext_cont(ctx->ggml_ctx, ggml_ext_torch_permute(ctx->ggml_ctx, x, 0, 1, 3, 2));  // [b*c, f, h, w]
+                x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));  // [b*f, c, h, w]
+                x = upsample_conv->forward(ctx, x);                                  // [b*f, c*4, h, w]
+                x = pixel_shuffle->forward(ctx, x);                                  // [b*f, c, h*2, w*2]
+                x = ggml_ext_cont(ctx, ggml_ext_torch_permute(ctx, x, 0, 1, 3, 2));  // [b*c, f, h, w]
             }
             sd::ggml_graph_cut::mark_graph_cut(x, "ltx_latent_upsampler.spatial_up", "x");
 

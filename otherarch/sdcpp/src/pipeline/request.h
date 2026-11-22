@@ -47,6 +47,7 @@ namespace sd::pipeline {
         int shifted_timestep                        = 0;
         float strength                              = 1.f;
         float control_strength                      = 0.f;
+        sd_control_type_t control_type              = SD_CONTROL_TYPE_NONE;
         float eta                                   = 0.f;
         sd_sample_params_t sample_params            = {};
         sd_sample_params_t high_noise_sample_params = {};

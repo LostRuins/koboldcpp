@@ -147,7 +147,9 @@ protected:
     bool bias;
     bool force_f32;
     bool force_prec_f32;
+    uint32_t precision_flags    = 0;
     bool has_weight_scale       = false;
+    int w4_convrot_kind         = 0;
     bool int8_convrot           = false;
     int int8_convrot_group_size = 0;
     float scale;
@@ -158,16 +160,21 @@ protected:
         has_weight_scale        = false;
         int8_convrot            = false;
         int8_convrot_group_size = 0;
+        auto weight_storage     = tensor_storage_map.find(prefix + "weight");
+        w4_convrot_kind         = weight_storage != tensor_storage_map.end() ? weight_storage->second.w4_convrot_kind : 0;
         enum ggml_type wtype    = get_type(prefix + "weight", tensor_storage_map, GGML_TYPE_F32);
-        if (in_features % ggml_blck_size(wtype) != 0 || force_f32) {
+        if (!w4_convrot_kind && (in_features % ggml_blck_size(wtype) != 0 || force_f32)) {
             wtype = GGML_TYPE_F32;
         }
-        params["weight"] = ggml_new_tensor_2d(ctx, wtype, in_features, out_features);
+        if (w4_convrot_kind) {
+            GGML_ASSERT(wtype == GGML_TYPE_I8 && in_features % 2 == 0);
+            GGML_ASSERT(weight_storage->second.ne[0] == in_features / 2 && weight_storage->second.ne[1] == out_features);
+        }
+        params["weight"] = ggml_new_tensor_2d(ctx, wtype, w4_convrot_kind ? in_features / 2 : in_features, out_features);
         if (bias) {
             enum ggml_type wtype = GGML_TYPE_F32;
             params["bias"]       = ggml_new_tensor_1d(ctx, wtype, out_features);
         }
-        auto weight_storage           = tensor_storage_map.find(prefix + "weight");
         const bool is_int8_tensorwise = weight_storage != tensor_storage_map.end() && weight_storage->second.is_int8_tensorwise;
         auto weight_scale_storage     = tensor_storage_map.find(prefix + "weight_scale");
         if (weight_scale_storage != tensor_storage_map.end()) {
@@ -176,9 +183,16 @@ protected:
             params["weight_scale"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, scale_nelements);
             has_weight_scale       = true;
         }
-        if (is_int8_tensorwise) {
+        if (w4_convrot_kind == 2) {
+            params["weight_codebook"]  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 16);
+            params["weight_s_channel"] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, out_features);
+#ifndef SD_USE_UPSTREAM_GGML
+            params["weight_s_rel"] = ggml_new_tensor_2d(ctx, GGML_TYPE_F8_E4M3, in_features / 16, out_features);
+#endif
+        }
+        if (is_int8_tensorwise || w4_convrot_kind) {
             GGML_ASSERT(wtype == GGML_TYPE_I8);
-            GGML_ASSERT(has_weight_scale);
+            GGML_ASSERT(w4_convrot_kind == 2 || has_weight_scale);
             int8_convrot            = weight_storage->second.int8_convrot;
             int8_convrot_group_size = weight_storage->second.int8_convrot_group_size;
         }
@@ -202,6 +216,10 @@ public:
         scale = scale_;
     }
 
+    void set_precision_flags(uint32_t flags) {
+        precision_flags = flags;
+    }
+
     void set_force_prec_f32(bool force_prec_f32_) {
         force_prec_f32 = force_prec_f32_;
     }
@@ -212,92 +230,60 @@ public:
     }
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
+        const bool force_prec_f32 = ggml_ext_force_prec_f32(ctx, this->force_prec_f32, precision_flags);
         ggml_tensor* w            = params["weight"];
         const float scale         = ctx->linear_scale > 0.f ? ctx->linear_scale : this->scale;
         ggml_tensor* weight_scale = has_weight_scale ? params["weight_scale"] : nullptr;
-#ifndef SD_USE_UPSTREAM_GGML
-        if (w->type == GGML_TYPE_F8_E4M3 || w->type == GGML_TYPE_F8_E5M2) {
-            bool supports_fp8_matmul = false;
-            if (ctx->backend != nullptr) {
-                ggml_tensor* fp8_matmul = ggml_mul_mat(ctx->ggml_ctx, w, x);
-                if (force_prec_f32) {
-                    ggml_prec_set_acc(fp8_matmul, GGML_PREC_F32);
-                }
-                supports_fp8_matmul = ggml_backend_supports_op(ctx->backend, fp8_matmul) && !sd_backend_is_cpu(ctx->backend);
-            }
-            if (!supports_fp8_matmul) {
-                w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_BF16);
-            }
-        }
-#endif
-        ggml_tensor* b = nullptr;
+        w                         = ggml_ext_prepare_linear_weight(ctx, w, x, force_prec_f32);
+        ggml_tensor* b            = nullptr;
         if (bias) {
             b = params["bias"];
         }
         ggml_tensor* linear_bias = has_weight_scale ? nullptr : b;
         ggml_tensor* out         = nullptr;
         if (w->type == GGML_TYPE_I8) {
-            if (x->type != GGML_TYPE_F32) {
-                x = ggml_ext_cast_f32(ctx->ggml_ctx, ctx->backend, x);
-            }
-            if (!ggml_is_contiguous(x)) {
-                x = ggml_cont(ctx->ggml_ctx, x);
-            }
+            x                       = ggml_ext_prepare_i8_input(ctx, x);
             ggml_tensor* lora_input = x;
             if (ctx->weight_adapter && b != nullptr) {
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                b = ctx->weight_adapter->patch_weight(ctx, b, prefix + "bias");
             }
+
 #ifndef SD_USE_UPSTREAM_GGML
-            if (int8_convrot && scale == 1.f) {
-                const auto cache_key = std::make_pair(x, int8_convrot_group_size);
-                auto cached          = ctx->int8_convrot_cache.find(cache_key);
-                if (cached == ctx->int8_convrot_cache.end()) {
-                    x = ggml_quantize_i8_convrot(ctx->ggml_ctx, x, int8_convrot_group_size);
-                    ctx->int8_convrot_cache.emplace(cache_key, x);
-                } else {
-                    x = cached->second;
-                }
-            }
+            if (w4_convrot_kind) {
+                out = ggml_ext_linear_w4_convrot(ctx, x, w,
+                                                 w4_convrot_kind == 2 ? params["weight_codebook"] : weight_scale,
+                                                 w4_convrot_kind == 2 ? params["weight_s_channel"] : nullptr,
+                                                 w4_convrot_kind == 2 ? params["weight_s_rel"] : nullptr,
+                                                 b, static_cast<SDW4Kind>(w4_convrot_kind), int8_convrot ? int8_convrot_group_size : 0, scale);
+            } else
 #endif
-            out = ggml_ext_linear_i8_tensorwise(ctx->ggml_ctx,
-                                                x,
-                                                w,
-                                                weight_scale,
-                                                b,
-                                                int8_convrot ? int8_convrot_group_size : 0,
-                                                scale);
+                out = ggml_ext_linear_i8_tensorwise(ctx,
+                                                    x,
+                                                    w,
+                                                    weight_scale,
+                                                    b,
+                                                    int8_convrot ? int8_convrot_group_size : 0,
+                                                    scale);
             if (ctx->weight_adapter) {
                 WeightAdapter::ForwardParams forward_params;
                 forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
                 forward_params.linear.force_prec_f32 = force_prec_f32;
                 forward_params.linear.scale          = scale;
-                out                                  = ctx->weight_adapter->add_lora_to_output(ctx->ggml_ctx,
-                                                                                               ctx->backend,
-                                                                                               lora_input,
-                                                                                               w,
-                                                                                               out,
-                                                                                               prefix,
-                                                                                               forward_params);
+                out                                  = ctx->weight_adapter->add_lora_to_output(ctx, lora_input, w, out, prefix, forward_params);
             }
             return out;
         }
         if (has_weight_scale) {
-            out = ggml_ext_linear(ctx->ggml_ctx, x, w, nullptr, force_prec_f32, scale);
+            out = ggml_ext_linear(ctx, x, w, nullptr, force_prec_f32, scale);
             out = ggml_mul(ctx->ggml_ctx, out, weight_scale);
             if (ctx->weight_adapter) {
                 WeightAdapter::ForwardParams forward_params;
                 forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
                 forward_params.linear.force_prec_f32 = force_prec_f32;
                 forward_params.linear.scale          = scale;
-                out                                  = ctx->weight_adapter->add_lora_to_output(ctx->ggml_ctx,
-                                                                                               ctx->backend,
-                                                                                               x,
-                                                                                               w,
-                                                                                               out,
-                                                                                               prefix,
-                                                                                               forward_params);
+                out                                  = ctx->weight_adapter->add_lora_to_output(ctx, x, w, out, prefix, forward_params);
                 if (b != nullptr) {
-                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                    b = ctx->weight_adapter->patch_weight(ctx, b, prefix + "bias");
                 }
             }
             if (b != nullptr) {
@@ -310,9 +296,9 @@ public:
             forward_params.op_type               = WeightAdapter::ForwardParams::op_type_t::OP_LINEAR;
             forward_params.linear.force_prec_f32 = force_prec_f32;
             forward_params.linear.scale          = scale;
-            out                                  = ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, linear_bias, prefix, forward_params);
+            out                                  = ctx->weight_adapter->forward_with_lora(ctx, x, w, linear_bias, prefix, forward_params);
         } else {
-            out = ggml_ext_linear(ctx->ggml_ctx, x, w, linear_bias, force_prec_f32, scale);
+            out = ggml_ext_linear(ctx, x, w, linear_bias, force_prec_f32, scale);
         }
         return out;
     }
@@ -344,42 +330,6 @@ protected:
     int64_t num_embeddings;
     bool is_int8_tensorwise     = false;
     int int8_convrot_group_size = 0;
-
-    static void get_rows_i8(ggml_tensor* dst, int ith, int nth, void* userdata) {
-        const auto* embedding     = static_cast<const Embedding*>(userdata);
-        const int group_size      = embedding->int8_convrot_group_size;
-        const auto* weight        = dst->src[0];
-        const auto* input_ids     = static_cast<const int32_t*>(dst->src[1]->data);
-        const auto* scales        = static_cast<const float*>(dst->src[2]->data);
-        const bool scalar_scale   = ggml_nelements(dst->src[2]) == 1;
-        const float normalization = group_size > 0 ? 1.f / std::sqrt(static_cast<float>(group_size)) : 1.f;
-        for (int64_t row = ith; row < dst->ne[1]; row += nth) {
-            const int32_t token = input_ids[row];
-            GGML_ASSERT(token >= 0 && token < weight->ne[1]);
-            const auto* src   = reinterpret_cast<const int8_t*>(static_cast<const char*>(weight->data) + token * weight->nb[1]);
-            auto* out         = reinterpret_cast<float*>(static_cast<char*>(dst->data) + row * dst->nb[1]);
-            const float scale = scales[scalar_scale ? 0 : token] * normalization;
-            for (int64_t i = 0; i < weight->ne[0]; ++i) {
-                out[i] = static_cast<float>(src[i]) * scale;
-            }
-            // The regular Hadamard rotation is symmetric and its own inverse.
-            for (int stride = 1; stride < group_size; stride *= 4) {
-                for (int64_t base = 0; base < weight->ne[0]; base += 4 * stride) {
-                    for (int j = 0; j < stride; ++j) {
-                        float* values      = out + base + j;
-                        const float a      = values[0];
-                        const float b      = values[stride];
-                        const float c      = values[2 * stride];
-                        const float d      = values[3 * stride];
-                        values[0]          = a + b + c - d;
-                        values[stride]     = a + b - c + d;
-                        values[2 * stride] = a - b + c + d;
-                        values[3 * stride] = -a + b + c + d;
-                    }
-                }
-            }
-        }
-    }
 
     void init_params(ggml_context* ctx, const String2TensorStorage& tensor_storage_map, const std::string prefix = "") override {
         auto weight_storage     = tensor_storage_map.find(prefix + "weight");
@@ -420,30 +370,9 @@ public:
           num_embeddings(num_embeddings) {
     }
 
-    ggml_tensor* forward(GGMLRunnerContext* ctx,
-                         ggml_tensor* input_ids) override {
-        // input_ids: [N, n_token]
-        auto weight = params["weight"];
-
-        // There are issues with ggml batch inference, so we are expanding it here first.
-        // TODO: fix ggml batch inference
-        int64_t n = input_ids->ne[1];
-        input_ids = ggml_reshape_1d(ctx->ggml_ctx, input_ids, input_ids->ne[0] * input_ids->ne[1]);
-
-        ggml_tensor* embedding;
-        if (is_int8_tensorwise) {
-            GGML_ASSERT(input_ids->type == GGML_TYPE_I32);
-            ggml_tensor* args[] = {weight, input_ids, params["weight_scale"]};
-            embedding           = ggml_custom_4d(ctx->ggml_ctx, GGML_TYPE_F32, embedding_dim, input_ids->ne[0], 1, 1,
-                                                 args, 3, get_rows_i8, GGML_N_TASKS_MAX, this);
-        } else {
-            input_ids = ggml_reshape_3d(ctx->ggml_ctx, input_ids, input_ids->ne[0], 1, input_ids->ne[1]);
-            embedding = ggml_get_rows(ctx->ggml_ctx, weight, input_ids);
-        }
-        embedding = ggml_reshape_3d(ctx->ggml_ctx, embedding, embedding->ne[0], embedding->ne[1] / n, n);
-
-        // [N, n_token, embedding_dim]
-        return embedding;
+    ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* input_ids) override {
+        return ggml_ext_embedding(ctx, params["weight"], input_ids,
+                                  is_int8_tensorwise ? params["weight_scale"] : nullptr, int8_convrot_group_size);
     }
 };
 
@@ -497,7 +426,7 @@ public:
 
     ggml_tensor* forward(GGMLRunnerContext* ctx, ggml_tensor* x) override {
         GGML_ASSERT(x->ne[1] == in_channels);
-        return ggml_ext_conv_1d(ctx->ggml_ctx, x, params["weight"], bias ? params["bias"] : nullptr,
+        return ggml_ext_conv_1d(ctx, x, params["weight"], bias ? params["bias"] : nullptr,
                                 stride, padding, dilation, groups, force_prec_f32);
     }
 };
@@ -567,9 +496,9 @@ public:
             forward_params.conv2d.circular_x = ctx->circular_x_enabled;
             forward_params.conv2d.circular_y = ctx->circular_y_enabled;
             forward_params.conv2d.scale      = scale;
-            return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
+            return ctx->weight_adapter->forward_with_lora(ctx, x, w, b, prefix, forward_params);
         }
-        return ggml_ext_conv_2d(ctx->ggml_ctx,
+        return ggml_ext_conv_2d(ctx,
                                 x,
                                 w,
                                 b,
@@ -656,9 +585,9 @@ public:
                 forward_params.conv2d.circular_x = ctx->circular_x_enabled;
                 forward_params.conv2d.circular_y = ctx->circular_y_enabled;
                 forward_params.conv2d.scale      = scale;
-                return ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x, w, b, prefix, forward_params);
+                return ctx->weight_adapter->forward_with_lora(ctx, x, w, b, prefix, forward_params);
             }
-            return ggml_ext_conv_2d(ctx->ggml_ctx, x, w, b,
+            return ggml_ext_conv_2d(ctx, x, w, b,
                                     stride.second, stride.first,
                                     padding.second, padding.first,
                                     dilation.second, dilation.first,
@@ -668,24 +597,15 @@ public:
                                     scale);
         }
 
-        if (groups == in_channels && groups == out_channels) {
-            ggml_tensor* res;
-            if (ctx->conv2d_direct_enabled) {
-                res = ggml_conv_2d_dw_direct(ctx->ggml_ctx, w, x,
-                                             stride.second, stride.first,
-                                             padding.second, padding.first,
-                                             dilation.second, dilation.first);
-            } else {
-                res = ggml_conv_2d_dw(ctx->ggml_ctx, w, x,
-                                      stride.second, stride.first,
-                                      padding.second, padding.first,
-                                      dilation.second, dilation.first);
-            }
-            if (b) {
-                b   = ggml_reshape_4d(ctx->ggml_ctx, b, 1, 1, b->ne[0], 1);
-                res = ggml_add_inplace(ctx->ggml_ctx, res, b);
-            }
-            return res;
+        if (!ctx->weight_adapter || (groups == in_channels && groups == out_channels)) {
+            return ggml_ext_conv_2d_grouped(ctx, x, w, b, groups,
+                                            stride.second, stride.first,
+                                            padding.second, padding.first,
+                                            dilation.second, dilation.first,
+                                            ctx->conv2d_direct_enabled,
+                                            ctx->circular_x_enabled,
+                                            ctx->circular_y_enabled,
+                                            scale);
         }
 
         int64_t ic_g = in_channels / groups;
@@ -712,33 +632,22 @@ public:
                 b_i             = ggml_view_1d(ctx->ggml_ctx, b, oc_g, b_offset);
             }
 
-            if (ctx->weight_adapter) {
-                WeightAdapter::ForwardParams forward_params;
-                forward_params.op_type           = WeightAdapter::ForwardParams::op_type_t::OP_CONV2D;
-                forward_params.conv2d.s0         = stride.second;
-                forward_params.conv2d.s1         = stride.first;
-                forward_params.conv2d.p0         = padding.second;
-                forward_params.conv2d.p1         = padding.first;
-                forward_params.conv2d.d0         = dilation.second;
-                forward_params.conv2d.d1         = dilation.first;
-                forward_params.conv2d.direct     = ctx->conv2d_direct_enabled;
-                forward_params.conv2d.circular_x = ctx->circular_x_enabled;
-                forward_params.conv2d.circular_y = ctx->circular_y_enabled;
-                forward_params.conv2d.scale      = scale;
-                out_slices[i]                    = ctx->weight_adapter->forward_with_lora(ctx->ggml_ctx, ctx->backend, x_i, w_i, b_i, prefix, forward_params);
-            } else {
-                out_slices[i] = ggml_ext_conv_2d(ctx->ggml_ctx, x_i, w_i, b_i,
-                                                 stride.second, stride.first,
-                                                 padding.second, padding.first,
-                                                 dilation.second, dilation.first,
-                                                 ctx->conv2d_direct_enabled,
-                                                 ctx->circular_x_enabled,
-                                                 ctx->circular_y_enabled,
-                                                 scale);
-            }
+            WeightAdapter::ForwardParams forward_params;
+            forward_params.op_type           = WeightAdapter::ForwardParams::op_type_t::OP_CONV2D;
+            forward_params.conv2d.s0         = stride.second;
+            forward_params.conv2d.s1         = stride.first;
+            forward_params.conv2d.p0         = padding.second;
+            forward_params.conv2d.p1         = padding.first;
+            forward_params.conv2d.d0         = dilation.second;
+            forward_params.conv2d.d1         = dilation.first;
+            forward_params.conv2d.direct     = ctx->conv2d_direct_enabled;
+            forward_params.conv2d.circular_x = ctx->circular_x_enabled;
+            forward_params.conv2d.circular_y = ctx->circular_y_enabled;
+            forward_params.conv2d.scale      = scale;
+            out_slices[i]                    = ctx->weight_adapter->forward_with_lora(ctx, x_i, w_i, b_i, prefix, forward_params);
         }
 
-        ggml_tensor* out = ggml_ext_vec_concat(ctx->ggml_ctx, out_slices, 2);
+        ggml_tensor* out = ggml_ext_vec_concat(ctx, out_slices, 2);
 
         return out;
     }
@@ -792,7 +701,7 @@ public:
         ggml_tensor* w = params["weight"];
         ggml_tensor* b = nullptr;
         if (ctx->weight_adapter) {
-            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+            w = ctx->weight_adapter->patch_weight(ctx, w, prefix + "weight");
             if (w->type != GGML_TYPE_F16) {
                 w = ggml_cast(ctx->ggml_ctx, w, GGML_TYPE_F16);
             }
@@ -800,10 +709,10 @@ public:
         if (bias) {
             b = params["bias"];
             if (ctx->weight_adapter) {
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                b = ctx->weight_adapter->patch_weight(ctx, b, prefix + "bias");
             }
         }
-        return ggml_ext_conv_3d(ctx->ggml_ctx, ctx->backend, x, w, b, in_channels,
+        return ggml_ext_conv_3d(ctx, x, w, b, in_channels,
                                 std::get<2>(stride), std::get<1>(stride), std::get<0>(stride),
                                 std::get<2>(padding), std::get<1>(padding), std::get<0>(padding),
                                 std::get<2>(dilation), std::get<1>(dilation), std::get<0>(dilation),
@@ -848,16 +757,16 @@ public:
         if (elementwise_affine) {
             w = params["weight"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+                w = ctx->weight_adapter->patch_weight(ctx, w, prefix + "weight");
             }
             if (bias) {
                 b = params["bias"];
                 if (ctx->weight_adapter) {
-                    b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                    b = ctx->weight_adapter->patch_weight(ctx, b, prefix + "bias");
                 }
             }
         }
-        return ggml_ext_layer_norm(ctx->ggml_ctx, x, w, b, eps);
+        return ggml_ext_layer_norm(ctx, x, w, b, eps);
     }
 };
 
@@ -896,11 +805,11 @@ public:
             w = params["weight"];
             b = params["bias"];
             if (ctx->weight_adapter) {
-                w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
-                b = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, b, prefix + "bias");
+                w = ctx->weight_adapter->patch_weight(ctx, w, prefix + "weight");
+                b = ctx->weight_adapter->patch_weight(ctx, b, prefix + "bias");
             }
         }
-        return ggml_ext_group_norm(ctx->ggml_ctx, x, w, b, num_groups, eps);
+        return ggml_ext_group_norm(ctx, x, w, b, num_groups, eps);
     }
 };
 
@@ -940,10 +849,11 @@ public:
         }
         ggml_tensor* w = params["weight"];
         if (ctx->weight_adapter) {
-            w = ctx->weight_adapter->patch_weight(ctx->ggml_ctx, ctx->backend, w, prefix + "weight");
+            w = ctx->weight_adapter->patch_weight(ctx, w, prefix + "weight");
         }
         x = ggml_rms_norm(ctx->ggml_ctx, x, eps);
-        x = ggml_mul_inplace(ctx->ggml_ctx, x, w);
+        // The affine multiply may run on a different backend after normalization falls back.
+        x = ggml_mul(ctx->ggml_ctx, x, w);
         return x;
     }
 };
@@ -1000,7 +910,7 @@ public:
         if (proj_in) {
             auto in_proj = std::dynamic_pointer_cast<Linear>(blocks[in_proj_name]);
             auto qkv     = in_proj->forward(ctx, x);
-            auto qkv_vec = split_qkv(ctx->ggml_ctx, qkv);
+            auto qkv_vec = ggml_ext_chunk(ctx, qkv, 3, 0);
             q            = qkv_vec[0];
             k            = qkv_vec[1];
             v            = qkv_vec[2];
