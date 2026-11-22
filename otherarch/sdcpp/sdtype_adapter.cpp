@@ -435,12 +435,6 @@ static uint8_t * upscale_src_buffer = NULL;
 static std::vector<uint8_t *> input_extraimage_buffers;
 const int max_extra_images = 4;
 
-// per-request pool of reference images (original request order) served by
-// prompt_image_from_refs for <image:N> prompt tags; the callback itself is
-// registered once at model load
-static std::vector<sd_image_t> prompt_ref_image_pool;
-static bool prompt_refs_zero_based = false;
-
 static bool sd_is_quiet = false;
 
 struct gendata_st {
@@ -846,20 +840,30 @@ static std::string strip_image_tags(const std::string& text, bool zero_based)
     }
 }
 
-// callback registered at model load (sd_set_prompt_image_callback): resolves
-// <image:N> / <image:+N> prompt tags to the per-request reference image pool
-static bool prompt_image_from_refs(const char* source, void* /*data*/, sd_image_t* image_out)
+struct PromptImageRef {
+    // per-request pool of reference images (original request order) served by
+    // prompt_image_from_refs for <image:N> prompt tags
+    std::vector<sd_image_t> image_pool;
+    bool zero_based = false;
+};
+
+// callback registered per-generation: resolves
+// <image:N> / <image:+N> prompt tags to the reference image pool
+static bool prompt_image_from_refs(const char* source, void* data, sd_image_t* image_out)
 {
+    PromptImageRef *rdata = reinterpret_cast<PromptImageRef*>(data);
+    if (rdata == nullptr)
+        return false;
     int idx;
     bool plus;
     if (!source || !parse_image_tag_source(source, idx, plus)) {
         return false;
     }
-    idx = prompt_refs_zero_based ? idx : idx - 1;
-    if (idx < 0 || idx >= (int)prompt_ref_image_pool.size()) {
+    idx = rdata->zero_based ? idx : idx - 1;
+    if (idx < 0 || idx >= (int)rdata->image_pool.size()) {
         return false;
     }
-    const sd_image_t& image = prompt_ref_image_pool[idx];
+    const sd_image_t& image = rdata->image_pool[idx];
     if (!image.data) {
         return false;
     }
@@ -1910,8 +1914,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     sd_set_progress_callback(progress_callback, nullptr);
     sd_set_generation_progress_callback(sd_ctx, generation_progress_callback, nullptr);
-    // <image:N> prompt tag resolution; the per-request pool is set in sdtype_generate
-    sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, nullptr);
 
     return true;
 }
@@ -2502,8 +2504,15 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             }
         }
     }
-    prompt_ref_image_pool.clear();
-    prompt_refs_zero_based = image_tags.zero_based;
+
+    PromptImageRef prompt_image_ref;
+    struct CleanupImageCallbackOnExit {
+        ~CleanupImageCallbackOnExit() {
+            sd_set_prompt_image_callback(sd_ctx, nullptr, nullptr);
+        }
+    } cleanup_image_callback_onexit;
+    sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, &prompt_image_ref);
+    prompt_image_ref.zero_based = image_tags.zero_based;
 
     if (gp.sample_method == sample_method_t::SAMPLE_METHOD_COUNT) {
         gp.sample_method = sd_get_default_sample_method(sd_ctx);
@@ -2696,7 +2705,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     if(gp.img.extra_images.size()>0)
     {
         if (vision_tags_active) {
-            prompt_ref_image_pool.resize(std::min(gp.img.extra_images.size(), (size_t)max_extra_images));
+            prompt_image_ref.image_pool.resize(std::min(gp.img.extra_images.size(), (size_t)max_extra_images));
         }
         for(int i=0;i<gp.img.extra_images.size() && i<max_extra_images;++i)
         {
@@ -2764,7 +2773,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 continue;
             }
             if (vision_tags_active) {
-                prompt_ref_image_pool[i] = image;
+                prompt_image_ref.image_pool[i] = image;
                 if (image_tags.hidden.count(i)) {
                     continue; // used only as VLM context, kept out of the ref list
                 }
