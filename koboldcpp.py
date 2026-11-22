@@ -6096,6 +6096,14 @@ def get_my_epurl():
 
 proxy_reload_lock = threading.Lock()
 
+def admin_idle_timeout_expired(activity, timeout, now):
+    last_active = activity.get("last_active_timestamp")
+    return bool(timeout > 0 and last_active
+        and activity.get("load_complete")
+        and not activity.get("restart_target")
+        and not activity.get("active_requests", 0)
+        and (now - last_active).total_seconds() > timeout)
+
 def header_password_matches(headers, target_password, target_alt_password=None):
     if not target_password:
         return True
@@ -6245,6 +6253,9 @@ class KcppProxyHandler(http.server.BaseHTTPRequestHandler):
                     and requestedType not in loadedReqTypes
                     and requestedType != global_memory["swapReqType"])
                 if swapModeChanged:
+                    # Publish activity before the requested type: the manager must
+                    # not interpret this wake-up as an already-idle loaded model.
+                    global_memory["last_active_timestamp"] = datetime.now()
                     global_memory["swapReqType"] = requestedType
 
                 if (global_memory["swapReqType"] is not None and swapModeChanged):
@@ -8661,7 +8672,7 @@ Change Mode<br>
                     targetfile = ""
                 if targetfile and targetfile!="":
                     if targetfile=="unload_model" or targetfile=="initial_model": #special request to simply unload model or swap back top intial model
-                        print("Admin: Received request to unload model")
+                        print("Admin: Received request to unload model" if targetfile == "unload_model" else "Admin: Received request to reload initial model")
                         global_memory["restart_target"] = targetfile
                         global_memory["restart_override_base_config"] = ""
                         resp = {"success": True}
@@ -14486,13 +14497,13 @@ def main(launch_args, default_args):
                     restart_override_base_config = global_memory["restart_override_base_config"]
                     activity = global_memory.copy()
                     last_active = activity["last_active_timestamp"]
-                    if last_active and args.adminunloadtimeout>0 and not activity.get("active_requests", 0):
+                    if not restart_target and admin_idle_timeout_expired(activity, args.adminunloadtimeout, datetime.now()):
                         curtime = datetime.now()
                         elapsedtime = curtime - last_active
                         time_since_last_active = elapsedtime.total_seconds()
                         if time_since_last_active > args.adminunloadtimeout:
                             if args.autoswapmode:
-                                if global_memory["swapReqType"] is not None and global_memory["swapReqType"] != "nomodel":
+                                if activity.get("loadedReqTypes"):
                                     print(f"[Unload Timeout] Inactive for over {time_since_last_active}s, unloading models via autoswap...")
                                     global_memory["swapReqType"] = "nomodel"
                                     global_memory["triggered_sleeping"] = True
@@ -15654,6 +15665,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     print(f"StableUI is available at {endpoint_url}/sdui/")
                 if args.musicdiffusion or args.musicllm or args.ttsmodel or args.transcribemodel:
                     print(f"MusicUI is available at {endpoint_url}/musicui/")
+        if global_memory is not None:
+            global_memory["last_active_timestamp"] = datetime.now()
             global_memory["load_complete"] = True
         if args.launch:
             def launch_browser_thread():
