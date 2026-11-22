@@ -450,10 +450,6 @@ static std::mutex g_sd_params_mux;
 // at exit is harmless.
 static SDParams* sd_params = nullptr;
 static int sddebugmode = 0;
-static uint8_t * input_image_buffer = NULL;
-static uint8_t * input_mask_buffer = NULL;
-static uint8_t * upscale_src_buffer = NULL;
-static std::vector<uint8_t *> input_extraimage_buffers;
 const int max_extra_images = 4;
 
 static bool sd_is_quiet = false;
@@ -1938,8 +1934,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         set_lora_cache(new_params->sd_ctx, false);
     }
 
-    input_extraimage_buffers.reserve(max_extra_images);
-
     //load upscaler if provided
     if (klp.upscaler_filename!="") {
         const int upscale_tile_size = 128;
@@ -2732,14 +2726,18 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     fflush(stdout);
 
-    if(input_extraimage_buffers.size()>0) //just in time free old buffer
-    {
-        for(int i=0;i<input_extraimage_buffers.size();++i)
-        {
-            stbi_image_free(input_extraimage_buffers[i]);
+    struct ImageBuffer {
+        uint8_t * input = nullptr;
+        uint8_t * mask = nullptr;
+        std::vector<uint8_t *> extra;
+        ~ImageBuffer() {
+            stbi_image_free(input);
+            stbi_image_free(mask);
+            for(auto buf : extra) {
+                stbi_image_free(buf);
+            }
         }
-        input_extraimage_buffers.clear();
-    }
+    } image_buffer;
 
     auto load_extra_image = [&](const std::string& b64, bool resize_to_generation) -> sd_image_t {
         sd_image_t image = {0,0,0,nullptr};
@@ -2752,7 +2750,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             : load_image_from_b64(b64,nx2,ny2);
         if(loaded)
         {
-            input_extraimage_buffers.push_back(loaded);
+            image_buffer.extra.push_back(loaded);
             image.width = nx2;
             image.height = ny2;
             image.channel = 3;
@@ -2812,7 +2810,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         }
                         if(loaded)
                         {
-                            input_extraimage_buffers.push_back(loaded);
+                            image_buffer.extra.push_back(loaded);
                             image.width = nx2;
                             image.height = ny2;
                             image.channel = desiredchannels;
@@ -2825,7 +2823,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                     uint8_t * loaded = load_image_from_b64(gp.img.extra_images[i],nx2,ny2);
                     if(loaded)
                     {
-                        input_extraimage_buffers.push_back(loaded);
+                        image_buffer.extra.push_back(loaded);
                         image.width = nx2;
                         image.height = ny2;
                         image.channel = desiredchannels;
@@ -3089,33 +3087,22 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     } else {
 
-        if(input_image_buffer!=nullptr) //just in time free old buffer
-        {
-             stbi_image_free(input_image_buffer);
-             input_image_buffer = nullptr;
-        }
+        image_buffer.input = load_image_from_b64(gp.img.init_image,nx,ny,img2imgW,img2imgH,3);
 
-        input_image_buffer = load_image_from_b64(gp.img.init_image,nx,ny,img2imgW,img2imgH,3);
-
-        if (!input_image_buffer) {
+        if (!image_buffer.input) {
             return sd_generation.error("KCPP SD: load image from memory failed!");
         }
 
         if(gp.img.mask!="")
         {
             int nx2, ny2, nc2;
-            if(input_mask_buffer!=nullptr) //just in time free old buffer
-            {
-                stbi_image_free(input_mask_buffer);
-                input_mask_buffer = nullptr;
-            }
-            input_mask_buffer = load_image_from_b64(gp.img.mask,nx2,ny2,img2imgW,img2imgH,1);
+            image_buffer.mask = load_image_from_b64(gp.img.mask,nx2,ny2,img2imgW,img2imgH,1);
 
             if(gp.img.flip_mask)
             {
                 int bufsiz = nx2 * ny2 * 1; //1 channel
                 for (int i = 0; i < bufsiz; ++i) {
-                    input_mask_buffer[i] = 255 - input_mask_buffer[i];
+                    image_buffer.mask[i] = 255 - image_buffer.mask[i];
                 }
             }
         }
@@ -3123,12 +3110,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         input_image.width = img2imgW;
         input_image.height = img2imgH;
         input_image.channel = img2imgC;
-        input_image.data = input_image_buffer;
+        input_image.data = image_buffer.input;
 
         uint8_t* mask_image_buffer    = NULL;
         std::vector<uint8_t> default_mask_image_vec(img2imgW * img2imgH * img2imgC, 255);
         if (gp.img.mask != "") {
-            mask_image_buffer = input_mask_buffer;
+            mask_image_buffer = image_buffer.mask;
         } else {
             mask_image_buffer = default_mask_image_vec.data();
         }
@@ -3453,12 +3440,8 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 
     std::string rawb64 = inputs.init_images;
     int nx, ny;
-    if(upscale_src_buffer!=nullptr) //just in time free old buffer
-    {
-        stbi_image_free(upscale_src_buffer);
-        upscale_src_buffer = nullptr;
-    }
-    upscale_src_buffer = load_image_from_b64(rawb64,nx,ny);
+    std::unique_ptr<uint8_t, decltype(&stbi_image_free)> upscale_src_buffer(
+        load_image_from_b64(rawb64,nx,ny), &stbi_image_free);
     sd_image_t source_img;
     source_img.data = nullptr;
     std::string result;
@@ -3467,7 +3450,7 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         source_img.width = nx;
         source_img.height = ny;
         source_img.channel = 3;
-        source_img.data = upscale_src_buffer;
+        source_img.data = upscale_src_buffer.get();
 
         result = upscale_image_to_png_base64(upscaler_ctx, source_img, inputs.upscaling_resize);
     }
