@@ -374,6 +374,12 @@ extern "C"
         return chat_template.c_str();
     }
 
+    const char* get_eos_token_text() {
+        static std::string eos_token;
+        eos_token = gpttype_get_eos_token_text();
+        return eos_token.c_str();
+    }
+
     static std::string parsed_tool_calls = "";
     const char* parse_chat_tool_calls(const char * generated_text,
                                       const char * tools_json,

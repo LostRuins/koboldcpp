@@ -210,6 +210,7 @@ has_audio_support = False
 has_vision_support = False
 has_whisper = False
 cached_chat_template = None
+cached_eos_token = ""
 cached_sd_info = {}
 cached_sd_custom_sigmas = {}
 cached_jinja_kwargs = None
@@ -1171,6 +1172,9 @@ def init_library():
     handle.token_count.restype = token_count_outputs
     handle.get_pending_output.restype = ctypes.c_char_p
     handle.get_chat_template.restype = ctypes.c_char_p
+    if hasattr(handle, "get_eos_token_text"):
+        handle.get_eos_token_text.restype = ctypes.c_char_p
+        handle.get_eos_token_text.argtypes = []
     handle.parse_chat_tool_calls.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_bool, ctypes.c_bool]
     handle.parse_chat_tool_calls.restype = ctypes.c_char_p
 
@@ -4841,9 +4845,9 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
             last_assist_msg = "" if not assist_should_prefill else last_assist_msg
             messages_for_render = messages[:-1] if len(messages) > 1 and assist_should_prefill else messages
         if tools and len(tools)>0:
-            text = jinja_compiled_template.render(messages=messages_for_render, tools=tools, add_generation_prompt=True, bos_token="", eos_token="", **chat_template_kwargs)
+            text = jinja_compiled_template.render(messages=messages_for_render, tools=tools, add_generation_prompt=True, bos_token="", eos_token=cached_eos_token, **chat_template_kwargs)
         else:
-            text = jinja_compiled_template.render(messages=messages_for_render, add_generation_prompt=True, bos_token="", eos_token="", **chat_template_kwargs)
+            text = jinja_compiled_template.render(messages=messages_for_render, add_generation_prompt=True, bos_token="", eos_token=cached_eos_token, **chat_template_kwargs)
         if assist_should_prefill and text and last_assist_msg: # handle prefill continuations
             text = text + last_assist_msg
         return text if text else None
@@ -14730,6 +14734,7 @@ def disableSwappedFieldsInConfig(args, swapReqType):
 def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
     global embedded_kailite, embedded_kcpp_docs, embedded_kcpp_sdui, embedded_kailite_gz, embedded_kcpp_docs_gz, embedded_kcpp_sdui_gz, embedded_lcpp_ui_gz, embedded_musicui, embedded_musicui_gz, start_time, exitcounter, global_memory, using_gui_launcher
     global libname, args, friendlymodelname, friendlysdmodelname, fullsdmodelpath, password, fullwhispermodelpath, ttsmodelpath, embeddingsmodelpath, musicdiffusionmodelpath, musicllmmodelpath, friendlyembeddingsmodelname, has_audio_support, has_vision_support, cached_chat_template, cached_jinja_kwargs, cached_sd_info, preloaded_custom_jinja
+    global cached_eos_token
 
     start_server = True
 
@@ -15238,6 +15243,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
         if args.model_param:
             ctbytes = handle.get_chat_template()
             cached_chat_template = ctypes.string_at(ctbytes).decode("UTF-8","ignore")
+            eos_bytes = handle.get_eos_token_text() if hasattr(handle, "get_eos_token_text") else b""
+            cached_eos_token = eos_bytes.decode("UTF-8", "ignore")
             if cached_chat_template != "" and (chatcompl_adapter_list is not None and isinstance(chatcompl_adapter_list, list)):
                 for entry in chatcompl_adapter_list:
                     if all(s in cached_chat_template for s in entry['search']):
