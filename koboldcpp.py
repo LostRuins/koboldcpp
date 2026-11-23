@@ -510,7 +510,10 @@ class generation_inputs(ctypes.Structure):
                 ("logit_biases", ctypes.POINTER(logit_bias)),
                 ("banned_tokens_len", ctypes.c_int),
                 ("banned_tokens", ctypes.POINTER(ctypes.c_char_p)),
-                ("reasoning_budget", ctypes.c_int)]
+                ("reasoning_budget", ctypes.c_int),
+                ("lookahead_retries", ctypes.c_int),
+                ("lookahead_threshold", ctypes.c_float),
+                ("lookahead_max_len", ctypes.c_int)]
 
 class generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -1754,8 +1757,7 @@ def get_capabilities():
     has_router = True if args.routermode else False
     musicfamily_raw = handle.music_get_family()
     musicfamily = musicfamily_raw.decode("UTF-8", "ignore") if musicfamily_raw else "none"
-    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":visionSupport,"audio":audioSupport,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "music":has_music, "musicllm":bool(musicllmmodelpath), "musicfamily":musicfamily, "savedata":(savedata_obj is not None), "admin": admin_type, "router":has_router, "guidance": has_guidance, "jinja": has_jinja, "mcp":has_mcp, "parallelrequests":args.parallelrequests, "defaults_modified":bool(args.gendefaults)}
-
+    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":visionSupport,"audio":audioSupport,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "music":has_music, "musicllm":bool(musicllmmodelpath), "musicfamily":musicfamily, "savedata":(savedata_obj is not None), "admin": admin_type, "router":has_router, "guidance": has_guidance, "jinja": has_jinja, "mcp":has_mcp, "parallelrequests":args.parallelrequests, "defaults_modified":bool(args.gendefaults), "lookahead":True}
 
 def scan_directory(dirpath, valid_exts, depth):
     files = []
@@ -2705,6 +2707,10 @@ def generate(genparams, stream_flag=False):
         inputs.banned_tokens[n] = tok.encode("UTF-8")
 
     inputs.reasoning_budget = reasoning_budget
+
+    inputs.lookahead_retries = max(0, min(16, tryparseint(genparams.get('lookahead_retries', 0),0)))
+    inputs.lookahead_threshold = tryparsefloat(genparams.get('lookahead_threshold', 0.9),0.9)
+    inputs.lookahead_max_len = tryparseint(genparams.get('lookahead_max_len', 48),48)
 
     currentusergenkey = genkey
     totalgens += 1

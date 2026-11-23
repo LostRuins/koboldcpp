@@ -213,6 +213,20 @@ static int delayed_generated_tokens_limit = 0;
 std::deque<std::string> delayed_generated_tokens; //for use with antislop sampling
 static std::map<int,std::vector<int>> antislop_banned_token_ids; //first is the npast position, second is the array of banned ids at that index
 
+struct lookahead_state
+{
+    bool active = false;
+    int retries = 0;
+    float threshold = 0.9f;
+    int max_len = 64;
+    int gen_start = 0;
+    int keep_from = 0;
+    int hold_start = -1;
+    int hold_len = 0;
+    bool hold_ending = false;
+};
+static lookahead_state lookahead_st;
+
 static int savestate_limit = 0;
 static std::vector<savestate_data> savestates;
 static const int smartcache_rnn_lifeboat_min_prompt_tokens = 2048;
@@ -907,6 +921,66 @@ bool ContextRewind(std::vector<int> &embd, std::vector<int> &current_context_tok
         embd.push_back(current_context_tokens[current_context_tokens.size()-1]);
     }
     return true;
+}
+
+static float la_logsumexp(const float * logits, int n)
+{
+    float mx = -INFINITY;
+    for(int i = 0; i < n; ++i) { mx = std::max(mx, logits[i]); }
+    double sum = 0.0;
+    for(int i = 0; i < n; ++i) { sum += std::exp((double)(logits[i] - mx)); }
+    return (float)((double)mx + std::log(sum));
+}
+
+static int lookahead_word_start(int from)
+{
+    const int ctxsz = (int)current_context_tokens.size();
+    const int dsz = (int)delayed_generated_tokens.size();
+    const int lowest = std::max(lookahead_st.gen_start, ctxsz - dsz);
+    auto tok = [&](int i) -> const std::string & { return delayed_generated_tokens[dsz - (ctxsz - i)]; };
+    for(int i = std::min(from, ctxsz - 1); i > lowest; --i)
+    {
+        const std::string & s = tok(i);
+        bool has_word = false;
+        for(unsigned char c : s) {
+            if(std::isalnum(c) || c >= 128) {
+                has_word = true;
+                break;
+            }
+        }
+        if(!has_word) { continue; }
+        const std::string & prev = tok(i - 1);
+        if(std::isspace((unsigned char)s[0]) || (!prev.empty() && std::isspace((unsigned char)prev.back())))
+        {
+            return i;
+        }
+    }
+    return lowest;
+}
+
+static int lookahead_on_token(float prob)
+{
+    lookahead_state & st = lookahead_st;
+    const int last = (int)current_context_tokens.size() - 1;
+    if(st.hold_start < 0)
+    {
+        if(prob > st.threshold)
+        {
+            st.hold_start = lookahead_word_start(last - 1);
+            st.hold_len = 1;
+            st.hold_ending = (st.hold_len >= st.max_len);
+        }
+        else
+        {
+            st.keep_from = lookahead_word_start(last);
+        }
+    }
+    else
+    {
+        st.hold_len += 1;
+        st.hold_ending = (prob <= st.threshold || st.hold_len >= st.max_len);
+    }
+    return std::max(0, last + 1 - (st.hold_start >= 0 ? st.hold_start : st.keep_from));
 }
 
 const char * kcpp_print_system_info(void) {
@@ -7609,6 +7683,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         printf("\nBanned a total of %zu phrases, with max token count of %d.\n",banned_phrases.size(),delayed_generated_tokens_limit);
     }
 
+    lookahead_st = lookahead_state();
+    lookahead_st.retries = std::max(0, std::min(inputs.lookahead_retries, 16));
+    if(std::isfinite(inputs.lookahead_threshold) && inputs.lookahead_threshold > 0.0f && inputs.lookahead_threshold < 1.0f) { lookahead_st.threshold = inputs.lookahead_threshold; }
+    if(inputs.lookahead_max_len > 0) { lookahead_st.max_len = std::min(inputs.lookahead_max_len, 512); }
+
     logit_biases.clear();
     for(int x=0;x<inputs.logit_biases_len;++x)
     {
@@ -8650,6 +8729,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             if (!startedsampling)
             {
                 startedsampling = true;
+                if(lookahead_st.retries > 0 && banned_phrases.size() > 0)
+                {
+                    lookahead_st.active = true;
+                    lookahead_st.gen_start = lookahead_st.keep_from = (int)current_context_tokens.size();
+                }
                 if(draft_spec)
                 {
                     llama_tokens prompt_tokens;
@@ -8783,6 +8867,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
                 }
 
+                const float lookahead_lse = (lookahead_st.active ? la_logsumexp(logitsPtr, n_vocab) : 0.0f);
+
                 //handle temp bans from antislop
                 if (antislop_banned_token_ids.find(n_past) != antislop_banned_token_ids.end()) {
                     std::vector<int>& bans = antislop_banned_token_ids[n_past];
@@ -8799,6 +8885,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 kcpp_data->dry_allowed_length, kcpp_data->dry_penalty_last_n, kcpp_data->xtc_threshold, kcpp_data->xtc_probability,
                 sampler_order, grammar, dynatemp_range, dynatemp_exponent, smoothing_factor, smoothing_curve, adaptive_target, adaptive_decay,
                 thinking_start_sequence, thinking_end_sequence, thinking_end_phrase_toksleft, kcpp_data->reasoning_budget);
+
+                const float lookahead_tok_prob = (lookahead_st.active ? std::exp(logitsPtr[id] - lookahead_lse) : 0.0f);
 
                 if(draft_used)
                 {
@@ -8851,7 +8939,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     }
 
                     delayed_generated_tokens.push_back(tokenizedstr);
-                    while(delayed_generated_tokens.size() > delayed_generated_tokens_limit && delayed_generated_tokens.size() > 0)
+                    const int la_pending = (lookahead_st.active ? lookahead_on_token(lookahead_tok_prob) : 0); // check for railroad
+                    while(delayed_generated_tokens.size() > (delayed_generated_tokens_limit + la_pending) && delayed_generated_tokens.size() > 0)
                     {
                         concat_output_mtx.lock();
                         generated_tokens.push_back(delayed_generated_tokens[0]);
@@ -8915,6 +9004,18 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                     break;
                                 }
                             }
+                            bool la_backtrack = false;
+                            if (lookahead_st.active && lookahead_st.hold_start >= 0)
+                            {
+                                const int la_amt = (int)current_context_tokens.size() - lookahead_st.hold_start;
+                                auto tried = antislop_banned_token_ids.find(lookahead_st.hold_start);
+                                const int la_tries = (tried == antislop_banned_token_ids.end() ? 0 : (int)tried->second.size());
+                                if (la_amt > rewind_amt && la_amt <= (int)delayed_generated_tokens.size() && la_tries < lookahead_st.retries)
+                                {
+                                    rewind_amt = la_amt;
+                                    la_backtrack = true;
+                                }
+                            }
                             if (rewind_amt > 0 && (current_context_tokens.size() - rewind_amt) > 0)
                             {
                                 int last_tok = current_context_tokens[current_context_tokens.size() - rewind_amt];
@@ -8927,6 +9028,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                 if(rwok)
                                 {
                                     delayed_generated_tokens.resize(delayed_generated_tokens.size() - rewind_amt);
+                                    lookahead_st.hold_start = -1;
 
                                     // Check if the key exists
                                     int banindex = n_past+1;
@@ -8940,7 +9042,7 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                     {
                                         auto match_clean = matched;
                                         replace_all(match_clean, "\n", "\\n");
-                                        printf("\n(Banned Phrase Detected: %s - Add ID %d to banlist at index %d, and rewinding %d tokens)\n", match_clean.c_str(), last_tok, banindex, rewind_amt);
+                                        printf("\n(Banned Phrase Detected: %s - Add ID %d to banlist at index %d, and rewinding %d tokens%s)\n", match_clean.c_str(), last_tok, banindex, rewind_amt, (la_backtrack ? " to before the railroad" : ""));
                                     }
 
                                 }
@@ -8948,6 +9050,11 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                             }
                         }
                     }
+                }
+
+                if (lookahead_st.active && lookahead_st.hold_start >= 0 && lookahead_st.hold_ending)
+                {
+                    lookahead_st.hold_start = -1;
                 }
 
                 if(!early_abort)
@@ -8983,9 +9090,15 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
 
                 if(!early_abort)
                 {
+                    std::string la_held = "";
+                    if (lookahead_st.active)
+                    {
+                        la_held = concat_output.substr(concat_output.size() - std::min(concat_output.size(), (size_t)256));
+                        for (const auto &dt : delayed_generated_tokens) { la_held += dt; }
+                    }
                     for (const auto &matched : stop_sequence)
                     {
-                        if (concat_output.find(matched) != std::string::npos)
+                        if (concat_output.find(matched) != std::string::npos || la_held.find(matched) != std::string::npos)
                         {
                             early_abort = true;
                             if(allow_regular_prints)

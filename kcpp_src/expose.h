@@ -156,6 +156,9 @@ struct generation_inputs
     const int banned_tokens_len = 0;
     const char ** banned_tokens = nullptr;
     const int reasoning_budget = -1;
+    const int lookahead_retries = 0;
+    const float lookahead_threshold = 0.9f;
+    const int lookahead_max_len = 64;
 };
 struct generation_outputs
 {
