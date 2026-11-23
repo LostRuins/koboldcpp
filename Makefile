@@ -336,7 +336,21 @@ AMDGPU_ARCH ?= $(or $(firstword $(if $(ROCM_CLANG_DIR),$(wildcard $(ROCM_CLANG_D
 ifeq ($(origin GPU_TARGETS),undefined)
 ROCM_DETECTED_TARGETS := $(if $(AMDGPU_ARCH),$(shell $(AMDGPU_ARCH)))
 ifdef LLAMA_PORTABLE
-GPU_TARGETS := $(sort gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 gfx1010 gfx1030 gfx1031 gfx1032 gfx1100 gfx1101 gfx1102 gfx1200 gfx1201 $(ROCM_DETECTED_TARGETS))
+ROCM_RDNA1_TARGETS := gfx1010
+ROCM_RDNA2_TARGETS := gfx1030 gfx1031 gfx1032
+ROCM_RDNA4_TARGETS := gfx1200 gfx1201
+ifeq ($(LLAMA_HIP_GENERIC_TARGETS),1)
+ROCM_DETECTED_TARGETS := $(filter-out $(ROCM_RDNA1_TARGETS) $(ROCM_RDNA2_TARGETS) $(ROCM_RDNA4_TARGETS),$(ROCM_DETECTED_TARGETS))
+ROCM_RDNA1_TARGETS := gfx10-1-generic
+ROCM_RDNA2_TARGETS := gfx10-3-generic
+ROCM_RDNA4_TARGETS := gfx12-generic
+endif
+# RDNA 3 and 3.5 share a generic target but require different MMQ and MMVQ
+# launch configurations. Keep their device code specialized, as with CDNA.
+# Preserve the original portable coverage, plus gfx1151 for Radeon 8060S.
+GPU_TARGETS := $(sort gfx803 gfx900 gfx906 gfx908 gfx90a gfx942 \
+                    gfx1100 gfx1101 gfx1102 gfx1151 \
+                    $(ROCM_RDNA1_TARGETS) $(ROCM_RDNA2_TARGETS) $(ROCM_RDNA4_TARGETS) $(ROCM_DETECTED_TARGETS))
 else
 GPU_TARGETS := $(sort $(ROCM_DETECTED_TARGETS))
 endif
@@ -360,6 +374,12 @@ HIP_OBJS      += $(patsubst %.cu,%.o,$(filter-out ggml/src/ggml-cuda/ggml-cuda.c
 HIP_OBJS      += $(OBJS_CUDA_TEMP_INST)
 
 HIPFLAGS2    += $(addprefix --offload-arch=,$(GPU_TARGETS))
+ifneq ($(filter %-generic,$(GPU_TARGETS)),)
+HIPFLAGS2    += -mcode-object-version=6
+endif
+ifeq ($(LLAMA_HIP_OFFLOAD_COMPRESS),1)
+HIPFLAGS2    += --offload-compress
+endif
 
 # Order-only prerequisites run once per invocation without forcing recompiles.
 # Keep these checks out of parse-time conditionals so make clean still works.

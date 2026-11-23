@@ -235,14 +235,14 @@ typedef uint64_t ggml_cuda_thread_mask_t;
 #define RDNA3_0
 #endif // defined(RDNA3) && !defined(RDNA3_5)
 
-#if defined(__gfx1030__) || defined(__gfx1031__) || defined(__gfx1032__) || defined(__gfx1033__) || \
+#if defined(__gfx10_3_generic__) || defined(__gfx1030__) || defined(__gfx1031__) || defined(__gfx1032__) || defined(__gfx1033__) || \
     defined(__gfx1034__) || defined(__gfx1035__) || defined(__gfx1036__) || defined(__gfx1037__)
 #define RDNA2
 #endif
 
-#if defined(__gfx1010__) || defined(__gfx1012__) || defined(__gfx1013__)
+#if defined(__gfx10_1_generic__) || defined(__gfx1010__) || defined(__gfx1011__) || defined(__gfx1012__) || defined(__gfx1013__)
 #define RDNA1
-#endif // defined(__gfx1010__) || defined(__gfx1012__) || defined(__gfx1013__)
+#endif
 
 #if defined(RDNA4) || defined(RDNA4_M) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
 #define RDNA // For the entire family
