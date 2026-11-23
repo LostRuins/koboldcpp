@@ -4840,7 +4840,7 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
         chat_template_kwargs = chat_template_kwargs or {}
         last_assist_msg = ""
         single_assistant_prefill = False
-        assistant_prefill_marker = "\ue000KCPP_ASSISTANT_PREFILL_7A4D9C\ue001"
+        assistant_prefill_marker = "\ue000740915260831\ue001"
         if messages:
             last_assist_msg = messages[-1]["content"]
             assist_should_prefill = (messages and messages[-1]["role"].lower() == "assistant" and last_assist_msg and isinstance(last_assist_msg, str) and len(last_assist_msg.strip())>0) #avoid single character newline or space content
