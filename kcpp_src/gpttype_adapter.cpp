@@ -6450,7 +6450,7 @@ std::string gpttype_parse_chat_tool_calls(const std::string & generated_text,
             return "";
         }
 
-        auto tmpls = common_chat_templates_init(nullptr, tmpl_src);
+        auto tmpls = common_chat_templates_init(nullptr, tmpl_src, "", gpttype_get_eos_token_text());
 
         common_chat_msg msg;
         msg.role = "user";

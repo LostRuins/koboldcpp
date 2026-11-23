@@ -4839,17 +4839,21 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
         assist_should_prefill = False
         chat_template_kwargs = chat_template_kwargs or {}
         last_assist_msg = ""
+        single_assistant_prefill = False
         if messages:
             last_assist_msg = messages[-1]["content"]
             assist_should_prefill = (messages and messages[-1]["role"].lower() == "assistant" and last_assist_msg and isinstance(last_assist_msg, str) and len(last_assist_msg.strip())>0) #avoid single character newline or space content
             last_assist_msg = "" if not assist_should_prefill else last_assist_msg
-            messages_for_render = messages[:-1] if len(messages) > 1 and assist_should_prefill else messages
+            single_assistant_prefill = assist_should_prefill and len(messages) == 1
+            messages_for_render = messages if single_assistant_prefill else (messages[:-1] if assist_should_prefill else messages)
+        render_eos_token = "" if single_assistant_prefill else cached_eos_token
+        add_generation_prompt = not single_assistant_prefill
         if tools and len(tools)>0:
-            text = jinja_compiled_template.render(messages=messages_for_render, tools=tools, add_generation_prompt=True, bos_token="", eos_token=cached_eos_token, **chat_template_kwargs)
+            text = jinja_compiled_template.render(messages=messages_for_render, tools=tools, add_generation_prompt=add_generation_prompt, bos_token="", eos_token=render_eos_token, **chat_template_kwargs)
         else:
-            text = jinja_compiled_template.render(messages=messages_for_render, add_generation_prompt=True, bos_token="", eos_token=cached_eos_token, **chat_template_kwargs)
-        if assist_should_prefill and text and last_assist_msg: # handle prefill continuations
-            text = text + last_assist_msg
+            text = jinja_compiled_template.render(messages=messages_for_render, add_generation_prompt=add_generation_prompt, bos_token="", eos_token=render_eos_token, **chat_template_kwargs)
+        if assist_should_prefill and not single_assistant_prefill and last_assist_msg: # handle prefill continuations
+            text = (text or "") + last_assist_msg
         return text if text else None
     except Exception as e:
         print(f"Jinja formatting failed: {e}")
