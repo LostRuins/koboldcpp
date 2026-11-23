@@ -4840,19 +4840,24 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
         chat_template_kwargs = chat_template_kwargs or {}
         last_assist_msg = ""
         single_assistant_prefill = False
+        assistant_prefill_marker = "\ue000KCPP_ASSISTANT_PREFILL_7A4D9C\ue001"
         if messages:
             last_assist_msg = messages[-1]["content"]
             assist_should_prefill = (messages and messages[-1]["role"].lower() == "assistant" and last_assist_msg and isinstance(last_assist_msg, str) and len(last_assist_msg.strip())>0) #avoid single character newline or space content
             last_assist_msg = "" if not assist_should_prefill else last_assist_msg
             single_assistant_prefill = assist_should_prefill and len(messages) == 1
             messages_for_render = messages if single_assistant_prefill else (messages[:-1] if assist_should_prefill else messages)
+            if single_assistant_prefill:
+                messages_for_render[0]["content"] = assistant_prefill_marker
         render_eos_token = "" if single_assistant_prefill else cached_eos_token
         add_generation_prompt = not single_assistant_prefill
         if tools and len(tools)>0:
             text = jinja_compiled_template.render(messages=messages_for_render, tools=tools, add_generation_prompt=add_generation_prompt, bos_token="", eos_token=render_eos_token, **chat_template_kwargs)
         else:
             text = jinja_compiled_template.render(messages=messages_for_render, add_generation_prompt=add_generation_prompt, bos_token="", eos_token=render_eos_token, **chat_template_kwargs)
-        if assist_should_prefill and not single_assistant_prefill and last_assist_msg: # handle prefill continuations
+        if single_assistant_prefill and text and assistant_prefill_marker in text:
+            text = text[:text.find(assistant_prefill_marker)] + last_assist_msg
+        elif assist_should_prefill and last_assist_msg: # handle prefill continuations
             text = (text or "") + last_assist_msg
         return text if text else None
     except Exception as e:
