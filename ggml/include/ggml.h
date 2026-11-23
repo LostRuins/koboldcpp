@@ -439,6 +439,8 @@ extern "C" {
 
         GGML_OP_SLEEP,
 
+        GGML_OP_SIGMOID_BACK,
+
         GGML_OP_COUNT,
 
         //kcpp: dirtypatch of unofficial ops for ttscpp
@@ -1052,6 +1054,13 @@ extern "C" {
     // a - dy
     // b - x
     GGML_API struct ggml_tensor * ggml_silu_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // a - dy
+    // b - x
+    GGML_API struct ggml_tensor * ggml_sigmoid_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
