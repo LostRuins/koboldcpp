@@ -84,6 +84,7 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
 generation_outputs gpttype_generate(const generation_inputs inputs);
 bool gpttype_generate_abort();
 std::string gpttype_get_chat_template();
+std::string gpttype_get_eos_token_text();
 std::string gpttype_parse_chat_tool_calls(const std::string & generated_text,
                                           const std::string & tools_json,
                                           const std::string & chat_template,
