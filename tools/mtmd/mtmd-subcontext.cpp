@@ -2645,8 +2645,8 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             GGML_ABORT("Invalid number of output tokens");
         }
 
-        LOG_DBG("%s: output embedding shape [%d, %d, %d]\n", __func__,
-            (int)embeddings->ne[0], (int)embeddings->ne[1], (int)embeddings->ne[2]);
+        // LOG_DBG("%s: output embedding shape [%d, %d, %d]\n", __func__,
+        //     (int)embeddings->ne[0], (int)embeddings->ne[1], (int)embeddings->ne[2]);
 
         // copy output to user buffer if provided
         // if output is empty, skip the copy

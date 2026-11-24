@@ -2770,6 +2770,7 @@ def run_agent(
     load_session: Path | None = None,
     reasoning_effort: str | None = None,
     request_timeout_override: int | None = None,
+    disable_view_image: bool = False,
 ) -> None:
     global MAX_TOOL_RESULT_CHARS
 
@@ -2821,6 +2822,8 @@ def run_agent(
         model = model or (models[0] if models else "local-model")
 
     disabled_tools = set(session["disabled_tools"]) if session is not None else set()
+    if disable_view_image:
+        disabled_tools.add("view_image")
     tool_confirmation = dict(tool_confirmation or {})
     all_tools = list(TOOLS)
     available_tools = list(TOOLS)
@@ -2886,6 +2889,8 @@ def run_agent(
         session["messages"] if session is not None else
         [{"role": "system", "content": system_prompt(disabled_tools)}]
     )
+    if disable_view_image and session is not None:
+        messages[0] = {"role": "system", "content": system_prompt(disabled_tools)}
     last_usage: dict[str, int] | None = None
     pending_interruption = session["pending_interruption"] if session is not None else False
     pending_attachments: list[dict[str, Any]] = []
@@ -3690,6 +3695,11 @@ def parse_args() -> argparse.Namespace:
         help="Override a tool's confirmation with on, off, or auto. Repeat for multiple tools; last value wins.",
     )
     parser.add_argument(
+        "--disable-view-image",
+        action="store_true",
+        help="Start with the view_image tool disabled (for models without vision support).",
+    )
+    parser.add_argument(
         "--no-color",
         action="store_true",
         help="Disable colored terminal output.",
@@ -3765,6 +3775,7 @@ def main() -> None:
             request_timeout=args.request_timeout,
             no_color=args.no_color,
             load_session=args.load_session,
+            disable_view_image=args.disable_view_image,
             request_timeout_override=(
                 args.request_timeout if request_timeout_explicit else None
             ),

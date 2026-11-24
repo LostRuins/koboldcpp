@@ -13964,7 +13964,7 @@ def get_kobold_agent_path():
 
 
 def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None,
-                             request_timeout=None, no_certify=False):
+                             request_timeout=None, no_certify=False, disable_view_image=False):
     """Run the bundled agent script inside a frozen KoboldCpp process."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -13985,6 +13985,8 @@ def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None,
             sys.argv.extend(["--request-timeout", str(request_timeout)])
         if no_certify:
             sys.argv.append("--nocertify")
+        if disable_view_image:
+            sys.argv.append("--disable-view-image")
         kcpp_agent.main()
     finally:
         sys.argv = old_argv
@@ -13992,7 +13994,7 @@ def run_bundled_kobold_agent(base_url=None, api_key=None, load_session=None,
 
 def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=False,
                                  load_session=None, request_timeout=None,
-                                 no_certify=False):
+                                 no_certify=False, disable_view_image=False):
     """Run the agent in a new or existing terminal, using the bundled runner when frozen."""
     agent_path = get_kobold_agent_path()
     if not os.path.isfile(agent_path):
@@ -14012,6 +14014,8 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
         command.extend(["--reqtimeout" if is_frozen else "--request-timeout", str(request_timeout)])
     if no_certify:
         command.append("--nocertify")
+    if disable_view_image:
+        command.append("--agent-disable-view-image" if is_frozen else "--disable-view-image")
 
     try:
         if same_terminal:
@@ -14123,7 +14127,7 @@ def launch_kobold_agent_terminal(base_url=None, api_key=None, same_terminal=Fals
 
 def launch_kobold_agent_after_mcp_load(
     mcp_load_thread, base_url=None, api_key=None, same_terminal=False, load_session=None,
-    request_timeout=None, no_certify=False
+    request_timeout=None, no_certify=False, disable_view_image=False
 ):
     """Briefly wait for a complete MCP tool list, then launch regardless."""
     if mcp_load_thread is not None:
@@ -14137,7 +14141,8 @@ def launch_kobold_agent_after_mcp_load(
                 "to refresh MCP tools."
             )
     return launch_kobold_agent_terminal(
-        base_url, api_key, same_terminal, load_session, request_timeout, no_certify
+        base_url, api_key, same_terminal, load_session, request_timeout, no_certify,
+        disable_view_image
     )
 
 
@@ -14289,7 +14294,7 @@ def main(launch_args, default_args):
     if args.run_bundled_agent:
         run_bundled_kobold_agent(
             args.agent_base_url, args.agent_api_key, args.agentload, args.reqtimeout,
-            args.nocertify
+            args.nocertify, args.agent_disable_view_image
         )
         return
 
@@ -15864,6 +15869,7 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
                     load_session=args.agentload,
                     request_timeout=args.reqtimeout,
                     no_certify=args.nocertify,
+                    disable_view_image=not (has_vision_support or (autoswapmode and mmprojName is not None)),
                 )
                 if args.cli:
                     raise SystemExit(0 if success else 1)
@@ -16110,6 +16116,7 @@ if __name__ == '__main__':
     internalgroup.add_argument("--run-bundled-agent", "--run-agent", dest="run_bundled_agent", help=argparse.SUPPRESS, action='store_true')
     internalgroup.add_argument("--agent-base-url", help=argparse.SUPPRESS, default=None)
     internalgroup.add_argument("--agent-api-key", help=argparse.SUPPRESS, default=None)
+    internalgroup.add_argument("--agent-disable-view-image", help=argparse.SUPPRESS, action='store_true')
 
     launch_args = parser.parse_args()
     cli_arg_overrides = get_cli_arg_overrides(parser)
