@@ -450,6 +450,7 @@ static std::mutex g_sd_params_mux;
 // at exit is harmless.
 static SDParams* sd_params = nullptr;
 static int sddebugmode = 0;
+static std::string sd_executable_path;
 const int max_extra_images = 4;
 
 static bool sd_is_quiet = false;
@@ -547,7 +548,7 @@ static KcppTokenizerResources kcpp_tokenizer_resources;
 static std::string load_embd_file(std::string& cache, const char* filename)
 {
     if (cache.empty()) {
-        std::string filepath = executable_path + filename;
+        std::string filepath = sd_executable_path + filename;
         cache = read_str_from_disk(filepath);
     }
     return cache;
@@ -1532,7 +1533,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
 
         if(tae_name)
         {
-            kcpp_taesd_path = executable_path + "embd_res/" + tae_name;
+            kcpp_taesd_path = sd_executable_path + "embd_res/" + tae_name;
             if(!file_exists(kcpp_taesd_path))
             {
                 printf("\nCannot use TAESD: \"%s\" not found. TAESD Disabled!\n", kcpp_taesd_path.c_str());
@@ -1573,7 +1574,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     }
 
     const auto resource_missing = [&](const char* name) {
-        return !file_exists(executable_path + "embd_res/" + name);
+        return !file_exists(sd_executable_path + "embd_res/" + name);
     };
 
     // Reconstruct exactly what the existing tokenizer classes need from the
@@ -1691,7 +1692,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     set_sd_log_level(sddebugmode);
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
-    executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
+    sd_executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
 
     auto new_params = std::make_unique<SDParams>();
     SDLoadParams& lp = new_params->load_params;
