@@ -7,8 +7,37 @@
 // note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
 #include <map>
+#include <utility>
+#include <vector>
 
 class llama_memory_hybrid_idx_context;
+
+
+// [KCPP-LOOP] physical-layer schedule for runtime layer looping:
+// [0..head-1] + [head..tail] x cycles + [tail+1..n_phys-1]; entries = {physical il, pass}.
+// pass 0 uses the layer's own KV slot; pass >= 1 map to dedicated copy slots (loop_cache_il).
+static inline void kcpp_loop_schedule(const llama_hparams & hparams, uint32_t n_phys,
+        std::vector<std::pair<uint32_t, uint32_t>> & sched) {
+    sched.clear();
+    if (!hparams.loop_on()) {
+        for (uint32_t il = 0; il < n_phys; ++il) {
+            sched.emplace_back(il, 0);
+        }
+        return;
+    }
+    sched.reserve(n_phys * hparams.loop_cycles);
+    for (uint32_t il = 0; il < hparams.loop_head; ++il) {
+        sched.emplace_back(il, 0);
+    }
+    for (uint32_t c = 0; c < hparams.loop_cycles; ++c) {
+        for (uint32_t il = hparams.loop_head; il <= hparams.loop_tail; ++il) {
+            sched.emplace_back(il, c);
+        }
+    }
+    for (uint32_t il = hparams.loop_tail + 1; il < n_phys; ++il) {
+        sched.emplace_back(il, 0);
+    }
+}
 
 // ref: https://github.com/ggml-org/llama.cpp/pull/28068
 static inline ggml_tensor * build_gdn_l2_norm(ggml_context * ctx, ggml_tensor * x, float eps) {

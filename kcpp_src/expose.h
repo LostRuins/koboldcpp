@@ -96,6 +96,9 @@ struct load_model_inputs
     const int lazy_mode = 1; // llama_lazy_mode: off=0, auto=1, on=2
     const int moe_cache_mib = 0;
     const int parallel_total_context = 0;
+    const int loop_head = 0;   // [KCPP-LOOP] first layer of the looped body (inclusive)
+    const int loop_tail = 0;   // [KCPP-LOOP] last layer of the looped body (inclusive)
+    const int loop_cycles = 1; // [KCPP-LOOP] passes through the body (1 = disabled)
 };
 struct generation_inputs
 {

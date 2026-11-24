@@ -65,7 +65,14 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
+    // [KCPP-LOOP-STABLELM] physical layer schedule: [0..head-1] + [head..tail] x cycles + [tail+1..n_phys-1]
+    const uint32_t n_phys = hparams.loop_base ? hparams.loop_base : (uint32_t) n_layer;
+    std::vector<std::pair<uint32_t, uint32_t>> loop_sched;
+    kcpp_loop_schedule(hparams, n_phys, loop_sched);
+
+    for (const auto & [il_s, loop_pass] : loop_sched) {
+        const int il = (int) il_s;
+        const int il_cache = (int) hparams.loop_cache_il(loop_pass, il_s);
         // norm
         cur = build_norm(inpL,
                 model.layers[il].attn_norm,
@@ -114,9 +121,9 @@ llama_model_stablelm::graph::graph(const llama_model & model, const llm_graph_pa
 
             cur = build_attn(inp_attn,
                     model.layers[il].wo, NULL, model.layers[il].wo_s,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il_cache);
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        if (il == (int) n_phys - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpL  = ggml_get_rows(ctx0,  inpL, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);

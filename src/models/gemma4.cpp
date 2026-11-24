@@ -179,17 +179,24 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    // [KCPP-LOOP] physical layer schedule: [0..head-1] + [head..tail] x cycles + [tail+1..n_phys-1]
+    const uint32_t n_phys = hparams.loop_base ? hparams.loop_base : (uint32_t) n_layer;
+    std::vector<std::pair<uint32_t, uint32_t>> loop_sched;
+    kcpp_loop_schedule(hparams, n_phys, loop_sched);
+
     if (model.per_layer_tok_embd) {
         const float tok_embd_scale = sqrtf((float) n_embd_per_layer);
 
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
-        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, inp_per_layer->ne[1]);
+        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_phys, inp_per_layer->ne[1]);
 
         // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
-    for (int il = 0; il < n_layer; ++il) {
+    for (const auto & [il_s, loop_pass] : loop_sched) {
+        const int il = (int) il_s;
+        const int il_cache = (int) hparams.loop_cache_il(loop_pass, il_s);
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
 
@@ -273,17 +280,17 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
             cur = build_attn(inp_attn, model.layers[il].wo,
                     nullptr, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
-                    hparams.f_attention_scale, il);
+                    hparams.f_attention_scale, il_cache);
         } else {
             // reuse KV cache of earlier layers
             cur = build_attn(inp_attn,
                     model.layers[il].wo, nullptr, model.layers[il].wo_s,
-                    Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+                    Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il_cache);
         }
 
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
-        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+        if (il == (int) n_phys - 1 && crop_before_nextn(inp_out_ids)) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -383,7 +390,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
             // TODO @ngxson : improve this
-            if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
+            if (il == (int) n_phys - 1 && crop_before_nextn(inp_out_ids)) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 

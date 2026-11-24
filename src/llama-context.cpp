@@ -643,7 +643,9 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
 
             // TODO: make this descriptor-specific; model.dev_layer() preserves the current behavior,
             // but is still wrong for cases like --no-kv-offload.
-            ggml_backend_dev_t device_layer = model.dev_layer(node.il);
+            // [KCPP-LOOP] fused nodes of a looped graph carry virtual cache ids;
+            // a virtual layer lives on its source layer's device (identity when loop off)
+            ggml_backend_dev_t device_layer = model.dev_layer(model.hparams.loop_source((uint32_t) node.il));
 
             if (device_fused != device_layer) {
                 LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but %s "
@@ -2580,6 +2582,15 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         res *= 4;
     }
 
+    // [KCPP-LOOP] looped graphs add real nodes per virtual cache slot while
+    // the budgets above scale on tensor count (n_tensors is unchanged by
+    // looping) — scale by the slot ratio so the node hash set fits.
+    if (model.hparams.loop_on()) {
+        const uint32_t n_slots = model.hparams.n_layer_all;
+        const uint32_t n_phys  = model.hparams.loop_base ? model.hparams.loop_base : 1;
+        res = res * n_slots / n_phys;
+    }
+
     return res;
 }
 
@@ -2891,7 +2902,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer_all;
         if (ubatch.n_tokens < 32 || full_offload) {
             if (il != -1 && (strcmp(name, "norm") == 0 || strcmp(name, "l_last") == 0)) {
-                const auto & dev_layer = model.dev_layer(il);
+                const auto & dev_layer = model.dev_layer(model.hparams.loop_source((uint32_t) il));
                 for (const auto & backend : backends) {
                     if (ggml_backend_get_device(backend.get()) == dev_layer) {
                         if (ggml_backend_supports_op(backend.get(), cur)) {
@@ -4092,6 +4103,9 @@ llama_context_params llama_context_default_params() {
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
+        /*.loop_head                   =*/ 0,
+        /*.loop_tail                   =*/ 0,
+        /*.loop_cycles                 =*/ 1,
     };
 
     return result;
@@ -4118,6 +4132,39 @@ llama_context * llama_init_from_model(
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && model->arch == LLM_ARCH_GROK) {
         LLAMA_LOG_WARN("%s: flash_attn is not compatible with Grok - forcing off\n", __func__);
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    }
+
+    // [KCPP-LOOP] validate + apply runtime layer looping (llama + gemma4 bake)
+    if (params.loop_cycles > 1 || params.loop_head != 0 || params.loop_tail != 0) {
+        const auto & hp = model->hparams;
+        const char * loop_err = nullptr;
+        if (hp.vocab_only) {
+            loop_err = "not supported for vocab-only models";
+        } else if (model->arch != LLM_ARCH_LLAMA && model->arch != LLM_ARCH_GEMMA4 &&
+                   model->arch != LLM_ARCH_STABLELM &&
+                   model->arch != LLM_ARCH_MISTRAL3 && model->arch != LLM_ARCH_QWEN2 &&
+                   model->arch != LLM_ARCH_QWEN3 && model->arch != LLM_ARCH_QWEN3MOE) {
+            loop_err = "arch not loop-capable in this bake (llama + gemma4 + stablelm + mistral3 + qwen2/3/3moe)";
+        } else if (hp.n_layer_nextn > 0) {
+            loop_err = "not supported with MTP/nextn layers";
+        } else if (params.loop_cycles < 1 || params.loop_cycles > 8) {
+            loop_err = "loop-cycles must be in [1..8]";
+        } else if (params.loop_head > params.loop_tail ||
+                   params.loop_tail >= (int32_t) hp.n_layer() - 1 ||
+                   (params.loop_cycles > 1 && params.loop_head == 0 && params.loop_tail == 0)) {
+            loop_err = "need loop-head <= loop-tail < n_layer-1 and a non-empty body";
+        }
+        if (loop_err) {
+            LLAMA_LOG_ERROR("%s: kcpp-loop refused: %s (head=%d tail=%d cycles=%d n_layer=%u)\n",
+                    __func__, loop_err, params.loop_head, params.loop_tail, params.loop_cycles, hp.n_layer());
+            return nullptr;
+        }
+        try {
+            const_cast<llama_hparams &>(hp).apply_layer_loop(params.loop_head, params.loop_tail, params.loop_cycles);
+        } catch (const std::exception & e) {
+            LLAMA_LOG_ERROR("%s: kcpp-loop: %s\n", __func__, e.what());
+            return nullptr;
+        }
     }
 
     if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {

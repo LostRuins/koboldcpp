@@ -88,6 +88,38 @@ struct llama_hparams {
     // layer il reads the KV cache of layer kv_source_impl[il] (own cache if equal to il)
     std::array<uint32_t, LLAMA_MAX_LAYERS> kv_source_impl;
 
+    // [KCPP-LOOP] runtime layer-loop config, applied by llama_init_from_model.
+    // loop_base is the physical layer count at load; 0 = looping disabled.
+    // Virtual ids [loop_base .. loop_base + n_body*(cycles-1)) address dedicated
+    // KV cache slots, so pass k of a layer attends only pass-k history (faithful
+    // depth-upscale semantics). Per-layer arrays below are mirrored at the
+    // virtual ids from their source layer.
+    uint32_t loop_head = 0;
+    uint32_t loop_tail = 0;
+    uint32_t loop_cycles = 1;
+    uint32_t loop_base = 0;
+
+    bool loop_on() const { return loop_base > 0 && loop_cycles > 1; }
+    uint32_t loop_n_body() const { return loop_tail + 1 - loop_head; }
+
+    // physical source layer of a (possibly virtual) layer id
+    uint32_t loop_source(uint32_t il) const {
+        if (loop_on() && il >= loop_base) {
+            return loop_head + (il - loop_base) % loop_n_body();
+        }
+        return il;
+    }
+
+    // KV cache slot id for pass p (0-based) of physical layer il
+    uint32_t loop_cache_il(uint32_t pass, uint32_t il) const {
+        if (pass == 0) {
+            return il;
+        }
+        return loop_base + (pass - 1) * loop_n_body() + (il - loop_head);
+    }
+
+    void apply_layer_loop(uint32_t head, uint32_t tail, uint32_t cycles);
+
     // different head size for full_attention and SWA layers
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head

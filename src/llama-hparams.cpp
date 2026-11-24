@@ -2,6 +2,10 @@
 
 #include "ggml.h"
 
+#include "llama-impl.h"
+
+#include <stdexcept>
+
 #include <algorithm>
 #include <cassert>
 
@@ -363,4 +367,48 @@ uint32_t llama_hparams::n_layer() const {
 
 bool llama_hparams::use_mrope() const {
     return rope_sections[0] > 0 && rope_sections[1] > 0;
+}
+
+// [KCPP-LOOP] extend hparams with virtual cache-slot layers for runtime looping
+void llama_hparams::apply_layer_loop(uint32_t head, uint32_t tail, uint32_t cycles) {
+    if (loop_base != 0) {
+        if (loop_head != head || loop_tail != tail || loop_cycles != cycles) {
+            throw std::runtime_error("model already extended with a different kcpp-loop config");
+        }
+        return;
+    }
+
+    const uint32_t n = n_layer_all;
+    const uint32_t n_extra = (tail + 1 - head) * (cycles - 1);
+    if (n + n_extra > LLAMA_MAX_LAYERS) {
+        throw std::runtime_error("kcpp-loop: virtual layer count exceeds LLAMA_MAX_LAYERS");
+    }
+
+    loop_head   = head;
+    loop_tail   = tail;
+    loop_cycles = cycles;
+    loop_base   = n;
+
+    for (uint32_t p = 1; p < cycles; ++p) {
+        for (uint32_t il = head; il <= tail; ++il) {
+            const uint32_t vil = loop_cache_il(p, il);
+            is_swa_impl[vil]       = is_swa_impl[il];
+            kv_source_impl[vil]    = vil;
+            n_head_arr[vil]        = n_head_arr[il];
+            n_head_kv_arr[vil]     = n_head_kv_arr[il];
+            n_ff_arr[vil]          = n_ff_arr[il];
+            n_ff_exp_arr[vil]      = n_ff_exp_arr[il];
+            n_expert_used_arr[vil] = n_expert_used_arr[il];
+        }
+    }
+
+    if (n_layer_kv_from_start >= 0) {
+        // keep the shared-KV boundary ahead of the copy region so the reuse
+        // topology replicates over the copies
+        n_layer_kv_from_start += (int32_t) n_extra;
+    }
+    n_layer_all = n + n_extra;
+
+    LLAMA_LOG_INFO("%s: kcpp-loop: %u physical layers -> %u cache slots (body [%u..%u] x %u passes)\n",
+            __func__, n, n_layer_all, head, tail, cycles);
 }

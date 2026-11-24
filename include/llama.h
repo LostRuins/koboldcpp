@@ -429,6 +429,11 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
+
+        // [KCPP-LOOP] runtime layer looping; 0/0/1 = disabled
+        int32_t loop_head;   // first layer of the looped body (inclusive)
+        int32_t loop_tail;   // last layer of the looped body (inclusive; must be < n_layer-1)
+        int32_t loop_cycles; // number of passes through the body (1 = off)
     };
 
     struct llama_model_tensor_override {

@@ -384,7 +384,10 @@ class load_model_inputs(ctypes.Structure):
                 ("rpc_targets", ctypes.c_char_p),
                 ("lazy_mode", ctypes.c_int),
                 ("moe_cache_mib", ctypes.c_int),
-                ("parallel_total_context", ctypes.c_int)]
+                ("parallel_total_context", ctypes.c_int),
+                ("loop_head", ctypes.c_int),
+                ("loop_tail", ctypes.c_int),
+                ("loop_cycles", ctypes.c_int)]
 
 class generation_inputs(ctypes.Structure):
     _fields_ = [("seed", ctypes.c_int),
@@ -2297,6 +2300,9 @@ def load_model(model_filename):
     inputs.smartcacheslots = sclimit
     inputs.continuous_batching_slots = args.parallelrequests if (args.parallelrequests>1) else 0
     inputs.parallel_total_context = args.paralleltotalcontext if (args.parallelrequests>1) else 0
+    inputs.loop_head = int(getattr(args, "loophead", 0) or 0)
+    inputs.loop_tail = int(getattr(args, "looptail", 0) or 0)
+    inputs.loop_cycles = int(getattr(args, "loopcycles", 1) or 1)
     inputs.rpc_mode = (2 if args.rpcmode=="host" else (1 if args.rpcmode=="connect" else 0))
     inputs.rpc_targets = (args.rpctargets if args.rpcmode=="connect" else "").encode("UTF-8")
 
@@ -14506,6 +14512,9 @@ if __name__ == '__main__':
     parser.add_argument("--launch", help="Launches a web browser when load is completed.", action='store_true')
     parser.add_argument("--tensor_split","--tensorsplit","--tensor-split","-ts", help="For CUDA and Vulkan only, ratio to split tensors across multiple GPUs, space-separated list of proportions, e.g. 7 3", metavar=('[Ratios]'), type=float, nargs='+')
     parser.add_argument("--threads","-t", metavar=('[threads]'), help="Use a custom number of threads if specified. Otherwise, uses an amount based on CPU cores", type=int, default=get_default_threads())
+    parser.add_argument("--loop-head","--loophead","--loop_head", dest="loophead", help="[KCPP-LOOP] first layer of the looped body (0-indexed, inclusive). Typical: ~25%% of layers", type=int, default=0)
+    parser.add_argument("--loop-tail","--looptail","--loop_tail", dest="looptail", help="[KCPP-LOOP] last layer of the looped body (inclusive). Must be < n_layers-1. Typical: ~75%% of layers", type=int, default=0)
+    parser.add_argument("--loop-cycles","--loopcycles","--loop_cycles", dest="loopcycles", help="[KCPP-LOOP] passes through the body (1 = disabled, 2 = standard depth-upscale sim)", type=int, default=1)
     portgroup = parser.add_mutually_exclusive_group() #we want to be backwards compatible with the unnamed positional args
     portgroup.add_argument("--port", metavar=('[portnumber]'), help=f"Port to listen on. (Defaults to {defaultport})", default=defaultport, type=int, action='store')
     portgroup.add_argument("port_param", help="Port to listen on (positional)", default=defaultport, nargs="?", type=int, action='store')

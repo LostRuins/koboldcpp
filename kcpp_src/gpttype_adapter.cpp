@@ -3454,6 +3454,9 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
 
         llama_model_params model_params = llama_model_default_params();
         llama_context_params llama_ctx_params = llama_context_default_params();
+        llama_ctx_params.loop_head = inputs.loop_head;
+        llama_ctx_params.loop_tail = inputs.loop_tail;
+        llama_ctx_params.loop_cycles = inputs.loop_cycles;
         model_params.lazy_mode = static_cast<llama_lazy_mode>(inputs.lazy_mode);
         llama_ctx_params.moe_cache_size = static_cast<size_t>(inputs.moe_cache_mib) * 1024 * 1024;
         const bool configure_batch_cache = continuous_batching_slots > 1 &&
