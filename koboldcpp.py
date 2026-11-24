@@ -550,7 +550,8 @@ class sd_load_model_inputs(ctypes.Structure):
                 ("auto_fit", ctypes.c_bool),
                 ("devices_override", ctypes.c_char_p),
                 ("quiet", ctypes.c_bool),
-                ("debugmode", ctypes.c_int)]
+                ("debugmode", ctypes.c_int),
+                ("params_json", ctypes.c_char_p)]
 
 class sd_generation_inputs(ctypes.Structure):
     _fields_ = [("prompt", ctypes.c_char_p),
@@ -592,7 +593,8 @@ class sd_generation_inputs(ctypes.Structure):
                 ("lora_filenames", ctypes.POINTER(ctypes.c_char_p)),
                 ("lora_multipliers", ctypes.POINTER(ctypes.c_float)),
                 ("custom_sigmas", ctypes.POINTER(ctypes.c_float)),
-                ("custom_sigmas_count", ctypes.c_int)]
+                ("custom_sigmas_count", ctypes.c_int),
+                ("params_json", ctypes.c_char_p)]
 
 class sd_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -604,7 +606,8 @@ class sd_generation_outputs(ctypes.Structure):
 
 class sd_upscale_inputs(ctypes.Structure):
     _fields_ = [("init_images", ctypes.c_char_p),
-                ("upscaling_resize", ctypes.c_int)]
+                ("upscaling_resize", ctypes.c_int),
+                ("params_json", ctypes.c_char_p)]
 
 class sd_info_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),

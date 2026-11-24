@@ -223,6 +223,7 @@ struct sd_load_model_inputs
     const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
+    const char * params_json = nullptr;
 };
 struct sd_generation_inputs
 {
@@ -266,6 +267,7 @@ struct sd_generation_inputs
     const float * lora_multipliers = nullptr;
     const float * custom_sigmas = nullptr;
     const int custom_sigmas_count = 0;
+    const char * params_json = nullptr;
 };
 struct sd_generation_outputs
 {
@@ -280,6 +282,7 @@ struct sd_upscale_inputs
 {
     const char * init_images = "";
     const int upscaling_resize = 0;
+    const char * params_json = nullptr;
 };
 struct sd_info_outputs
 {
