@@ -125,6 +125,52 @@ def parse_reqtimeout(value):
         raise argparse.ArgumentTypeError("must be zero or greater")
     return timeout or default_reqtimeout
 
+
+MMAP_FLAG_NAMES = frozenset(("prefetch", "noprefetch"))
+
+
+def parse_mmap_flag_list(value):
+    """Return (use_mmap, no_prefetch) for legacy booleans or a comma-separated flag list."""
+    if value is None or value is False or value == "":
+        return False, False
+    if not isinstance(value, str):
+        return bool(value), False
+    tokens = [token.strip().lower() for token in value.split(",") if token.strip()]
+    if not tokens:
+        return False, False
+    unknown = set(tokens) - MMAP_FLAG_NAMES
+    if unknown:
+        raise argparse.ArgumentTypeError(f"unknown mmap flag(s): {', '.join(sorted(unknown))}")
+    if "prefetch" in tokens and "noprefetch" in tokens:
+        raise argparse.ArgumentTypeError("mmap flags prefetch and noprefetch are mutually exclusive")
+    return True, "noprefetch" in tokens
+
+
+def validate_mmap_flag_list(value):
+    parse_mmap_flag_list(value)
+    return value
+
+
+def normalize_mmap_flag_args(argv):
+    """Make --usemmap optional values unambiguous with positional model paths."""
+    normalized = []
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token != "--usemmap":
+            normalized.append(token)
+            index += 1
+            continue
+        next_token = argv[index + 1] if index + 1 < len(argv) else None
+        candidates = {part.strip().lower() for part in next_token.split(",")} if next_token else set()
+        if candidates and candidates <= MMAP_FLAG_NAMES:
+            normalized.append(f"--usemmap={next_token}")
+            index += 2
+        else:
+            normalized.append("--usemmap=prefetch")
+            index += 1
+    return normalized
+
 # abuse prevention
 stop_token_max = 256
 ban_token_max = 768
@@ -408,6 +454,7 @@ class load_model_inputs(ctypes.Structure):
                 ("visionmaxtokens", ctypes.c_int),
                 ("use_mmap", ctypes.c_bool),
                 ("use_mlock", ctypes.c_bool),
+                ("no_mmap_prefetch", ctypes.c_bool),
                 ("use_direct_io", ctypes.c_bool),
                 ("no_host", ctypes.c_bool),
                 ("use_mtp", ctypes.c_bool),
@@ -2314,7 +2361,7 @@ def load_model(model_filename):
     inputs.use_mmq = False if args.nommq else True
     inputs.splitmode = splitmode_choices_to_int(args.splitmode) #layer=1, row=2, tensor=3
     inputs.blasthreads = args.blasthreads
-    inputs.use_mmap = args.usemmap
+    inputs.use_mmap, inputs.no_mmap_prefetch = parse_mmap_flag_list(args.usemmap)
     inputs.use_mlock = args.usemlock
     inputs.use_direct_io = args.usedirectio
     inputs.no_host = False
@@ -2948,7 +2995,7 @@ def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_
     inputs.quant = args.sdquant
     inputs.flash_attention = args.sdflashattention
     inputs.params_backend = b'CPU' if args.sdoffloadcpu else b''
-    inputs.use_mmap = args.usemmap
+    inputs.use_mmap, _ = parse_mmap_flag_list(args.usemmap)
     backends = [
         sd_get_device_override(sd_resolve_device(args.sdmaingpu, 'main')),
         sd_get_device_override(sd_resolve_device(args.sdclipdevice, default_sdclipdevice), 'CLIP'),
@@ -3836,7 +3883,7 @@ def embeddings_load_model(model_filename):
     inputs.gpulayers = (999 if args.embeddingsgpu else 0)
     inputs.flash_attention = (False if args.noflashattention else True)
     inputs.threads = args.threads
-    inputs.use_mmap = args.usemmap
+    inputs.use_mmap, _ = parse_mmap_flag_list(args.usemmap)
     inputs.embeddingsmaxctx = (args.embeddingsmaxctx if args.embeddingsmaxctx else args.contextsize) # for us to clamp to contextsize if embeddingsmaxctx unspecified
     inputs = set_backend_props(inputs)
     ret = handle.embeddings_load_model(inputs)
@@ -13623,7 +13670,8 @@ def get_cli_arg_overrides(parser, argv=None):
     explicit_parser = copy.deepcopy(parser)
     for action in explicit_parser._actions:
         action.default = None
-    explicit = {key: value for key, value in vars(explicit_parser.parse_args(argv)).items() if value is not None}
+    explicit_argv = normalize_mmap_flag_args(argv if argv is not None else sys.argv[1:])
+    explicit = {key: value for key, value in vars(explicit_parser.parse_args(explicit_argv)).items() if value is not None}
     model = explicit.get("model_param", "")
     if model.lower().split("?")[0].endswith(('.kcpps', '.kcppt')):
         explicit.pop("model_param") # positional config files are not model overrides
@@ -15967,7 +16015,7 @@ if __name__ == '__main__':
     advparser.add_argument("--usemtp", help="Enables MTP layers to be used for drafting (speculative decoding) if present", action='store_true')
     advparser.add_argument("--usemlock","--mlock", help="Enables mlock, preventing the RAM used to load the model from being paged out. Not usually recommended.", action='store_true')
     compatgroup3 = advparser.add_mutually_exclusive_group()
-    compatgroup3.add_argument("--usemmap", help="If set, uses mmap to load model.", action='store_true')
+    compatgroup3.add_argument("--usemmap", help="If set, uses mmap to load model. Optional comma-separated flags: prefetch (default) or noprefetch (skip MADV_WILLNEED). Use --usemmap=noprefetch to avoid ambiguity with positional model paths.", nargs='?', const='prefetch', default=False, type=validate_mmap_flag_list, metavar='[flags]')
     compatgroup3.add_argument("--usedirectio","--directio","--direct-io","-dio", help="Use direct I/O to load GGUF models if available. May improve cold-load times on some storage.", action='store_true')
     advparser.add_argument("--visionmaxres", metavar=('[max px]'), help="Clamp MMProj vision maximum allowed resolution. Allowed values are between 512 to 2048 px (default 1024).", type=int, default=default_visionmaxres)
     advparser.add_argument("--visionmaxtokens","--image-max-tokens", metavar=('[tokens]'), help="Override the maximum tokens for the MMProj embedding (default -1).", type=int, default=-1)
@@ -16082,6 +16130,6 @@ if __name__ == '__main__':
     internalgroup.add_argument("--agent-base-url", help=argparse.SUPPRESS, default=None)
     internalgroup.add_argument("--agent-api-key", help=argparse.SUPPRESS, default=None)
 
-    launch_args = parser.parse_args()
+    launch_args = parser.parse_args(normalize_mmap_flag_args(sys.argv[1:]))
     cli_arg_overrides = get_cli_arg_overrides(parser)
     main(launch_args=launch_args,default_args=parser.parse_args([]))
