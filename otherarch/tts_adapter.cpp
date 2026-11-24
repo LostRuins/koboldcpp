@@ -1580,6 +1580,12 @@ static tts_generation_outputs ttstype_generate_llamacpp(const tts_generation_inp
                 selected_voice.empty() ? "" : " voice ", selected_voice.c_str());
         }
         timer_start();
+        // KoboldCpp keeps the TTS context alive across requests. Upstream's
+        // llama-tts CLI is single-shot, and some libmtmd pipelines (notably
+        // Qwen3-TTS) therefore expect their caller to provide a fresh sequence
+        // rather than clearing sequence 0 in set_input().
+        llama_memory_clear(llama_get_memory(llamacpp_tts_ctx), true);
+        llama_synchronize(llamacpp_tts_ctx);
         if (llamacpp_tts_generator->set_input(inp.get()) != 0) {
             throw std::runtime_error("set_input failed");
         }
