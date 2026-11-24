@@ -148,6 +148,7 @@ friendlymodelname = "inactive"
 friendlysdmodelname = "inactive"
 friendlyembeddingsmodelname = "inactive"
 autoswapmode = False
+autoswap_music = {}
 textName = None
 sttName = None
 ttsName = None
@@ -1754,7 +1755,10 @@ def get_capabilities():
     has_router = True if args.routermode else False
     musicfamily_raw = handle.music_get_family()
     musicfamily = musicfamily_raw.decode("UTF-8", "ignore") if musicfamily_raw else "none"
-    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":visionSupport,"audio":audioSupport,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "music":has_music, "musicllm":bool(musicllmmodelpath), "musicfamily":musicfamily, "savedata":(savedata_obj is not None), "admin": admin_type, "router":has_router, "guidance": has_guidance, "jinja": has_jinja, "mcp":has_mcp, "parallelrequests":args.parallelrequests, "defaults_modified":bool(args.gendefaults)}
+    musicllm = bool(musicllmmodelpath)
+    if autoswapmode and autoswap_music:
+        musicllm = autoswap_music['llm']
+    return {"result":"KoboldCpp", "version":KcppVersion, "protected":has_password, "llm":has_llm, "txt2img":has_txt2img,"vision":visionSupport,"audio":audioSupport,"transcribe":has_whisper,"multiplayer":has_multiplayer,"websearch":has_search,"tts":has_tts, "embeddings":has_embeddings, "music":has_music, "musicllm":musicllm, "musicfamily":musicfamily, "savedata":(savedata_obj is not None), "admin": admin_type, "router":has_router, "guidance": has_guidance, "jinja": has_jinja, "mcp":has_mcp, "parallelrequests":args.parallelrequests, "defaults_modified":bool(args.gendefaults)}
 
 
 def scan_directory(dirpath, valid_exts, depth):
@@ -14776,6 +14780,8 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
 
 
     global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
+    global autoswap_music, imglora_preload, imglora_bypath, imglora_name2path
+    autoswap_music = {}
     autoswapmode = False
     textName = None
     mmprojName = None
@@ -14807,14 +14813,21 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             tempName = os.path.basename(os.path.abspath(args.embeddingsmodel))
             tempName = os.path.splitext(tempName)[0]
             embedName = sanitize_string(tempName)
-        if args.musicdiffusion and args.musicdiffusion!="":
-            tempName = os.path.basename(os.path.abspath(args.musicdiffusion))
+        if args.musicdiffusion or args.musicllm:
+            # Preserve advertised capabilities before inactive model paths are cleared.
+            autoswap_music = {
+                'llm': bool(args.musicllm),
+            }
+            tempName = os.path.basename(os.path.abspath(args.musicdiffusion or args.musicllm))
             tempName = os.path.splitext(tempName)[0]
             musicName = sanitize_string(tempName)
         if args.sdmodel and args.sdmodel!="":
             tempName = os.path.basename(os.path.abspath(args.sdmodel))
             tempName = os.path.splitext(tempName)[0]
             imageName = sanitize_string(tempName)
+            # Directory discovery does not require loading the image model.
+            imglora_preload, imglora_bypath, imglora_name2path = mk_lora_info(
+                sanitize_lora_list(args.sdlora), sanitize_lora_multipliers(args.sdloramult))
         if global_memory["swapReqType"] is not None:
             disableSwappedFieldsInConfig(args, global_memory["swapReqType"])
         else:
@@ -15311,7 +15324,6 @@ def kcpp_main_process(launch_args, g_memory=None, gui_launcher=False):
             imgphotomaker = ""
             imgupscaler = ""
             imgaudiovae = ""
-            global imglora_preload, imglora_bypath, imglora_name2path
             imglora_preload, imglora_bypath, imglora_name2path = mk_lora_info(args.sdlora, args.sdloramult)
             if args.sdvae:
                 if os.path.exists(args.sdvae):
