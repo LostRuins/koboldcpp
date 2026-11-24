@@ -2412,6 +2412,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_REPACK"));
     add_opt(common_arg(
+        {"--emit-token-ids"},
+        "print each generated token to stderr as TOKEN<TAB>{\"id\":N,\"text\":\"...\"}; token text is JSON-escaped (default: false)\n"
+        "For tokenization without BOS, also use --override-kv tokenizer.ggml.add_bos_token=bool:false",
+        [](common_params & params) {
+            params.emit_token_ids = true;
+        }
+    ).set_env("LLAMA_ARG_EMIT_TOKEN_IDS"));
+    add_opt(common_arg(
         {"--no-host"},
         "bypass host buffer allowing extra buffers to be used",
         [](common_params & params) {

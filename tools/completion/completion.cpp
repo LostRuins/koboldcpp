@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "chat.h"
 #include "build-info.h"
+#include "json.h"
 
 #include <clocale>
 #include <cstdio>
@@ -672,6 +673,16 @@ int llama_completion(int argc, char ** argv) {
             // LOG_DBG("last: %s\n", string_from(ctx, smpl->prev.to_vector()).c_str());
 
             embd.push_back(id);
+
+            if (params.emit_token_ids) {
+                const std::string token_str = common_token_to_piece(ctx, id, params.special);
+                const common_json record = common_json::object({
+                    {"id", id},
+                    {"text", token_str},
+                });
+                fprintf(stderr, "TOKEN\t%s\n", record.dump_safe().c_str());
+                fflush(stderr);
+            }
 
             if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
                 assistant_ss << common_token_to_piece(ctx, id, false);
