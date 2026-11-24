@@ -611,6 +611,7 @@ struct common_params {
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
     bool load_mtp          = false; // load MTP/NextN layers
+    bool no_mmap_prefetch  = false; // disable mmap prefetch (MADV_WILLNEED) of model weights
 
     bool single_turn       = false; // single turn chat conversation
 
