@@ -4821,6 +4821,10 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                         mediacount += 1
                     else:
                         normalized.append(item)
+                if turn_text and not normalized:
+                    # text-only turn: pass a plain string, as for string-content messages
+                    m["content"] = turn_text
+                    continue
                 if turn_text:
                     normalized.append({"type": "text","text": turn_text})
                 m["content"] = normalized
