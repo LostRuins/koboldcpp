@@ -99,6 +99,10 @@ struct load_model_inputs
     const int loop_head = 0;   // [KCPP-LOOP] first layer of the looped body (inclusive)
     const int loop_tail = 0;   // [KCPP-LOOP] last layer of the looped body (inclusive)
     const int loop_cycles = 1; // [KCPP-LOOP] passes through the body (1 = disabled)
+    const char * model2_filename = nullptr; // [KCPP-STITCH] second source gguf (null/empty = off)
+    const int32_t * stack_src = nullptr;    // [KCPP-STITCH] per-slot source model (0=A,1=B)
+    const int32_t * stack_layer = nullptr;  // [KCPP-STITCH] per-slot source layer
+    const int stack_count = 0;              // [KCPP-STITCH] stack slot count (0 = off)
 };
 struct generation_inputs
 {

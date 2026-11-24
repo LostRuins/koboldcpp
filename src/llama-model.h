@@ -921,6 +921,14 @@ struct llama_model {
     ggml_backend_dev_t dev_layer(int il) const;
     ggml_backend_dev_t dev_output() const;
 
+    // [KCPP-STITCH] device of slot il: stitched table entry, else loop/plain
+    ggml_backend_dev_t dev_slot(uint32_t il) const;
+    // [KCPP-STITCH] splice layers from `other` per the slot table; rewrites
+    // the layer vector + hparams so downstream sees one model of n slots.
+    // Anatomy (embeddings, norms, head) stays with self.
+    void apply_layer_stack(const llama_model & other,
+            const std::vector<uint32_t> & src_model, const std::vector<uint32_t> & src_layer);
+
     ggml_backend_buffer_type_t select_buft(int il) const;
 
     bool has_tensor_overrides() const;

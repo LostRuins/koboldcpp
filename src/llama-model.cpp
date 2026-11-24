@@ -4236,3 +4236,67 @@ uint32_t llama_model_get_tok_embd_rows(const struct llama_model * model, const l
 
     return n_tokens * (uint32_t) tensor->ne[0];
 }
+
+
+// [KCPP-STITCH] runtime passthrough stack merge
+ggml_backend_dev_t llama_model::dev_slot(uint32_t il) const {
+    if (hparams.stitch_base > 0 && il < hparams.stitch_base) {
+        return (ggml_backend_dev_t) hparams.stitch_dev_impl[il];
+    }
+    return dev_layer(hparams.loop_source(il));
+}
+
+void llama_model::apply_layer_stack(const llama_model & other,
+        const std::vector<uint32_t> & src_model, const std::vector<uint32_t> & src_layer) {
+    const uint32_t n = (uint32_t) src_model.size();
+    if (n == 0 || n > LLAMA_MAX_LAYERS || src_layer.size() != n) {
+        throw std::runtime_error("kcpp-stitch: bad stack table");
+    }
+    if (arch != LLM_ARCH_LLAMA) {
+        throw std::runtime_error("kcpp-stitch: llama arch only in this bake");
+    }
+    if (arch != other.arch || hparams.n_embd != other.hparams.n_embd) {
+        // vocab equality is a conf discipline (same tokenizer family); the
+        // embedding width is the stitch's hard layout constraint
+        throw std::runtime_error("kcpp-stitch: source geometry mismatch (arch/embedding width)");
+    }
+    std::vector<ggml_backend_dev_t> owner_dev(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const bool from_other = src_model[i] != 0;
+        const uint32_t src = src_layer[i];
+        const uint32_t src_n = from_other ? other.hparams.n_layer_all : hparams.n_layer_all;
+        if (src >= src_n) {
+            throw std::runtime_error("kcpp-stitch: source layer out of range");
+        }
+        owner_dev[i] = from_other ? other.dev_layer(src) : dev_layer(src);
+    }
+    std::vector<llama_layer> snapshot = layers;
+    // geometry must be snapshotted BEFORE any writes: a later slot may source
+    // an earlier (already-overwritten) self layer
+    const auto self_is_swa = hparams.is_swa_impl;
+    const auto self_nh     = hparams.n_head_arr;
+    const auto self_nhkv   = hparams.n_head_kv_arr;
+    const auto self_nff    = hparams.n_ff_arr;
+    const auto self_nffe   = hparams.n_ff_exp_arr;
+    const auto self_neu    = hparams.n_expert_used_arr;
+    layers.resize(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const bool from_other = src_model[i] != 0;
+        const uint32_t src = src_layer[i];
+        layers[i] = from_other ? other.layers[src] : snapshot[src];
+        hparams.is_swa_impl[i]       = from_other ? other.hparams.is_swa_impl[src] : self_is_swa[src];
+        hparams.kv_source_impl[i]    = i;
+        hparams.n_head_arr[i]        = from_other ? other.hparams.n_head_arr[src] : self_nh[src];
+        hparams.n_head_kv_arr[i]     = from_other ? other.hparams.n_head_kv_arr[src] : self_nhkv[src];
+        hparams.n_ff_arr[i]          = from_other ? other.hparams.n_ff_arr[src] : self_nff[src];
+        hparams.n_ff_exp_arr[i]      = from_other ? other.hparams.n_ff_exp_arr[src] : self_nffe[src];
+        hparams.n_expert_used_arr[i] = from_other ? other.hparams.n_expert_used_arr[src] : self_neu[src];
+        hparams.stitch_dev_impl[i]   = (void *) owner_dev[i];
+    }
+    if (hparams.n_layer_kv_from_start >= 0) {
+        hparams.n_layer_kv_from_start += (int32_t)(n - hparams.n_layer_all);
+    }
+    hparams.n_layer_all = n;
+    hparams.stitch_base = n;
+    LLAMA_LOG_INFO("%s: kcpp-stitch: %u slots (anatomy: self)\n", __func__, n);
+}

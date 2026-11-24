@@ -387,7 +387,11 @@ class load_model_inputs(ctypes.Structure):
                 ("parallel_total_context", ctypes.c_int),
                 ("loop_head", ctypes.c_int),
                 ("loop_tail", ctypes.c_int),
-                ("loop_cycles", ctypes.c_int)]
+                ("loop_cycles", ctypes.c_int),
+                ("model2_filename", ctypes.c_char_p),
+                ("stack_src", ctypes.POINTER(ctypes.c_int)),
+                ("stack_layer", ctypes.POINTER(ctypes.c_int)),
+                ("stack_count", ctypes.c_int)]
 
 class generation_inputs(ctypes.Structure):
     _fields_ = [("seed", ctypes.c_int),
@@ -2186,6 +2190,72 @@ def load_model(model_filename):
     inputs.moe_cache_mib = args.moe_cache_mib
     inputs.model_filename = model_filename.encode("UTF-8")
     inputs.max_context_length = maxctx #initial value to use for ctx, can be overwritten
+    # [KCPP-STITCH] parse the stack spec and pass the slot table
+    inputs.model2_filename = None
+    inputs.stack_src = None
+    inputs.stack_layer = None
+    inputs.stack_count = 0
+    _mp2 = getattr(args, "model2_param", "") or ""
+    _stk = getattr(args, "stack", "") or ""
+    if _mp2 and _stk:
+        _src, _lay = [], []
+        for _part in _stk.split(","):
+            _part = _part.strip()
+            _i = _part.find("[")
+            _j = _part.find(":", _i) if _i >= 0 else -1
+            if _i < 0 or _j < 0 or not _part.endswith("]") or _part[0] not in "AB":
+                raise ValueError(f"kcpp-stitch: bad stack segment '{_part}' (want A[0:16])")
+            _a, _b = int(_part[_i+1:_j]), int(_part[_j+1:-1])
+            if _b <= _a:
+                raise ValueError(f"kcpp-stitch: empty segment '{_part}'")
+            _s = 0 if _part[0] == "A" else 1
+            _src.extend([_s] * (_b - _a)); _lay.extend(range(_a, _b))
+        _arr_src = (ctypes.c_int * len(_src))(*_src)
+        _arr_lay = (ctypes.c_int * len(_lay))(*_lay)
+        inputs.model2_filename = _mp2.encode("UTF-8")
+        inputs.stack_src = _arr_src
+        inputs.stack_layer = _arr_lay
+        inputs.stack_count = len(_src)
+        print(f"kcpp-stitch: {len(_src)} slots from '{_stk}' (model2: {_mp2})")
+    # [KCPP-STITCH] parse the stack spec and pass the slot table
+    inputs.model2_filename = None
+    inputs.stack_src = None
+    inputs.stack_layer = None
+    inputs.stack_count = 0
+    _mp2 = getattr(args, "model2_param", "") or ""
+    _stk = getattr(args, "stack", "") or ""
+    if _mp2 and _stk:
+        _src, _lay = [], []
+        for _part in _stk.split(","):
+            _part = _part.strip()
+            _i = _part.find("[")
+            _j = _part.find(":", _i) if _i >= 0 else -1
+            if _i < 0 or _j < 0 or not _part.endswith("]") or _part[0] not in "AB":
+                raise ValueError(f"kcpp-stitch: bad stack segment '{_part}' (want A[0:16])")
+            _a, _b = int(_part[_i+1:_j]), int(_part[_j+1:-1])
+            if _b <= _a:
+                raise ValueError(f"kcpp-stitch: empty segment '{_part}'")
+            _s = 0 if _part[0] == "A" else 1
+            _src.extend([_s] * (_b - _a)); _lay.extend(range(_a, _b))
+        _cyc = int(getattr(args, "loopcycles", 1) or 1)
+        _loop = getattr(args, "stack_loop", "") or ""
+        if _loop and _cyc > 1:
+            _pi = _loop.find(":")
+            _lo, _hi = int(_loop[:_pi]), int(_loop[_pi+1:])
+            if not (0 <= _lo < _hi <= len(_src)):
+                raise ValueError(f"kcpp-stitch: bad stack_loop '{_loop}' (base stack has {len(_src)} slots)")
+            _band = list(zip(_src[_lo:_hi], _lay[_lo:_hi]))
+            for _ in range(_cyc - 1):
+                for _s2, _l2 in _band:
+                    _src.append(_s2); _lay.append(_l2)
+            print(f"kcpp-stitch: band [{_lo}:{_hi}] x{_cyc}")
+        _arr_src = (ctypes.c_int * len(_src))(*_src)
+        _arr_lay = (ctypes.c_int * len(_lay))(*_lay)
+        inputs.model2_filename = _mp2.encode("UTF-8")
+        inputs.stack_src = _arr_src
+        inputs.stack_layer = _arr_lay
+        inputs.stack_count = len(_src)
+        print(f"kcpp-stitch: {len(_src)} slots from '{_stk}' (model2: {_mp2})")
     inputs.threads = args.threads
     inputs.low_vram = True if args.lowvram else False
     inputs.use_mmq = False if args.nommq else True
@@ -2300,9 +2370,16 @@ def load_model(model_filename):
     inputs.smartcacheslots = sclimit
     inputs.continuous_batching_slots = args.parallelrequests if (args.parallelrequests>1) else 0
     inputs.parallel_total_context = args.paralleltotalcontext if (args.parallelrequests>1) else 0
-    inputs.loop_head = int(getattr(args, "loophead", 0) or 0)
-    inputs.loop_tail = int(getattr(args, "looptail", 0) or 0)
-    inputs.loop_cycles = int(getattr(args, "loopcycles", 1) or 1)
+    if getattr(args, "stack", ""):
+        # [KCPP-STITCH] the repeat is folded into the stack table;
+        # legacy loop keys stay off so the loop/stitch guard stays quiet
+        inputs.loop_head = 0
+        inputs.loop_tail = 0
+        inputs.loop_cycles = 1
+    else:
+        inputs.loop_head = int(getattr(args, "loophead", 0) or 0)
+        inputs.loop_tail = int(getattr(args, "looptail", 0) or 0)
+        inputs.loop_cycles = int(getattr(args, "loopcycles", 1) or 1)
     inputs.rpc_mode = (2 if args.rpcmode=="host" else (1 if args.rpcmode=="connect" else 0))
     inputs.rpc_targets = (args.rpctargets if args.rpcmode=="connect" else "").encode("UTF-8")
 
@@ -14515,6 +14592,9 @@ if __name__ == '__main__':
     parser.add_argument("--loop-head","--loophead","--loop_head", dest="loophead", help="[KCPP-LOOP] first layer of the looped body (0-indexed, inclusive). Typical: ~25%% of layers", type=int, default=0)
     parser.add_argument("--loop-tail","--looptail","--loop_tail", dest="looptail", help="[KCPP-LOOP] last layer of the looped body (inclusive). Must be < n_layers-1. Typical: ~75%% of layers", type=int, default=0)
     parser.add_argument("--loop-cycles","--loopcycles","--loop_cycles", dest="loopcycles", help="[KCPP-LOOP] passes through the body (1 = disabled, 2 = standard depth-upscale sim)", type=int, default=1)
+    parser.add_argument("--model2param", dest="model2_param", help="[KCPP-STITCH] second source gguf for layer stitching", type=str, default="")
+    parser.add_argument("--stack", dest="stack", help='[KCPP-STITCH] layer stack spec, e.g. "A[0:16],B[8:24],A[17:32],B[25:40]"', type=str, default="")
+    parser.add_argument("--stackloop", dest="stack_loop", help='[KCPP-STITCH] base-stack position range to repeat, e.g. "16:47"', type=str, default="")
     portgroup = parser.add_mutually_exclusive_group() #we want to be backwards compatible with the unnamed positional args
     portgroup.add_argument("--port", metavar=('[portnumber]'), help=f"Port to listen on. (Defaults to {defaultport})", default=defaultport, type=int, action='store')
     portgroup.add_argument("port_param", help="Port to listen on (positional)", default=defaultport, nargs="?", type=int, action='store')

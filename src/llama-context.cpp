@@ -645,7 +645,7 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
             // but is still wrong for cases like --no-kv-offload.
             // [KCPP-LOOP] fused nodes of a looped graph carry virtual cache ids;
             // a virtual layer lives on its source layer's device (identity when loop off)
-            ggml_backend_dev_t device_layer = model.dev_layer(model.hparams.loop_source((uint32_t) node.il));
+            ggml_backend_dev_t device_layer = model.dev_slot((uint32_t) node.il);
 
             if (device_fused != device_layer) {
                 LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but %s "
@@ -2585,7 +2585,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     // [KCPP-LOOP] looped graphs add real nodes per virtual cache slot while
     // the budgets above scale on tensor count (n_tensors is unchanged by
     // looping) — scale by the slot ratio so the node hash set fits.
-    if (model.hparams.loop_on()) {
+    if (model.hparams.loop_on() || model.hparams.stitch_base > 0) {
         const uint32_t n_slots = model.hparams.n_layer_all;
         const uint32_t n_phys  = model.hparams.loop_base ? model.hparams.loop_base : 1;
         res = res * n_slots / n_phys;
@@ -2902,7 +2902,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer_all;
         if (ubatch.n_tokens < 32 || full_offload) {
             if (il != -1 && (strcmp(name, "norm") == 0 || strcmp(name, "l_last") == 0)) {
-                const auto & dev_layer = model.dev_layer(model.hparams.loop_source((uint32_t) il));
+                const auto & dev_layer = model.dev_slot((uint32_t) il);
                 for (const auto & backend : backends) {
                     if (ggml_backend_get_device(backend.get()) == dev_layer) {
                         if (ggml_backend_supports_op(backend.get(), cur)) {
@@ -4147,6 +4147,8 @@ llama_context * llama_init_from_model(
             loop_err = "arch not loop-capable in this bake (llama + gemma4 + stablelm + mistral3 + qwen2/3/3moe)";
         } else if (hp.n_layer_nextn > 0) {
             loop_err = "not supported with MTP/nextn layers";
+        } else if (hp.stitch_base > 0) {
+            loop_err = "loop keys are not composable with kcpp-stitch yet";
         } else if (params.loop_cycles < 1 || params.loop_cycles > 8) {
             loop_err = "loop-cycles must be in [1..8]";
         } else if (params.loop_head > params.loop_tail ||

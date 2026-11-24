@@ -15,6 +15,13 @@
 #include "kcpp_src/model_adapter.h"
 #include "otherarch.h"
 #include "llama.h"
+
+// [KCPP-STITCH] runtime passthrough stack state (process-lifetime, like the
+// main model — kobold never frees the main model in-process either)
+static std::string g_stitch_model2_path;
+static std::vector<uint32_t> g_stitch_src_model;
+static std::vector<uint32_t> g_stitch_src_layer;
+static llama_model * g_stitch_model_b = nullptr;
 #include <vector>
 #include <sstream>
 #include <map>
@@ -3215,6 +3222,16 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     vision_max_res = inputs.visionmaxres;
     kcpp_data->flash_attn = inputs.flash_attention;
     kcpp_data->model_filename = inputs.model_filename;
+    // [KCPP-STITCH] snapshot the stack table while the python arrays are alive
+    if (inputs.stack_count > 0 && inputs.stack_src && inputs.stack_layer && inputs.model2_filename) {
+        g_stitch_src_model.assign(inputs.stack_src, inputs.stack_src + inputs.stack_count);
+        g_stitch_src_layer.assign(inputs.stack_layer, inputs.stack_layer + inputs.stack_count);
+        g_stitch_model2_path = inputs.model2_filename;
+    } else {
+        g_stitch_src_model.clear();
+        g_stitch_src_layer.clear();
+        g_stitch_model2_path.clear();
+    }
     kcpp_data->use_smartcontext = inputs.use_smartcontext;
     kcpp_data->use_contextshift = inputs.use_contextshift;
     kcpp_data->use_fastforward = inputs.use_fastforward;
@@ -3795,6 +3812,30 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         {
             fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, kcpp_data->model_filename.c_str());
             return ModelLoadResult::FAIL;
+        }
+
+        // [KCPP-STITCH] load source B and splice the layer stack. B's tensors
+        // stay in B's own buffers; the splice rewires A's layer structs and
+        // mirrors per-slot geometry/devices into hparams.
+        if (!g_stitch_src_model.empty())
+        {
+            llama_model * model_b = llama_model_load_from_file(g_stitch_model2_path.c_str(), model_params);
+            if (model_b == nullptr)
+            {
+                fprintf(stderr, "%s: kcpp-stitch: failed to load model2 '%s'\n", __func__, g_stitch_model2_path.c_str());
+                return ModelLoadResult::FAIL;
+            }
+            try
+            {
+                llamamodel->apply_layer_stack(*model_b, g_stitch_src_model, g_stitch_src_layer);
+            }
+            catch (const std::exception & e)
+            {
+                fprintf(stderr, "%s: kcpp-stitch: %s\n", __func__, e.what());
+                llama_model_free(model_b);
+                return ModelLoadResult::FAIL;
+            }
+            g_stitch_model_b = model_b; // process-lifetime, like the main model
         }
 
         //now that the model is loaded, immediately check if SWA is used

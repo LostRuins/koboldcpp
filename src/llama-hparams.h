@@ -120,6 +120,13 @@ struct llama_hparams {
 
     void apply_layer_loop(uint32_t head, uint32_t tail, uint32_t cycles);
 
+    // [KCPP-STITCH] runtime passthrough stack: slot i draws weights + KV
+    // geometry from the owning source; stitch_dev_impl[i] holds the owning
+    // layer's resolved device (set at splice). stitch_base = slot count.
+    uint32_t stitch_base = 0;
+    bool stitch_active() const { return stitch_base > 0; }
+    std::array<void *, LLAMA_MAX_LAYERS> stitch_dev_impl;
+
     // different head size for full_attention and SWA layers
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head

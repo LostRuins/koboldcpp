@@ -124,7 +124,7 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     // [KCPP-LOOP] physical layer schedule: [0..head-1] + [head..tail] x cycles + [tail+1..n_phys-1]
-    const uint32_t n_phys = hparams.loop_base ? hparams.loop_base : (uint32_t) n_layer;
+    const uint32_t n_phys = hparams.stitch_base ? hparams.stitch_base : (hparams.loop_base ? hparams.loop_base : (uint32_t) n_layer);
     std::vector<std::pair<uint32_t, uint32_t>> loop_sched;
     kcpp_loop_schedule(hparams, n_phys, loop_sched);
 
