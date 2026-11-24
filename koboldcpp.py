@@ -3154,10 +3154,13 @@ def gendefaults_parse_meta_field(value):
     return result
 
 def sd_upscale(genparams):
-    init_images = genparams.get("image", "")
+    payload = {}
+    image = genparams.get("image", "")
+    if isinstance(image, str) and image:
+        payload["init_images"] = image
+    payload["upscaling_resize"] = tryparseint(genparams.get("upscaling_resize", 2),2) # how many times to upscale
     inputs = sd_upscale_inputs()
-    inputs.init_images = init_images.encode("UTF-8")
-    inputs.upscaling_resize = tryparseint(genparams.get("upscaling_resize", 2),2) # how many times to upscale
+    inputs.params_json = json.dumps(payload).encode("UTF-8")
     ret = handle.sd_upscale(inputs)
     data_main = ""
     if ret.status==1:

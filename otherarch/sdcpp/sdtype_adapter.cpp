@@ -19,6 +19,9 @@
 #include <filesystem>
 #include <set>
 #include <tuple>
+#include <type_traits>
+#include <limits>
+#include <cmath>
 
 #include "otherarch/utils.h"
 #include "otherarch/webp_image.h"
@@ -270,6 +273,158 @@ struct LoraMap {
     }
 
 };
+
+// tracks type errors and unknown keys in the json APIs
+struct SdErrors {
+    std::vector<std::string> problems;
+    std::set<std::string> accepted_keys;
+
+    bool empty() const { return problems.empty(); }
+
+    void add(const std::string& problem) { problems.push_back(problem); }
+
+    std::string message() const {
+        std::string msg;
+        for (size_t i = 0; i < problems.size(); i++) {
+            if (i != 0) msg += "; ";
+            msg += problems[i];
+        }
+        return msg;
+    }
+};
+
+// extract a JSON integer into a signed or unsigned target with a range check
+template <typename T>
+static bool sdjson_int_value(const nlohmann::json& value, T& out)
+{
+    // nlohmann::json stores integers that fit in int64 as int64_t and larger
+    // values as double: a float is a type mismatch for signed targets, and for
+    // unsigned targets only an exactly integral value in range is accepted.
+    static_assert(std::is_integral_v<T>, "sdjson_int_value: integral type required");
+    if (value.is_number_integer()) {
+        const uint64_t u = value.is_number_unsigned() ? value.get<uint64_t>()
+                                                       : static_cast<uint64_t>(value.get<int64_t>());
+        if constexpr (std::is_signed_v<T>) {
+            // values above INT64_MAX cast to a negative int64 and are
+            // rejected by the range check
+            if (static_cast<int64_t>(u) < std::numeric_limits<T>::min()
+                || static_cast<int64_t>(u) > std::numeric_limits<T>::max()) {
+                return false;
+            }
+            out = static_cast<T>(static_cast<int64_t>(u));
+        } else {
+            if (u > static_cast<uint64_t>(std::numeric_limits<T>::max())) return false;
+            out = static_cast<T>(u);
+        }
+        return true;
+    }
+    if constexpr (std::is_unsigned_v<T>) {
+        if (value.is_number_float()) {
+            const double d = value.get<double>();
+            if (d < 0.0 || d >= 18446744073709551616.0) return false; // 2^64
+            if (d != std::floor(d)) return false;
+            if (d > static_cast<double>(std::numeric_limits<T>::max())) return false;
+            out = static_cast<T>(static_cast<uint64_t>(d));
+            return true;
+        }
+    }
+    return false;
+}
+
+// strict typed getter for one payload key:
+//  - absent key or null value: `out` keeps its default, returns false
+//  - present with the exact JSON type: copied into `out`, the key is recorded
+//    as accepted, returns true
+//  - present with a different type, or an integer out of range: a problem is
+//    recorded and false is returned
+//  - a present empty string decodes as absent
+template <typename T>
+static bool sdjson_get(T& out, const char* key, const nlohmann::json& payload, SdErrors& errors)
+{
+    // copy the key to a non-dependent type so payload.find() resolves to a
+    // concrete overload (GCC rejects member access through the dependent
+    // iterator of the const char* overload)
+    const std::string k(key);
+    const auto it = payload.find(k);
+    if (it == payload.end() || it->is_null()) {
+        return false;
+    }
+    errors.accepted_keys.insert(k);
+    const nlohmann::json& v = *it;
+    if constexpr (std::is_same_v<T, bool>) {
+        if (!v.is_boolean()) {
+            errors.add("key '" + k + "': expected a boolean");
+            return false;
+        }
+        out = v.get<bool>();
+    } else if constexpr (std::is_integral_v<T>) {
+        if (!sdjson_int_value(v, out)) {
+            errors.add("key '" + k + "': expected an integer in the range of the target type");
+            return false;
+        }
+    } else if constexpr (std::is_floating_point_v<T>) {
+        if (!v.is_number()) {
+            errors.add("key '" + k + "': expected a number");
+            return false;
+        }
+        out = static_cast<T>(v.get<double>());
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        if (!v.is_string()) {
+            errors.add("key '" + k + "': expected a string");
+            return false;
+        }
+        const std::string s = v.get<std::string>();
+        if (s.empty()) {
+            return false; // empty string decodes as absent
+        }
+        out = std::move(s);
+    } else {
+        static_assert(sizeof(T) == 0, "sdjson_get: unsupported type");
+    }
+    return true;
+}
+
+// parse a frontier payload without exceptions; a failed parse or a
+// non-object top level is recorded as a problem and yields an invalid json
+static nlohmann::json sdjson_parse_payload(const char* data, SdErrors& errors)
+{
+    if (data == nullptr) {
+        errors.add("payload is null");
+        return nlohmann::json();
+    }
+    nlohmann::json payload;
+    try {
+        payload = nlohmann::json::parse(data);
+    } catch (const nlohmann::json::exception& e) {
+        errors.add(std::string("invalid JSON: ") + e.what());
+        return nlohmann::json();
+    }
+    if (!payload.is_object()) {
+        errors.add("payload is not a JSON object");
+        return nlohmann::json();
+    }
+    return payload;
+}
+
+// a key the interface does not decode is a debug-level warning, not an error
+// (both ends ship together; the warning is the drift detector). The "sd"
+// namespace is reserved (schema-valid, decoded in a later phase) and never
+// warns; the "kcpp" scope is recursed.
+static void sdjson_warn_unknown_keys(const nlohmann::json& payload, SdErrors& errors)
+{
+    if (!payload.is_object()) return;
+    for (auto it = payload.cbegin(); it != payload.cend(); ++it) {
+        const std::string& key = it.key();
+        if (key == "sd") continue;
+        if (key == "kcpp") {
+            if (it->is_object()) sdjson_warn_unknown_keys(*it, errors);
+            continue;
+        }
+        if (!errors.accepted_keys.count(key)) {
+            printf("KCPP SD: unknown key '%s' in the params payload\n", key.c_str());
+        }
+    }
+}
 
 
 // local intermediate representation of the model loading parameters.
@@ -3460,10 +3615,32 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         return sd_generation.error("Warning: KCPP image upscaling not initialized!");
     }
 
-    std::string rawb64 = inputs.init_images;
+    struct {
+        std::string rawb64;
+        int upscaling_resize = 2;
+    } params;
+    if (inputs.params_json != nullptr) {
+        SdErrors errors;
+        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
+        if (payload.is_object()) {
+            sdjson_get(params.rawb64, "init_images", payload, errors);
+            sdjson_get(params.upscaling_resize, "upscaling_resize", payload, errors);
+            if (sddebugmode) {
+                sdjson_warn_unknown_keys(payload, errors);
+            }
+        }
+        if (!errors.empty()) {
+            const std::string msg = "KCPP SD upscale: " + errors.message();
+            return sd_generation.error(msg.c_str());
+        }
+    } else {
+        params.rawb64 = inputs.init_images;
+        params.upscaling_resize = inputs.upscaling_resize;
+    }
+
     int nx, ny;
     std::unique_ptr<uint8_t, decltype(&stbi_image_free)> upscale_src_buffer(
-        load_image_from_b64(rawb64,nx,ny), &stbi_image_free);
+        load_image_from_b64(params.rawb64,nx,ny), &stbi_image_free);
     sd_image_t source_img;
     source_img.data = nullptr;
     std::string result;
@@ -3474,7 +3651,7 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         source_img.channel = 3;
         source_img.data = upscale_src_buffer.get();
 
-        result = upscale_image_to_png_base64(upscaler_ctx, source_img, inputs.upscaling_resize);
+        result = upscale_image_to_png_base64(upscaler_ctx, source_img, params.upscaling_resize);
     }
 
     if (result == "") {
