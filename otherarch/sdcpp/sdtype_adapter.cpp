@@ -1900,8 +1900,8 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
 // 3; nullptr = kcpp-only, never forwarded) and the IR member. The decode loop
 // walks the rows with one strict sdjson_get each; converted fields (quant,
 // taesd, flash_attention, lora_apply_mode) name the upstream key they resolve
-// to in the QoL/routing step. Executable_path, lora_apply_mode, loras and
-// the legacy field decode stay explicit.
+// to in the QoL/routing step. Executable_path, lora_apply_mode and loras
+// stay explicit.
 struct LoadStr  { const char* in; const char* out; std::string SDLoadParams::*  p; };
 struct LoadI32  { const char* in; const char* out; int         SDLoadParams::*  p; };
 struct LoadBool { const char* in; const char* out; bool        SDLoadParams::*  p; };
@@ -1966,12 +1966,11 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     KcppLoadParams& klp = new_params->kcpp_load_params;
     int lora_apply_mode = 0;
 
-    if (inputs.params_json != nullptr) {
+    {
         SdErrors errors;
         nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
         if (payload.is_object()) {
-            // assigned to the global before any QoL probe, as the legacy
-            // field decode does
+            // assigned to the global before any QoL probe
             std::string executable_path;
             sdjson_get(executable_path, "executable_path", payload, errors);
             sd_executable_path = sd_get_u8path(executable_path);
@@ -2004,37 +2003,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
             printf("\nError: KCPP SD load: %s\n", errors.message().c_str());
             return false;
         }
-    } else {
-        sd_executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
-
-        lp.model_path = SAFE_STR(inputs.model_filename);
-        lp.vae_path = SAFE_STR(inputs.vae_filename);
-        lp.audio_vae_path = SAFE_STR(inputs.audio_vae_filename);
-        lp.t5xxl_path = SAFE_STR(inputs.llm_filename);
-        lp.clip_l_path = SAFE_STR(inputs.clip1_filename);
-        lp.clip_g_path = SAFE_STR(inputs.clip2_filename);
-        lp.photo_maker_path = SAFE_STR(inputs.photomaker_filename);
-        klp.upscaler_filename = SAFE_STR(inputs.upscaler_filename);
-        klp.tiled_vae_threshold = inputs.tiled_vae_threshold;
-        klp.img_hard_limit = inputs.img_hard_limit;
-        klp.img_soft_limit = inputs.img_soft_limit;
-
-        lp.backend = SAFE_STR(inputs.backend);
-        lp.params_backend = SAFE_STR(inputs.params_backend);
-        lp.split_mode = SAFE_STR(inputs.split_mode);
-        lp.conv_direct_mode = SAFE_STR(inputs.conv_direct_mode);
-        lp.n_threads = inputs.threads;
-        lp.enable_mmap = inputs.use_mmap;
-        lp.auto_fit = inputs.auto_fit;
-        klp.quant = inputs.quant;
-        klp.flash_attention = inputs.flash_attention;
-        klp.taesd = inputs.taesd;
-        lp.max_vram = SAFE_STR(inputs.max_vram);
-
-        for(int i=0;i<inputs.lora_len;++i) {
-            klp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
-        }
-        lora_apply_mode = inputs.lora_apply_mode;
     }
 
     klp.tiled_vae_threshold = (klp.tiled_vae_threshold > 8192 ? 8192 : klp.tiled_vae_threshold);
@@ -2819,7 +2787,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     SDGenParams gp;
     gp.lora_map = klp.lora_map;
 
-    if (inputs.params_json != nullptr) {
+    {
         SdErrors errors;
         nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
         if (payload.is_object()) {
@@ -2874,58 +2842,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             printf("\nError: KCPP SD generate: %s\n", errors.message().c_str());
             return sd_generation.error(errors.message().c_str());
         }
-    } else {
-        gp.prompt = SAFE_STR(inputs.prompt);
-        gp.negative_prompt = SAFE_STR(inputs.negative_prompt);
-        gp.cfg_scale = inputs.cfg_scale;
-        gp.distilled_guidance = inputs.distilled_guidance;
-        gp.sample_steps = inputs.sample_steps;
-        gp.shifted_timestep = inputs.shifted_timestep;
-        gp.flow_shift = inputs.flow_shift;
-        gp.extra_sample_args = SAFE_STR(inputs.extra_sample_args);
-        gp.eta = inputs.eta;
-        gp.seed = inputs.seed;
-        gp.width = inputs.width;
-        gp.height = inputs.height;
-        gp.strength = inputs.denoising_strength;
-        gp.clip_skip = inputs.clip_skip;
-        gp.sample_method = sampler_from_name(inputs.sample_method);
-        gp.scheduler = scheduler_from_name(inputs.scheduler);
-        gp.cache_mode = SAFE_STR(inputs.cache_mode);
-        gp.cache_options = SAFE_STR(inputs.cache_options);
-        gp.circular_x = inputs.circular_x;
-        gp.circular_y = inputs.circular_y;
-        if (inputs.custom_sigmas && inputs.custom_sigmas_count > 0) {
-            gp.custom_sigmas.assign(inputs.custom_sigmas, inputs.custom_sigmas + inputs.custom_sigmas_count);
-        }
-        if (klp.lora_dynamic) {
-            for (int i = 0; i < inputs.lora_len; i++) {
-                gp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
-            }
-        }
-        gp.upscale = inputs.upscale;
-
-        gp.ref_image_args = SAFE_STR(inputs.ref_image_args);
-
-        gp.img.init_image = SAFE_STR(inputs.init_images);
-        gp.img.mask = SAFE_STR(inputs.mask);
-        gp.img.flip_mask = inputs.flip_mask;
-        for(int i=0;i<inputs.extra_images_len;++i)
-        {
-            gp.img.extra_images.push_back(std::string(inputs.extra_images[i]));
-        }
-
-        gp.vid.req_frames = inputs.vid_req_frames;
-        gp.vid.output_type = inputs.video_output_type;
-        gp.vid.fps = inputs.vid_fps;
-        gp.vid.start_frame = SAFE_STR(inputs.video_start_frame);
-        gp.vid.end_frame = SAFE_STR(inputs.video_end_frame);
-        for(int i=0;i<inputs.ref_audios_len;++i)
-        {
-            gp.vid.ref_audios.push_back(std::string(inputs.ref_audios[i]));
-        }
-
-        gp.remove_limits = inputs.remove_limits;
     }
 
     // ref_image_args: auto-resize prefix, forced edit mode when a preset is given
@@ -3887,7 +3803,7 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         std::string rawb64;
         int upscaling_resize = 2;
     } params;
-    if (inputs.params_json != nullptr) {
+    {
         SdErrors errors;
         nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
         if (payload.is_object()) {
@@ -3901,9 +3817,6 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
             const std::string msg = "KCPP SD upscale: " + errors.message();
             return sd_generation.error(msg.c_str());
         }
-    } else {
-        params.rawb64 = inputs.init_images;
-        params.upscaling_resize = inputs.upscaling_resize;
     }
 
     int nx, ny;
