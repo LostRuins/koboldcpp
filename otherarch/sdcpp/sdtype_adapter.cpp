@@ -384,10 +384,65 @@ static bool sdjson_get(T& out, const char* key, const nlohmann::json& payload, S
             return false; // empty string decodes as absent
         }
         out = std::move(s);
+    } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+        if (!v.is_array()) {
+            errors.add("key '" + k + "': expected an array of strings");
+            return false;
+        }
+        for (size_t i = 0; i < v.size(); ++i) {
+            const auto& entry = v[i];
+            if (!entry.is_string()) {
+                errors.add("key '" + k + "[" + std::to_string(i) + "]: expected a string");
+                continue;
+            }
+            out.push_back(entry.get<std::string>());
+        }
+    } else if constexpr (std::is_same_v<T, std::vector<float>>) {
+        if (!v.is_array()) {
+            errors.add("key '" + k + "': expected an array of numbers");
+            return false;
+        }
+        for (size_t i = 0; i < v.size(); ++i) {
+            const auto& entry = v[i];
+            if (!entry.is_number()) {
+                errors.add("key '" + k + "[" + std::to_string(i) + "]: expected a number");
+                continue;
+            }
+            out.push_back(entry.get<float>());
+        }
     } else {
         static_assert(sizeof(T) == 0, "sdjson_get: unsupported type");
     }
     return true;
+}
+
+// decode a "loras" payload key: an array of {path, multiplier, is_high_noise?}
+// objects, ignoring a null or empty key
+static void sdjson_get_loras(const char* key, const nlohmann::json& payload,
+                             SdErrors& errors, LoraMap & lora_map)
+{
+    const std::string k(key);
+    const auto it = payload.find(k);
+    if (it == payload.end()) return;
+    errors.accepted_keys.insert(k);
+    if (it->is_null()) return; // null decodes as absent
+    if (!it->is_array()) {
+        errors.add("key '" + k + "': expected an array of {path, multiplier} objects");
+        return;
+    }
+    const auto& arr = *it;
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& entry = arr[i];
+        if (!entry.is_object()
+            || !entry.contains("path") || !entry["path"].is_string()
+            || entry["path"].get<std::string>().empty()
+            || !entry.contains("multiplier") || !entry["multiplier"].is_number()
+            || (entry.contains("is_high_noise") && !entry["is_high_noise"].is_boolean())) {
+            errors.add("key '" + k + "[" + std::to_string(i) + "]: expected an object with a non-empty string 'path', a numeric 'multiplier' and an optional boolean 'is_high_noise'");
+            continue;
+        }
+        lora_map.add_lora(entry["path"].get<std::string>(), entry["multiplier"].get<float>());
+    }
 }
 
 // parse a frontier payload without exceptions; a failed parse or a
@@ -555,6 +610,7 @@ struct SDGenParams {
     std::string lora_meta;
 
     bool upscale = false;
+    bool remove_limits = false;
 
     // state tracking
     bool force_image_edit = false;
@@ -1938,29 +1994,7 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
             // the LoRA block below
             sdjson_get(lora_apply_mode, "lora_apply_mode", payload, errors);
 
-            // loras: [{path, multiplier}]; duplicate paths accumulate, as with
-            // the legacy field decode
-            const auto loras = payload.find("loras");
-            if (loras != payload.end()) {
-                errors.accepted_keys.insert("loras");
-                if (loras->is_null()) {
-                    // accept as empty
-                } else if (!loras->is_array()) {
-                    errors.add("key 'loras': expected an array of {path, multiplier} objects");
-                } else {
-                    for (size_t i = 0; i < loras->size(); ++i) {
-                        const auto& entry = (*loras)[i];
-                        if (!entry.is_object()
-                            || !entry.contains("path") || !entry["path"].is_string()
-                            || entry["path"].get<std::string>().empty()
-                            || !entry.contains("multiplier") || !entry["multiplier"].is_number()) {
-                            errors.add("key 'loras[" + std::to_string(i) + "]': expected an object with a non-empty string 'path' and a numeric 'multiplier'");
-                            continue;
-                        }
-                        klp.lora_map.add_lora(entry["path"].get<std::string>(), entry["multiplier"].get<float>());
-                    }
-                }
-            }
+            sdjson_get_loras("loras", payload, errors, klp.lora_map);
 
             if (sddebugmode) {
                 sdjson_warn_unknown_keys(payload, errors);
@@ -2704,6 +2738,55 @@ void sdtype_abort_generation() {
     }
 }
 
+// field-row binding for the sd_generate payload: one row per wire
+// parameter, binding the JSON key (in), the upstream sd_opt key (out,
+// phase 3; nullptr = kcpp-only, never forwarded) and the IR member. The
+// decode loop walks the rows with one strict sdjson_get each. Explicit:
+// sample_method/scheduler (string -> enum), the nested img/vid members
+// (flip_mask, vid_req_frames, vid_fps, video_output_type — member pointers
+// can't name nested members) and the media fields (init_images, mask,
+// video_start_frame, video_end_frame, extra_images, ref_audios), loras and
+// custom_sigmas.
+struct GenStr  { const char* in; const char* out; std::string SDGenParams::* p; };
+struct GenF32  { const char* in; const char* out; float         SDGenParams::* p; };
+struct GenI32  { const char* in; const char* out; int           SDGenParams::* p; };
+struct GenI64  { const char* in; const char* out; int64_t       SDGenParams::* p; };
+struct GenBool { const char* in; const char* out; bool          SDGenParams::* p; };
+
+static const GenStr gen_str[] = {
+    // in key             out key (sd_opt)                      IR member
+    {"prompt",           "prompt",                              &SDGenParams::prompt},
+    {"negative_prompt",  "negative_prompt",                     &SDGenParams::negative_prompt},
+    {"ref_image_args",   nullptr,                               &SDGenParams::ref_image_args},
+    {"extra_sample_args","sample.args",                         &SDGenParams::extra_sample_args},
+    {"cache_mode",       "cache.mode",                          &SDGenParams::cache_mode},
+    {"cache_options",    nullptr,                               &SDGenParams::cache_options},
+};
+static const GenF32 gen_f32[] = {
+    {"cfg_scale",         "sample.guidance.txt_cfg",             &SDGenParams::cfg_scale},
+    {"distilled_guidance","sample.guidance.distilled_guidance",  &SDGenParams::distilled_guidance},
+    {"flow_shift",        "sample.flow_shift",                   &SDGenParams::flow_shift},
+    {"eta",               "sample.eta",                          &SDGenParams::eta},
+    {"denoising_strength","strength",                            &SDGenParams::strength},
+};
+static const GenI32 gen_i32[] = {
+    {"sample_steps",      "sample.steps",                        &SDGenParams::sample_steps},
+    {"width",             "width",                               &SDGenParams::width},
+    {"height",            "height",                              &SDGenParams::height},
+    {"shifted_timestep",  "sample.shifted_timestep",             &SDGenParams::shifted_timestep},
+    {"clip_skip",         "clip_skip",                           &SDGenParams::clip_skip},
+};
+static const GenI64 gen_i64[] = {
+    {"seed",              "seed",                                &SDGenParams::seed},
+};
+static const GenBool gen_bool[] = {
+    // flip_mask decodes to the nested img.flip_mask (explicit)
+    {"circular_x",        "circular_x",                          &SDGenParams::circular_x},
+    {"circular_y",        "circular_y",                          &SDGenParams::circular_y},
+    {"upscale",           nullptr,                               &SDGenParams::upscale},
+    {"remove_limits",     nullptr,                               &SDGenParams::remove_limits},
+};
+
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
     TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
@@ -2734,72 +2817,135 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     // decode the request into a local parameter representation
     SDGenParams gp;
-    gp.prompt = SAFE_STR(inputs.prompt);
-    gp.negative_prompt = SAFE_STR(inputs.negative_prompt);
-    gp.cfg_scale = inputs.cfg_scale;
-    gp.distilled_guidance = inputs.distilled_guidance;
-    gp.sample_steps = inputs.sample_steps;
-    gp.shifted_timestep = inputs.shifted_timestep;
-    gp.flow_shift = inputs.flow_shift;
-    gp.extra_sample_args = SAFE_STR(inputs.extra_sample_args);
-    gp.eta = inputs.eta;
-    gp.seed = inputs.seed;
-    gp.width = gp.req_width = inputs.width;
-    gp.height = gp.req_height = inputs.height;
-    gp.strength = inputs.denoising_strength;
-    gp.clip_skip = inputs.clip_skip;
-    gp.sample_method = sampler_from_name(inputs.sample_method);
-    gp.scheduler = scheduler_from_name(inputs.scheduler);
-    gp.cache_mode = SAFE_STR(inputs.cache_mode);
-    gp.cache_options = SAFE_STR(inputs.cache_options);
-    gp.circular_x = inputs.circular_x;
-    gp.circular_y = inputs.circular_y;
-    if (inputs.custom_sigmas && inputs.custom_sigmas_count > 0) {
-        gp.custom_sigmas.assign(inputs.custom_sigmas, inputs.custom_sigmas + inputs.custom_sigmas_count);
-    }
     gp.lora_map = klp.lora_map;
-    if (klp.lora_dynamic) {
-        for (int i = 0; i < inputs.lora_len; i++) {
-            gp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
-        }
-    }
-    gp.loras = gp.lora_map.get_lora_specs();
-    gp.lora_meta = gp.lora_map.get_lora_meta();
-    gp.upscale = inputs.upscale;
 
-    gp.ref_image_args = "resize_before_vae=on"; // auto resize ref image
-    if (inputs.ref_image_args && *inputs.ref_image_args) {
-        gp.ref_image_args += ",";
-        gp.ref_image_args += inputs.ref_image_args;
-        if (gp.ref_image_args.find("preset") != std::string::npos) {
-            gp.force_image_edit = true;
-            if(!sd_is_quiet && sddebugmode==1) {
-                printf("ref_image_args=\"%s\", forcing edit mode", inputs.ref_image_args);
+    if (inputs.params_json != nullptr) {
+        SdErrors errors;
+        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
+        if (payload.is_object()) {
+            // one strict getter per field row
+            for (const auto& f : gen_str)
+                sdjson_get(gp.*f.p, f.in, payload, errors);
+            for (const auto& f : gen_f32)
+                sdjson_get(gp.*f.p, f.in, payload, errors);
+            for (const auto& f : gen_i32)
+                sdjson_get(gp.*f.p, f.in, payload, errors);
+            for (const auto& f : gen_i64)
+                sdjson_get(gp.*f.p, f.in, payload, errors);
+            for (const auto& f : gen_bool)
+                sdjson_get(gp.*f.p, f.in, payload, errors);
+
+            // sample_method / scheduler: JSON string -> enum on decode
+            std::string sample_method, scheduler;
+            sdjson_get(sample_method, "sample_method", payload, errors);
+            sdjson_get(scheduler, "scheduler", payload, errors);
+            gp.sample_method = sampler_from_name(sample_method);
+            gp.scheduler = scheduler_from_name(scheduler.c_str());
+
+            // nested img/vid members (member pointers can't name them)
+            sdjson_get(gp.img.flip_mask, "flip_mask", payload, errors);
+            sdjson_get(gp.vid.req_frames, "vid_req_frames", payload, errors);
+            sdjson_get(gp.vid.output_type, "video_output_type", payload, errors);
+            sdjson_get(gp.vid.fps, "vid_fps", payload, errors);
+
+            // media: base64 strings
+            sdjson_get(gp.img.init_image, "init_images", payload, errors);
+            sdjson_get(gp.img.mask, "mask", payload, errors);
+            sdjson_get(gp.vid.start_frame, "video_start_frame", payload, errors);
+            sdjson_get(gp.vid.end_frame, "video_end_frame", payload, errors);
+
+            // extra_images / ref_audios: arrays of base64 strings
+            sdjson_get(gp.img.extra_images, "extra_images", payload, errors);
+            sdjson_get(gp.vid.ref_audios, "ref_audios", payload, errors);
+
+            if (klp.lora_dynamic) {
+                sdjson_get_loras("loras", payload, errors, gp.lora_map);
+            } else {
+                errors.accepted_keys.insert("loras");
+            }
+
+            sdjson_get(gp.custom_sigmas, "custom_sigmas", payload, errors);
+
+            if (sddebugmode) {
+                sdjson_warn_unknown_keys(payload, errors);
             }
         }
+        if (!errors.empty()) {
+            printf("\nError: KCPP SD generate: %s\n", errors.message().c_str());
+            return sd_generation.error(errors.message().c_str());
+        }
+    } else {
+        gp.prompt = SAFE_STR(inputs.prompt);
+        gp.negative_prompt = SAFE_STR(inputs.negative_prompt);
+        gp.cfg_scale = inputs.cfg_scale;
+        gp.distilled_guidance = inputs.distilled_guidance;
+        gp.sample_steps = inputs.sample_steps;
+        gp.shifted_timestep = inputs.shifted_timestep;
+        gp.flow_shift = inputs.flow_shift;
+        gp.extra_sample_args = SAFE_STR(inputs.extra_sample_args);
+        gp.eta = inputs.eta;
+        gp.seed = inputs.seed;
+        gp.width = inputs.width;
+        gp.height = inputs.height;
+        gp.strength = inputs.denoising_strength;
+        gp.clip_skip = inputs.clip_skip;
+        gp.sample_method = sampler_from_name(inputs.sample_method);
+        gp.scheduler = scheduler_from_name(inputs.scheduler);
+        gp.cache_mode = SAFE_STR(inputs.cache_mode);
+        gp.cache_options = SAFE_STR(inputs.cache_options);
+        gp.circular_x = inputs.circular_x;
+        gp.circular_y = inputs.circular_y;
+        if (inputs.custom_sigmas && inputs.custom_sigmas_count > 0) {
+            gp.custom_sigmas.assign(inputs.custom_sigmas, inputs.custom_sigmas + inputs.custom_sigmas_count);
+        }
+        if (klp.lora_dynamic) {
+            for (int i = 0; i < inputs.lora_len; i++) {
+                gp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
+            }
+        }
+        gp.upscale = inputs.upscale;
+
+        gp.ref_image_args = SAFE_STR(inputs.ref_image_args);
+
+        gp.img.init_image = SAFE_STR(inputs.init_images);
+        gp.img.mask = SAFE_STR(inputs.mask);
+        gp.img.flip_mask = inputs.flip_mask;
+        for(int i=0;i<inputs.extra_images_len;++i)
+        {
+            gp.img.extra_images.push_back(std::string(inputs.extra_images[i]));
+        }
+
+        gp.vid.req_frames = inputs.vid_req_frames;
+        gp.vid.output_type = inputs.video_output_type;
+        gp.vid.fps = inputs.vid_fps;
+        gp.vid.start_frame = SAFE_STR(inputs.video_start_frame);
+        gp.vid.end_frame = SAFE_STR(inputs.video_end_frame);
+        for(int i=0;i<inputs.ref_audios_len;++i)
+        {
+            gp.vid.ref_audios.push_back(std::string(inputs.ref_audios[i]));
+        }
+
+        gp.remove_limits = inputs.remove_limits;
     }
 
-    gp.img.init_image = SAFE_STR(inputs.init_images);
-    gp.img.mask = SAFE_STR(inputs.mask);
-    gp.img.flip_mask = inputs.flip_mask;
-    for(int i=0;i<inputs.extra_images_len;++i)
-    {
-        gp.img.extra_images.push_back(std::string(inputs.extra_images[i]));
+    // ref_image_args: auto-resize prefix, forced edit mode when a preset is given
+    if (gp.ref_image_args.find("preset") != std::string::npos) {
+        gp.force_image_edit = true;
+        if(!sd_is_quiet && sddebugmode==1) {
+            printf("ref_image_args=\"%s\", forcing edit mode", gp.ref_image_args.c_str());
+        }
     }
+    gp.ref_image_args = "resize_before_vae=on" + ((gp.ref_image_args.empty() ? "" : ",") + gp.ref_image_args);
 
-    gp.vid.req_frames = inputs.vid_req_frames;
-    gp.vid.output_type = inputs.video_output_type;
-    gp.vid.fps = inputs.vid_fps;
-    gp.vid.start_frame = SAFE_STR(inputs.video_start_frame);
-    gp.vid.end_frame = SAFE_STR(inputs.video_end_frame);
-    for(int i=0;i<inputs.ref_audios_len;++i)
-    {
-        gp.vid.ref_audios.push_back(std::string(inputs.ref_audios[i]));
-    }
+    gp.loras = gp.lora_map.get_lora_specs();
+    gp.lora_meta = gp.lora_map.get_lora_meta();
+
+    gp.req_width = gp.width;
+    gp.req_height = gp.height;
 
     const auto& info = klp.info;
     const bool supports_reference_images = (info.is_video_model || info.supports_ref_image || info.is_kontext || klp.photomaker_enabled);
-    const bool remove_limits = inputs.remove_limits;
+    const bool remove_limits = gp.remove_limits;
 
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);

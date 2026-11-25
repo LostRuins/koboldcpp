@@ -3417,16 +3417,13 @@ def sdcpp_model_status():
         'load_elapsed_seconds': 0 if loaded else None,
     }
 
-def sd_generate(genparams):
-    global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
-
-    job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-
+def sd_build_gen_payload(genparams):
+    '''builds the sd_generate JSON payload'''
     forced_negprompt = genparams.get("add_sd_negative_prompt", "")
     forced_posprompt = genparams.get("add_sd_prompt", "")
     forced_steplimit = tryparseint(genparams.get("add_sd_step_limit",80),80)
     forced_maxcfg = tryparsefloat(genparams.get("add_sd_cfg_limit",25),25)
-    allow_remove_limits = tryparseint(genparams.get("remove_limits",0),0)
+    remove_limits = tryparseint(genparams.get("remove_limits",0),0)
 
     prompt = genparams.get("prompt", "high quality")
     negative_prompt = genparams.get("negative_prompt", "")
@@ -3442,7 +3439,7 @@ def sd_generate(genparams):
     mask = strip_base64_prefix(genparams.get("mask", ""))
     video_start_frame = strip_base64_prefix(genparams.get("video_start_frame", ""))
     video_end_frame = strip_base64_prefix(genparams.get("video_end_frame", ""))
-    flip_mask = genparams.get("inpainting_mask_invert", 0)
+    flip_mask = tryparseint(genparams.get("inpainting_mask_invert", 0), 0)
     denoising_strength = tryparsefloat(genparams.get("denoising_strength", 0.6),0.6)
     cfg_scale = tryparsefloat(genparams.get("cfg_scale", 5),5)
     distilled_guidance = tryparsefloat(genparams.get("distilled_guidance", None), None)
@@ -3457,6 +3454,7 @@ def sd_generate(genparams):
     seed = tryparseint(genparams.get("seed", -1),-1)
     if seed < 0:
         seed = random.randint(100000, 999999)
+    seed = ((seed + 2**31) % 2**32) - 2**31
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
     custom_sigmas = genparams.get("custom_sigmas") or cached_sd_custom_sigmas.get(scheduler)
@@ -3467,7 +3465,7 @@ def sd_generate(genparams):
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
     vid_req_frames = 1 if (not vid_req_frames or vid_req_frames < 1) else vid_req_frames
     vid_fps = tryparseint(genparams.get("fps", 16),16)
-    video_output_type = genparams.get("video_output_type", 0)
+    video_output_type = tryparseint(genparams.get("video_output_type", 0), 0)
     cache_mode = str(genparams.get("cache_mode", ""))
     cache_options = str(genparams.get("cache_options", ""))
     extra_images_arr = genparams.get("extra_images", [])
@@ -3479,6 +3477,7 @@ def sd_generate(genparams):
     audio_refs_arr = [strip_base64_prefix(aud) for aud in audio_refs_arr]
 
     extra_images_arr = extra_images_arr[:extra_images_max]
+    extra_images_arr = [strip_base64_prefix(img) for img in extra_images_arr]
     lora_filenames, lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
 
     #clean vars
@@ -3503,56 +3502,111 @@ def sd_generate(genparams):
         extra_images_arr = [init_images] + extra_images_arr
         init_images = ""
 
+    # natural values, no omission logic: the C++ end treats null / absent /
+    # empty string / empty array all as absent; the -1.0 / 0 sentinels are the
+    # IR defaults for the unset guidance/shift params
+    return {
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "init_images": init_images,
+        "mask": mask,
+        "video_start_frame": video_start_frame,
+        "video_end_frame": video_end_frame,
+        "extra_images": extra_images_arr,
+        "ref_audios": audio_refs_arr,
+        "flip_mask": bool(flip_mask),
+        "denoising_strength": (0 if denoising_strength < 0 else (1 if denoising_strength > 1 else denoising_strength)),
+        "cfg_scale": cfg_scale,
+        "distilled_guidance": -1.0 if distilled_guidance is None else distilled_guidance,
+        "shifted_timestep": 0 if shifted_timestep is None else shifted_timestep,
+        "flow_shift": -1.0 if flow_shift is None else flow_shift,
+        "sample_steps": sample_steps,
+        "width": width,
+        "height": height,
+        "seed": seed,
+        "sample_method": sd_sampler_canonical_name(sample_method),
+        "scheduler": scheduler,
+        "eta": -1.0 if eta is None else eta,
+        "extra_sample_args": extra_sample_args,
+        "ref_image_args": ref_image_args,
+        "clip_skip": clip_skip,
+        "vid_req_frames": vid_req_frames,
+        "vid_fps": vid_fps,
+        "video_output_type": video_output_type,
+        "remove_limits": bool(remove_limits),
+        "circular_x": bool(tryparseint(genparams.get("circular_x",0),0)),
+        "circular_y": bool(tryparseint(genparams.get("circular_y",0),0)),
+        "cache_mode": cache_mode,
+        "cache_options": cache_options,
+        "upscale": bool(tryparseint(genparams.get("enable_hr", 0),0)),
+        "loras": [
+            {"path": path.decode("UTF-8"), "multiplier": multiplier}
+            for path, multiplier in zip(lora_filenames, lora_multipliers)
+        ],
+        "custom_sigmas": [] if custom_sigmas is None else list(custom_sigmas),
+    }
+
+def sd_generate(genparams):
+    global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
+
+    job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    payload = sd_build_gen_payload(genparams)
+
+    # the legacy struct fields stay filled alongside params_json until the ABI
+    # cleanup drops them; both are built from the same payload
     inputs = sd_generation_inputs()
-    inputs.prompt = prompt.encode("UTF-8")
-    inputs.negative_prompt = negative_prompt.encode("UTF-8")
-    inputs.init_images = init_images.encode("UTF-8")
-    inputs.mask = "".encode("UTF-8") if not mask else mask.encode("UTF-8")
-    inputs.video_start_frame = "".encode("UTF-8") if not video_start_frame else video_start_frame.encode("UTF-8")
-    inputs.video_end_frame = "".encode("UTF-8") if not video_end_frame else video_end_frame.encode("UTF-8")
+    inputs.prompt = payload["prompt"].encode("UTF-8")
+    inputs.negative_prompt = payload["negative_prompt"].encode("UTF-8")
+    inputs.init_images = payload["init_images"].encode("UTF-8")
+    inputs.mask = payload["mask"].encode("UTF-8")
+    inputs.video_start_frame = payload["video_start_frame"].encode("UTF-8")
+    inputs.video_end_frame = payload["video_end_frame"].encode("UTF-8")
+    extra_images_arr = payload["extra_images"]
     inputs.extra_images_len = len(extra_images_arr)
     inputs.extra_images = (ctypes.c_char_p * inputs.extra_images_len)()
     for n, estr in enumerate(extra_images_arr):
-        extra_image = strip_base64_prefix(estr)
-        inputs.extra_images[n] = extra_image.encode("UTF-8")
+        inputs.extra_images[n] = estr.encode("UTF-8")
+    audio_refs_arr = payload["ref_audios"]
     inputs.ref_audios_len = len(audio_refs_arr)
     inputs.ref_audios = (ctypes.c_char_p * inputs.ref_audios_len)()
     for n, aud in enumerate(audio_refs_arr):
         inputs.ref_audios[n] = aud.encode("UTF-8")
-    inputs.flip_mask = flip_mask
-    inputs.cfg_scale = cfg_scale
-    if distilled_guidance is not None:
-        inputs.distilled_guidance = distilled_guidance
-    inputs.denoising_strength = (0 if denoising_strength < 0 else (1 if denoising_strength > 1 else denoising_strength))
-    if shifted_timestep is not None:
-        inputs.shifted_timestep = shifted_timestep
-    if flow_shift is not None:
-        inputs.flow_shift = flow_shift
-    inputs.sample_steps = sample_steps
-    inputs.width = width
-    inputs.height = height
-    inputs.seed = ((seed + 2**31) % 2**32) - 2**31
-    inputs.sample_method = sd_sampler_canonical_name(sample_method).encode("UTF-8")
-    inputs.scheduler = scheduler.encode("UTF-8")
-    inputs.custom_sigmas_count = len(custom_sigmas) if custom_sigmas is not None else 0
-    if custom_sigmas is not None:
-        inputs.custom_sigmas = (ctypes.c_float * len(custom_sigmas))(*custom_sigmas)
-    inputs.eta = -1.0 if eta is None else eta
-    inputs.extra_sample_args = extra_sample_args.encode("UTF-8")
-    inputs.clip_skip = clip_skip
-    inputs.vid_req_frames = vid_req_frames
-    inputs.vid_fps = vid_fps
-    inputs.video_output_type = video_output_type
-    inputs.remove_limits = allow_remove_limits
-    inputs.ref_image_args = ref_image_args.encode("UTF-8")
-    inputs.circular_x = tryparseint(genparams.get("circular_x",0),0)
-    inputs.circular_y = tryparseint(genparams.get("circular_y",0),0)
-    inputs.cache_mode = cache_mode.encode("UTF-8")
-    inputs.cache_options = cache_options.encode("UTF-8")
-    inputs.upscale = (True if tryparseint(genparams.get("enable_hr", 0),0) else False)
-    inputs.lora_len = len(lora_filenames)
-    inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
-    inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
+    inputs.flip_mask = payload["flip_mask"]
+    inputs.cfg_scale = payload["cfg_scale"]
+    if payload["distilled_guidance"] >= 0:
+        inputs.distilled_guidance = payload["distilled_guidance"]
+    inputs.denoising_strength = payload["denoising_strength"]
+    inputs.shifted_timestep = payload["shifted_timestep"]
+    if payload["flow_shift"] >= 0:
+        inputs.flow_shift = payload["flow_shift"]
+    inputs.sample_steps = payload["sample_steps"]
+    inputs.width = payload["width"]
+    inputs.height = payload["height"]
+    inputs.seed = payload["seed"]
+    inputs.sample_method = payload["sample_method"].encode("UTF-8")
+    inputs.scheduler = payload["scheduler"].encode("UTF-8")
+    inputs.custom_sigmas_count = len(payload["custom_sigmas"])
+    if inputs.custom_sigmas_count > 0:
+        inputs.custom_sigmas = (ctypes.c_float * inputs.custom_sigmas_count)(*payload["custom_sigmas"])
+    inputs.eta = payload["eta"]
+    inputs.extra_sample_args = payload["extra_sample_args"].encode("UTF-8")
+    inputs.clip_skip = payload["clip_skip"]
+    inputs.vid_req_frames = payload["vid_req_frames"]
+    inputs.vid_fps = payload["vid_fps"]
+    inputs.video_output_type = payload["video_output_type"]
+    inputs.remove_limits = payload["remove_limits"]
+    inputs.ref_image_args = payload["ref_image_args"].encode("UTF-8")
+    inputs.circular_x = payload["circular_x"]
+    inputs.circular_y = payload["circular_y"]
+    inputs.cache_mode = payload["cache_mode"].encode("UTF-8")
+    inputs.cache_options = payload["cache_options"].encode("UTF-8")
+    inputs.upscale = payload["upscale"]
+    loras = payload["loras"]
+    inputs.lora_len = len(loras)
+    inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*[lora["path"].encode("UTF-8") for lora in loras])
+    inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*[lora["multiplier"] for lora in loras])
+    inputs.params_json = json.dumps(payload).encode("UTF-8")
 
     ret = handle.sd_generate(inputs)
     data_main = ""
