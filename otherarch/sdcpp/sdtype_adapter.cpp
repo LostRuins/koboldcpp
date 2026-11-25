@@ -346,10 +346,16 @@ static bool sdjson_get(T& out, const char* key, const nlohmann::json& payload, S
     // iterator of the const char* overload)
     const std::string k(key);
     const auto it = payload.find(k);
-    if (it == payload.end() || it->is_null()) {
+    if (it == payload.end()) {
         return false;
     }
+    // a present key is recorded as accepted even when its value decodes as
+    // absent (null or empty), so the unknown-key warning stays a drift
+    // detector for keys the interface does not decode
     errors.accepted_keys.insert(k);
+    if (it->is_null()) {
+        return false;
+    }
     const nlohmann::json& v = *it;
     if constexpr (std::is_same_v<T, bool>) {
         if (!v.is_boolean()) {
@@ -454,7 +460,7 @@ struct SDLoadParams {
     std::string flash_attn_mode;
     std::string max_vram;
     std::string tensor_type_rules;
-    int n_threads = 0;    // if -1 use physical cores
+    int n_threads = -1;
     sd_type_t wtype = SD_TYPE_COUNT;
     bool enable_mmap = false;
     bool auto_fit = false;
@@ -1833,6 +1839,57 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     // lp.taesd_path);
 }
 
+// field-row binding for the sd_load_model payload: one row per wire
+// parameter, binding the JSON key (in), the upstream sd_opt key (out, phase
+// 3; nullptr = kcpp-only, never forwarded) and the IR member. The decode loop
+// walks the rows with one strict sdjson_get each; converted fields (quant,
+// taesd, flash_attention, lora_apply_mode) name the upstream key they resolve
+// to in the QoL/routing step. Executable_path, lora_apply_mode, loras and
+// the legacy field decode stay explicit.
+struct LoadStr  { const char* in; const char* out; std::string SDLoadParams::*  p; };
+struct LoadI32  { const char* in; const char* out; int         SDLoadParams::*  p; };
+struct LoadBool { const char* in; const char* out; bool        SDLoadParams::*  p; };
+struct KloadStr  { const char* in; const char* out; std::string KcppLoadParams::* p; };
+struct KloadI32  { const char* in; const char* out; int         KcppLoadParams::* p; };
+struct KloadBool { const char* in; const char* out; bool        KcppLoadParams::* p; };
+
+static const LoadStr load_str[] = {
+    // in key               out key (sd_opt)     IR member
+    {"model_filename",     "model_path",        &SDLoadParams::model_path},
+    {"vae_filename",       "vae_path",          &SDLoadParams::vae_path},
+    {"audio_vae_filename", "audio_vae_path",    &SDLoadParams::audio_vae_path},
+    {"llm_filename",       "t5xxl_path",        &SDLoadParams::t5xxl_path},
+    {"clip1_filename",     "clip_l_path",       &SDLoadParams::clip_l_path},
+    {"clip2_filename",     "clip_g_path",       &SDLoadParams::clip_g_path},
+    {"photomaker_filename","photo_maker_path",  &SDLoadParams::photo_maker_path},
+    {"backend",            "backend",           &SDLoadParams::backend},
+    {"params_backend",     "params_backend",    &SDLoadParams::params_backend},
+    {"split_mode",         "split_mode",        &SDLoadParams::split_mode},
+    {"conv_direct_mode",   "conv_direct_mode",  &SDLoadParams::conv_direct_mode},
+    {"max_vram",           "max_vram",          &SDLoadParams::max_vram},
+};
+static const LoadI32 load_i32[] = {
+    {"threads",            "n_threads",         &SDLoadParams::n_threads},
+};
+static const LoadBool load_bool[] = {
+    {"use_mmap",           "enable_mmap",       &SDLoadParams::enable_mmap},
+    {"auto_fit",           "auto_fit",          &SDLoadParams::auto_fit},
+};
+static const KloadStr kload_str[] = {
+    // upscaler_filename has no upstream counterpart (kcpp-only)
+    {"upscaler_filename",  nullptr,             &KcppLoadParams::upscaler_filename},
+};
+static const KloadI32 kload_i32[] = {
+    {"quant",              "wtype",             &KcppLoadParams::quant},
+    {"tiled_vae_threshold",nullptr,             &KcppLoadParams::tiled_vae_threshold},
+    {"img_hard_limit",     nullptr,             &KcppLoadParams::img_hard_limit},
+    {"img_soft_limit",     nullptr,             &KcppLoadParams::img_soft_limit},
+};
+static const KloadBool kload_bool[] = {
+    {"flash_attention",    "flash_attn_mode",   &KcppLoadParams::flash_attention},
+    {"taesd",              "taesd_path",        &KcppLoadParams::taesd},
+};
+
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
@@ -1847,43 +1904,109 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     set_sd_log_level(sddebugmode);
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
-    sd_executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
 
     auto new_params = std::make_unique<SDParams>();
     SDLoadParams& lp = new_params->load_params;
     KcppLoadParams& klp = new_params->kcpp_load_params;
+    int lora_apply_mode = 0;
 
-    lp.model_path = SAFE_STR(inputs.model_filename);
-    lp.vae_path = SAFE_STR(inputs.vae_filename);
-    lp.audio_vae_path = SAFE_STR(inputs.audio_vae_filename);
-    lp.t5xxl_path = SAFE_STR(inputs.llm_filename);
-    lp.clip_l_path = SAFE_STR(inputs.clip1_filename);
-    lp.clip_g_path = SAFE_STR(inputs.clip2_filename);
-    lp.photo_maker_path = SAFE_STR(inputs.photomaker_filename);
-    klp.upscaler_filename = SAFE_STR(inputs.upscaler_filename);
-    klp.tiled_vae_threshold = inputs.tiled_vae_threshold;
+    if (inputs.params_json != nullptr) {
+        SdErrors errors;
+        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
+        if (payload.is_object()) {
+            // assigned to the global before any QoL probe, as the legacy
+            // field decode does
+            std::string executable_path;
+            sdjson_get(executable_path, "executable_path", payload, errors);
+            sd_executable_path = sd_get_u8path(executable_path);
+
+            // one strict getter per field row
+            for (const auto& f : load_str)
+                sdjson_get(lp.*f.p, f.in, payload, errors);
+            for (const auto& f : load_i32)
+                sdjson_get(lp.*f.p, f.in, payload, errors);
+            for (const auto& f : load_bool)
+                sdjson_get(lp.*f.p, f.in, payload, errors);
+            for (const auto& f : kload_str)
+                sdjson_get(klp.*f.p, f.in, payload, errors);
+            for (const auto& f : kload_i32)
+                sdjson_get(klp.*f.p, f.in, payload, errors);
+            for (const auto& f : kload_bool)
+                sdjson_get(klp.*f.p, f.in, payload, errors);
+
+            // lora_apply_mode: int -> mode + dynamic/cache bits, resolved in
+            // the LoRA block below
+            sdjson_get(lora_apply_mode, "lora_apply_mode", payload, errors);
+
+            // loras: [{path, multiplier}]; duplicate paths accumulate, as with
+            // the legacy field decode
+            const auto loras = payload.find("loras");
+            if (loras != payload.end()) {
+                errors.accepted_keys.insert("loras");
+                if (loras->is_null()) {
+                    // accept as empty
+                } else if (!loras->is_array()) {
+                    errors.add("key 'loras': expected an array of {path, multiplier} objects");
+                } else {
+                    for (size_t i = 0; i < loras->size(); ++i) {
+                        const auto& entry = (*loras)[i];
+                        if (!entry.is_object()
+                            || !entry.contains("path") || !entry["path"].is_string()
+                            || entry["path"].get<std::string>().empty()
+                            || !entry.contains("multiplier") || !entry["multiplier"].is_number()) {
+                            errors.add("key 'loras[" + std::to_string(i) + "]': expected an object with a non-empty string 'path' and a numeric 'multiplier'");
+                            continue;
+                        }
+                        klp.lora_map.add_lora(entry["path"].get<std::string>(), entry["multiplier"].get<float>());
+                    }
+                }
+            }
+
+            if (sddebugmode) {
+                sdjson_warn_unknown_keys(payload, errors);
+            }
+        }
+        if (!errors.empty()) {
+            printf("\nError: KCPP SD load: %s\n", errors.message().c_str());
+            return false;
+        }
+    } else {
+        sd_executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
+
+        lp.model_path = SAFE_STR(inputs.model_filename);
+        lp.vae_path = SAFE_STR(inputs.vae_filename);
+        lp.audio_vae_path = SAFE_STR(inputs.audio_vae_filename);
+        lp.t5xxl_path = SAFE_STR(inputs.llm_filename);
+        lp.clip_l_path = SAFE_STR(inputs.clip1_filename);
+        lp.clip_g_path = SAFE_STR(inputs.clip2_filename);
+        lp.photo_maker_path = SAFE_STR(inputs.photomaker_filename);
+        klp.upscaler_filename = SAFE_STR(inputs.upscaler_filename);
+        klp.tiled_vae_threshold = inputs.tiled_vae_threshold;
+        klp.img_hard_limit = inputs.img_hard_limit;
+        klp.img_soft_limit = inputs.img_soft_limit;
+
+        lp.backend = SAFE_STR(inputs.backend);
+        lp.params_backend = SAFE_STR(inputs.params_backend);
+        lp.split_mode = SAFE_STR(inputs.split_mode);
+        lp.conv_direct_mode = SAFE_STR(inputs.conv_direct_mode);
+        lp.n_threads = inputs.threads;
+        lp.enable_mmap = inputs.use_mmap;
+        lp.auto_fit = inputs.auto_fit;
+        klp.quant = inputs.quant;
+        klp.flash_attention = inputs.flash_attention;
+        klp.taesd = inputs.taesd;
+        lp.max_vram = SAFE_STR(inputs.max_vram);
+
+        for(int i=0;i<inputs.lora_len;++i) {
+            klp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
+        }
+        lora_apply_mode = inputs.lora_apply_mode;
+    }
+
     klp.tiled_vae_threshold = (klp.tiled_vae_threshold > 8192 ? 8192 : klp.tiled_vae_threshold);
     klp.tiled_vae_threshold = (klp.tiled_vae_threshold <= 0 ? 8192 : klp.tiled_vae_threshold); //if negative dont tile
-    klp.img_hard_limit = inputs.img_hard_limit;
-    klp.img_soft_limit = inputs.img_soft_limit;
-
-    lp.backend = SAFE_STR(inputs.backend);
-    lp.params_backend = SAFE_STR(inputs.params_backend);
-    lp.split_mode = SAFE_STR(inputs.split_mode);
-    lp.conv_direct_mode = SAFE_STR(inputs.conv_direct_mode);
-    lp.n_threads = inputs.threads; //if -1 use physical cores
-    lp.enable_mmap = inputs.use_mmap;
-    lp.auto_fit = inputs.auto_fit;
-    klp.quant = inputs.quant;
     if (klp.quant > 0) {
         lp.wtype = (klp.quant==1?SD_TYPE_Q8_0:SD_TYPE_Q4_0);
-    }
-    klp.flash_attention = inputs.flash_attention;
-    klp.taesd = inputs.taesd;
-    lp.max_vram = SAFE_STR(inputs.max_vram);
-
-    for(int i=0;i<inputs.lora_len;++i) {
-        klp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
     }
 
     printf("\nImageGen Init - Load Model: %s\n", lp.model_path.c_str());
@@ -1892,7 +2015,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         lp.lora_apply_mode = LORA_APPLY_AT_RUNTIME;
         klp.lora_dynamic = false;
 
-        int lora_apply_mode = inputs.lora_apply_mode;
         if(lora_apply_mode >= 1 && lora_apply_mode <= 2) {
             lp.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
         }

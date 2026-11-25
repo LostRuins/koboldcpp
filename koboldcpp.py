@@ -2949,6 +2949,61 @@ def sd_get_device_override(deviceid, module=''):
         result = device_name
     return result
 
+def sd_build_load_payload(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename):
+    '''builds the sd_load_model JSON payload'''
+    thds = args.threads
+
+    if args.sdthreads and args.sdthreads > 0:
+        sdt = int(args.sdthreads)
+        if sdt > 0:
+            thds = sdt
+
+    backends = [
+        sd_get_device_override(sd_resolve_device(args.sdmaingpu, 'main')),
+        sd_get_device_override(sd_resolve_device(args.sdclipdevice, default_sdclipdevice), 'CLIP'),
+        sd_get_device_override(sd_resolve_device(args.sdvaedevice, default_sdvaedevice), 'VAE'),
+    ]
+
+    lora_filenames, lora_multipliers = prepare_initial_lora_multipliers()
+    loras = [
+        {"path": path.decode("UTF-8"), "multiplier": multiplier}
+        for path, multiplier in zip(lora_filenames, lora_multipliers)
+    ]
+
+    # auto if no zero-weight lora, dynamic otherwise
+    lora_apply_mode = 0 # auto
+    if imglora_bypath:
+        lora_dynamic = 1 << 3 # accept changes at runtime
+        lora_cache   = 1 << 4 if imglora_cached else 0 # cache the preloaded LoRAs
+        lora_apply_mode = lora_dynamic | lora_cache
+
+    return {
+        "model_filename": model_filename,
+        "executable_path": getdirpath()+"/",
+        "threads": thds,
+        "quant": args.sdquant,
+        "flash_attention": bool(args.sdflashattention),
+        "params_backend": 'CPU' if args.sdoffloadcpu else '',
+        "use_mmap": bool(args.usemmap),
+        "backend": ','.join([b for b in backends if b]),
+        "conv_direct_mode": sd_convdirect_mode(args.sdconvdirect),
+        "taesd": bool(args.sdvaeauto),
+        "tiled_vae_threshold": args.sdtiledvae,
+        "vae_filename": vae_filename,
+        "audio_vae_filename": audio_vae_filename,
+        "llm_filename": llm_filename,
+        "clip1_filename": clip1_filename,
+        "clip2_filename": clip2_filename,
+        "photomaker_filename": photomaker_filename,
+        "upscaler_filename": upscaler_filename,
+        "max_vram": str((args.sdvramlimit/1024.0) if args.sdvramlimit > 0 else ''),
+        "auto_fit": False,
+        "img_hard_limit": args.sdclamped,
+        "img_soft_limit": args.sdclampedsoft,
+        "lora_apply_mode": lora_apply_mode,
+        "loras": loras,
+    }
+
 def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename):
     global args, cached_sd_info, cached_sd_custom_sigmas
     inputs = sd_load_model_inputs()
@@ -3001,6 +3056,7 @@ def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_
 
     inputs.img_hard_limit = args.sdclamped
     inputs.img_soft_limit = args.sdclampedsoft
+    inputs.params_json = json.dumps(sd_build_load_payload(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename)).encode("UTF-8")
     ret = handle.sd_load_model(inputs)
     return ret
 
