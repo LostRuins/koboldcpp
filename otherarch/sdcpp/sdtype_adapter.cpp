@@ -3186,20 +3186,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     } cleanup_image_callback_onexit{sd_ctx};
     sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, &prompt_image_ref);
 
-    std::string ts = get_timestamp_str();
-    if(!sd_is_quiet)
-    {
-        printf("\n[%s] Generating Image (%d steps)\n",ts.c_str(),gp.sample_steps);
-    }else{
-        printf("\n[%s] Generating (%d st.)\n",ts.c_str(),gp.sample_steps);
-    }
-
-    fflush(stdout);
-
     // settle the resolved parameters into the upstream image params; the
     // sd_*_gen_params defaults are resolved here, next to the struct. These
-    // params also carry the effective values used by the response info on the
-    // video path, which settles its own params below.
+    // params also carry the effective values (including the sd.cpp-resolved ones,
+    // e.g. the model-default sampler) used by the response info and the image
+    // metadata on every path, so they are settled even when no image is generated
+    // (passthrough, video).
     sd_img_gen_params_t params = {};
     sd_img_gen_params_init (&params);
 
@@ -3266,7 +3258,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    if(!sd_is_quiet && sddebugmode==1) {
+    if(!gp.is_passthrough && !sd_is_quiet && sddebugmode==1) {
         if (gp.loras.size() > 0) {
             printf("Applying LoRAs:\n");
             for(size_t i=0;i<gp.loras.size();++i)
@@ -3281,8 +3273,27 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_video_generation_result_t* vid_result = nullptr;
     int generated_num_results = 0;
 
-    if(gp.is_vidgen)
+    // the timestamped start line lives in each branch: it names what is about to
+    // run, and passthrough gets one too, since the upscaler may still run
+    if (gp.is_passthrough)
     {
+        // no generation at all: the output block below returns the input image
+        // (upscaled when requested) as-is, and generated_num_results stays 0
+        printf("\n[%s] No generation triggered, passthrough mode.\n", get_timestamp_str().c_str());
+        fflush(stdout);
+    }
+    else if(gp.is_vidgen)
+    {
+        std::string ts = get_timestamp_str();
+        if(!sd_is_quiet)
+        {
+            printf("\n[%s] Generating Video (%d steps)\n",ts.c_str(),gp.sample_steps);
+        }else{
+            printf("\n[%s] Generating (%d st.)\n",ts.c_str(),gp.sample_steps);
+        }
+
+        fflush(stdout);
+
         sd_vid_gen_params_t vid_gen_params = {};
         sd_vid_gen_params_init (&vid_gen_params);
 
@@ -3373,12 +3384,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         vid_result = nullptr;
         generated_audio = nullptr;
         int output_fps = gp.vid_fps;
-        if (gp.is_passthrough) {
-            // passthrough: skip generation and return the start frame (the img2img
-            // input, swapped in by the resolver) as-is. The passthrough output
-            // block below encodes it; generated_num_results stays 0 so the result
-            // loop is skipped.
-        } else if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
+        if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
             vid_result = nullptr;
         }
         if (vid_result) {
@@ -3395,8 +3401,20 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
         gp.vid_fps = output_fps;
     }
-    else if (!gp.is_img2img)
+    else
     {
+        std::string ts = get_timestamp_str();
+        if(!sd_is_quiet)
+        {
+            printf("\n[%s] Generating Image (%d steps)\n",ts.c_str(),gp.sample_steps);
+        }else{
+            printf("\n[%s] Generating (%d st.)\n",ts.c_str(),gp.sample_steps);
+        }
+
+        fflush(stdout);
+
+        // txt2img and img2img differ only by what the settle put in
+        // init_image/mask, so both use the same call
         if(!sd_is_quiet && sddebugmode==1)
         {
             char* buf = sd_img_gen_params_to_str(&params);
@@ -3414,30 +3432,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             img_result = nullptr;
         }
         generated_num_results = img_result ? img_result->count : 0;
-
-    } else {
-
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            char* buf = sd_img_gen_params_to_str(&params);
-            if(buf)
-            {
-                printf("\n%s\n", buf);
-                free(buf);
-            }
-        }
-
-        fflush(stdout);
-
-        if (gp.is_passthrough) {
-            printf("No generation triggered, passthrough mode.\n");
-        } else {
-            img_result = nullptr;
-            if (!generate_image(sd_ctx, &params, &img_result)) {
-                img_result = nullptr;
-            }
-            generated_num_results = img_result ? img_result->count : 0;
-        }
     }
 
     if (!gp.is_passthrough && (gp.is_vidgen ? vid_result == nullptr : img_result == nullptr)) {
