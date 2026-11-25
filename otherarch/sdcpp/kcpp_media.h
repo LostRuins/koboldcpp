@@ -1,14 +1,18 @@
-// kcpp_media.h — read-only media views over shared pixel storage.
+// kcpp_media.h — read-only media views over shared storage (pixels, audio
+// samples) for the sdcpp boundary.
 //
-// A KcppImage owns its pixels (HWC, interleaved uint8) through a shared_ptr
-// and hands out plain sd_image_t views for the sdcpp boundary. All
-// operations are read-only: derived images (resize, flipped_mask) are new
-// KcppImages and never mutate their source. Views borrow the pixels; they
-// are valid while the owning KcppImage is alive.
+// A KcppImage owns its pixels (HWC, interleaved uint8) and a KcppAudio owns
+// its samples (interleaved float) through a shared_ptr, and both hand out
+// plain sd_image_t / sd_audio_t views for the sdcpp boundary. All operations
+// are read-only: derived media (resize, flipped_mask) are new objects and
+// never mutate their source. Views borrow the storage; they are valid while
+// the owning media object is alive.
 //
 // An image is either null (w/h/c == 0, px == nullptr — the default state and
 // the result of a failed decode) or valid (w,h,c > 0, px non-null with
-// px->size() == w*h*c).
+// px->size() == w*h*c). An audio is null the same way (sample_rate/channels
+// == 0, samples == nullptr) or valid (both > 0, samples non-empty with
+// samples->size() a multiple of channels).
 //
 // kcpp-owned; currently used only by sdtype_adapter.cpp.
 
@@ -248,5 +252,98 @@ struct KcppImages {
 private:
     std::vector<KcppImage> items_;
     mutable std::vector<sd_image_t> views_;
+    mutable bool views_stale_ = true;
+};
+
+// an audio track: interleaved float PCM plus sample-rate/channel metadata
+struct KcppAudio {
+    uint32_t sample_rate = 0, channels = 0;
+    std::shared_ptr<const std::vector<float>> samples;   // interleaved
+
+    bool valid() const {
+        return sample_rate > 0 && channels > 0 && samples != nullptr && !samples->empty();
+    }
+
+    // base64 audio file (any format the kcpp decoder reads) at its natural
+    // rate/channels, no resampling; null audio on failure
+    static KcppAudio from_b64(const std::string& b64audio);
+
+    // old API boundary: borrows the samples; a null audio views as {0,0,0,nullptr}
+    sd_audio_t view() const;
+
+    /* future api
+    std::shared_ptr<const std::vector<float>> to_planar() const;  // sd_tensor_create
+    static KcppAudio from_tensor(const sd_audio_t*);              // results (copies)
+    */
+};
+
+inline KcppAudio KcppAudio::from_b64(const std::string& b64audio)
+{
+    if (b64audio.empty()) {
+        return KcppAudio{};
+    }
+    const std::vector<uint8_t> decoded = kcpp_base64_decode(b64audio);
+    std::vector<float> pcm;
+    int sample_rate = 0;
+    int channels = 0;
+    if (!kcpp_decode_audio_file_from_buf(decoded.data(), decoded.size(),
+                                         sample_rate, channels, pcm) ||
+        sample_rate <= 0 || channels <= 0 || pcm.empty()) {
+        fprintf(stderr, "KcppAudio::from_b64: failed to decode audio\n");
+        return KcppAudio{};
+    }
+    // a partial trailing frame carries no usable sample: drop it, so the view's
+    // sample_count * channels covers the whole buffer
+    if (pcm.size() % (size_t)channels != 0) {
+        pcm.resize(pcm.size() - pcm.size() % (size_t)channels);
+    }
+    auto v = std::make_shared<std::vector<float>>(std::move(pcm));
+    return KcppAudio{(uint32_t)sample_rate, (uint32_t)channels, std::move(v)};
+}
+
+inline sd_audio_t KcppAudio::view() const
+{
+    if (!valid()) {
+        return sd_audio_t{0, 0, 0, nullptr};
+    }
+    return sd_audio_t{sample_rate, channels,
+                      (uint64_t)(samples->size() / channels),
+                      const_cast<float*>(samples->data())};
+}
+
+// a list of KcppAudios (e.g. reference audios)
+struct KcppAudios {
+    KcppAudios() = default;
+    // copied views hold pointers into the source's sample storage: rebuild
+    KcppAudios(const KcppAudios& other) : items_(other.items_), views_stale_(true) {}
+    KcppAudios& operator=(const KcppAudios& other) {
+        items_ = other.items_;
+        views_stale_ = true;
+        return *this;
+    }
+
+    bool empty() const { return items_.empty(); }
+    size_t size() const { return items_.size(); }
+    const KcppAudio& at(size_t i) const { return items_[i]; }
+    const KcppAudio& operator[](size_t i) const { return items_[i]; }
+    void push_back(const KcppAudio& audio) { items_.push_back(audio); views_stale_ = true; }
+    void clear() { items_.clear(); views_stale_ = true; }
+
+    // old API boundary: views owned by *this, invalidated by push_back/clear
+    // (views are only needed while the sdcpp call is in flight)
+    sd_audio_t* views() const {
+        if (views_stale_) {
+            views_.resize(items_.size());
+            for (size_t i = 0; i < items_.size(); ++i) {
+                views_[i] = items_[i].view();
+            }
+            views_stale_ = false;
+        }
+        return views_.data();
+    }
+
+private:
+    std::vector<KcppAudio> items_;
+    mutable std::vector<sd_audio_t> views_;
     mutable bool views_stale_ = true;
 };
