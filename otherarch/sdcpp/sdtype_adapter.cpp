@@ -2345,7 +2345,7 @@ static std::string get_image_params(const sd_img_gen_params_t & params, const st
         << " | Size: " << params.width << "x" << params.height
         << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method)
         << get_scheduler_name(params.sample_params.scheduler, true);
-    if (params.sample_params.eta != -1.0f)
+    if (params.sample_params.eta != -1.0f && params.sample_params.eta != INFINITY)
         ss << "| Eta: " << params.sample_params.eta;
     if (params.sample_params.shifted_timestep != 0)
         ss << "| Timestep Shift: " << params.sample_params.shifted_timestep;
