@@ -618,21 +618,19 @@ struct SDGenParams {
     int req_width  = 512;
     int req_height = 512;
 
-    struct {
-        std::string init_image;
-        std::string mask;
-        bool flip_mask = false;
-        std::vector<std::string> extra_images;
-    } img;
+    // media (base64) fields
+    std::string img_init_image;
+    std::string img_mask;
+    bool img_flip_mask = false;
+    std::vector<std::string> img_extra_images;
 
-    struct {
-        std::string start_frame;
-        std::string end_frame;
-        std::vector<std::string> ref_audios;
-        int req_frames   = 0;
-        int output_type  = 0;
-        int fps          = 0;
-    } vid;
+    // video fields
+    std::string vid_start_frame;
+    std::string vid_end_frame;
+    std::vector<std::string> vid_ref_audios;
+    int vid_req_frames  = 0;
+    int vid_output_type = 0;
+    int vid_fps         = 0;
 };
 
 struct SDParams {
@@ -2700,16 +2698,13 @@ void sdtype_abort_generation() {
 // parameter, binding the JSON key (in), the upstream sd_opt key (out,
 // phase 3; nullptr = kcpp-only, never forwarded) and the IR member. The
 // decode loop walks the rows with one strict sdjson_get each. Explicit:
-// sample_method/scheduler (string -> enum), the nested img/vid members
-// (flip_mask, vid_req_frames, vid_fps, video_output_type — member pointers
-// can't name nested members) and the media fields (init_images, mask,
-// video_start_frame, video_end_frame, extra_images, ref_audios), loras and
-// custom_sigmas.
-struct GenStr  { const char* in; const char* out; std::string SDGenParams::* p; };
-struct GenF32  { const char* in; const char* out; float         SDGenParams::* p; };
-struct GenI32  { const char* in; const char* out; int           SDGenParams::* p; };
-struct GenI64  { const char* in; const char* out; int64_t       SDGenParams::* p; };
-struct GenBool { const char* in; const char* out; bool          SDGenParams::* p; };
+// sample_method/scheduler (string -> enum), loras and custom_sigmas.
+struct GenStr   { const char* in; const char* out; std::string              SDGenParams::* p; };
+struct GenF32   { const char* in; const char* out; float                    SDGenParams::* p; };
+struct GenI32   { const char* in; const char* out; int                      SDGenParams::* p; };
+struct GenI64   { const char* in; const char* out; int64_t                  SDGenParams::* p; };
+struct GenBool  { const char* in; const char* out; bool                     SDGenParams::* p; };
+struct GenVecStr{ const char* in; const char* out; std::vector<std::string> SDGenParams::* p; };
 
 static const GenStr gen_str[] = {
     // in key             out key (sd_opt)                      IR member
@@ -2719,6 +2714,10 @@ static const GenStr gen_str[] = {
     {"extra_sample_args","sample.args",                         &SDGenParams::extra_sample_args},
     {"cache_mode",       "cache.mode",                          &SDGenParams::cache_mode},
     {"cache_options",    nullptr,                               &SDGenParams::cache_options},
+    {"init_images",      nullptr,                               &SDGenParams::img_init_image},
+    {"mask",             nullptr,                               &SDGenParams::img_mask},
+    {"video_start_frame",nullptr,                               &SDGenParams::vid_start_frame},
+    {"video_end_frame",  nullptr,                               &SDGenParams::vid_end_frame},
 };
 static const GenF32 gen_f32[] = {
     {"cfg_scale",         "sample.guidance.txt_cfg",             &SDGenParams::cfg_scale},
@@ -2733,16 +2732,23 @@ static const GenI32 gen_i32[] = {
     {"height",            "height",                              &SDGenParams::height},
     {"shifted_timestep",  "sample.shifted_timestep",             &SDGenParams::shifted_timestep},
     {"clip_skip",         "clip_skip",                           &SDGenParams::clip_skip},
+    {"vid_req_frames",    nullptr,                               &SDGenParams::vid_req_frames},
+    {"video_output_type",nullptr,                               &SDGenParams::vid_output_type},
+    {"vid_fps",           nullptr,                               &SDGenParams::vid_fps},
 };
 static const GenI64 gen_i64[] = {
     {"seed",              "seed",                                &SDGenParams::seed},
 };
 static const GenBool gen_bool[] = {
-    // flip_mask decodes to the nested img.flip_mask (explicit)
     {"circular_x",        "circular_x",                          &SDGenParams::circular_x},
     {"circular_y",        "circular_y",                          &SDGenParams::circular_y},
+    {"flip_mask",         nullptr,                               &SDGenParams::img_flip_mask},
     {"upscale",           nullptr,                               &SDGenParams::upscale},
     {"remove_limits",     nullptr,                               &SDGenParams::remove_limits},
+};
+static const GenVecStr gen_vec_str[] = {
+    {"extra_images",      nullptr,                               &SDGenParams::img_extra_images},
+    {"ref_audios",        nullptr,                               &SDGenParams::vid_ref_audios},
 };
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
@@ -2792,6 +2798,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 sdjson_get(gp.*f.p, f.in, payload, errors);
             for (const auto& f : gen_bool)
                 sdjson_get(gp.*f.p, f.in, payload, errors);
+            for (const auto& f : gen_vec_str)
+                sdjson_get(gp.*f.p, f.in, payload, errors);
 
             // sample_method / scheduler: JSON string -> enum on decode
             std::string sample_method, scheduler;
@@ -2799,22 +2807,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             sdjson_get(scheduler, "scheduler", payload, errors);
             gp.sample_method = sampler_from_name(sample_method);
             gp.scheduler = scheduler_from_name(scheduler.c_str());
-
-            // nested img/vid members (member pointers can't name them)
-            sdjson_get(gp.img.flip_mask, "flip_mask", payload, errors);
-            sdjson_get(gp.vid.req_frames, "vid_req_frames", payload, errors);
-            sdjson_get(gp.vid.output_type, "video_output_type", payload, errors);
-            sdjson_get(gp.vid.fps, "vid_fps", payload, errors);
-
-            // media: base64 strings
-            sdjson_get(gp.img.init_image, "init_images", payload, errors);
-            sdjson_get(gp.img.mask, "mask", payload, errors);
-            sdjson_get(gp.vid.start_frame, "video_start_frame", payload, errors);
-            sdjson_get(gp.vid.end_frame, "video_end_frame", payload, errors);
-
-            // extra_images / ref_audios: arrays of base64 strings
-            sdjson_get(gp.img.extra_images, "extra_images", payload, errors);
-            sdjson_get(gp.vid.ref_audios, "ref_audios", payload, errors);
 
             if (klp.lora_dynamic) {
                 sdjson_get_loras("loras", payload, errors, gp.lora_map);
@@ -2865,13 +2857,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         set_preview_images(1);
     }
 
-    // <image:N>/<image:+N> prompt tags reference gp.img.extra_images by position
+    // <image:N>/<image:+N> prompt tags reference gp.img_extra_images by position
     // and route the images to the VLM conditioner; images will be removed from
     // the ref_images parameter unless a reference has a '+' tag
     image_tag_refs image_tags;
     bool vision_tags_active = false;
     {
-        size_t ref_count = std::min(gp.img.extra_images.size(), (size_t)max_extra_images);
+        size_t ref_count = std::min(gp.img_extra_images.size(), (size_t)max_extra_images);
         std::string tag_err;
         if (!collect_image_tags(gp.prompt, gp.negative_prompt, ref_count, image_tags, tag_err)) {
             return sd_generation.error(("KCPP SD: " + tag_err).c_str());
@@ -2907,7 +2899,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         gp.sample_method = sd_get_default_sample_method(sd_ctx);
     }
 
-    bool is_img2img = gp.img.init_image != "";
+    bool is_img2img = gp.img_init_image != "";
 
     if (!remove_limits && info.is_flux1)
     {
@@ -2956,7 +2948,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             // we are not doing img2img already
             !is_img2img
             // a single extra image is provided, and mask is NOT provided
-            && gp.img.extra_images.size()==1 && gp.img.mask==""
+            && gp.img_extra_images.size()==1 && gp.img_mask==""
             // the model does not support references natively, or through an edit mode/LoRa
             && !supports_reference_images && !gp.force_image_edit
             // the model can't handle image tags, or the user didn't ask for them
@@ -2965,17 +2957,17 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     if(redirect_single_reference_to_img2img)
     {
         is_img2img = true;
-        gp.img.init_image = gp.img.extra_images[0];
-        gp.img.extra_images.clear();
+        gp.img_init_image = gp.img_extra_images[0];
+        gp.img_extra_images.clear();
         if (!sd_is_quiet && sddebugmode == 1) {
             printf("Switching reference image to img2img\n");
         }
     }
 
-    if (info.is_video_model && gp.vid.start_frame.empty() && is_img2img && gp.img.mask=="")
+    if (info.is_video_model && gp.vid_start_frame.empty() && is_img2img && gp.img_mask=="")
     {
         // no explicit video start frame: the img2img input becomes the video start frame
-        std::swap(gp.vid.start_frame, gp.img.init_image);
+        std::swap(gp.vid_start_frame, gp.img_init_image);
     }
 
     // limit by image side
@@ -3091,19 +3083,19 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     if (info.is_video_model)
     {
-        video_start_image = load_extra_image(gp.vid.start_frame, true);
-        video_end_image = load_extra_image(gp.vid.end_frame, true);
+        video_start_image = load_extra_image(gp.vid_start_frame, true);
+        video_end_image = load_extra_image(gp.vid_end_frame, true);
     }
 
-    if(gp.img.extra_images.size()>0)
+    if(gp.img_extra_images.size()>0)
     {
         if (vision_tags_active) {
-            prompt_image_ref.image_pool.resize(std::min(gp.img.extra_images.size(), (size_t)max_extra_images));
+            prompt_image_ref.image_pool.resize(std::min(gp.img_extra_images.size(), (size_t)max_extra_images));
         }
-        for(int i=0;i<gp.img.extra_images.size() && i<max_extra_images;++i)
+        for(int i=0;i<gp.img_extra_images.size() && i<max_extra_images;++i)
         {
             const bool duplicates_video_frame = info.is_video_model && info.is_minimaxh3
-                && (gp.img.extra_images[i] == gp.vid.start_frame || gp.img.extra_images[i] == gp.vid.end_frame);
+                && (gp.img_extra_images[i] == gp.vid_start_frame || gp.img_extra_images[i] == gp.vid_end_frame);
             sd_image_t image = {0,0,0,nullptr};
             if(supports_reference_images||gp.force_image_edit||vision_tags_active)
             {
@@ -3113,12 +3105,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 {
                     if (!duplicates_video_frame || (vision_tags_active && image_tags.mentioned.count(i)))
                     {
-                        image = load_extra_image(gp.img.extra_images[i], !info.is_minimaxh3);
+                        image = load_extra_image(gp.img_extra_images[i], !info.is_minimaxh3);
                     }
                 }
                 else if(info.supports_ref_image||gp.force_image_edit)
                 {
-                    uint8_t * loaded = load_image_from_b64(gp.img.extra_images[i],nx2,ny2);
+                    uint8_t * loaded = load_image_from_b64(gp.img_extra_images[i],nx2,ny2);
                     if(loaded)
                     {
                         //kcpp fix: qwen image can stack overflow and crash when ref images exceed
@@ -3150,7 +3142,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 }
                 else if (info.is_kontext || klp.photomaker_enabled || vision_tags_active)
                 {
-                    uint8_t * loaded = load_image_from_b64(gp.img.extra_images[i],nx2,ny2);
+                    uint8_t * loaded = load_image_from_b64(gp.img_extra_images[i],nx2,ny2);
                     if(loaded)
                     {
                         image_buffer.extra.push_back(loaded);
@@ -3210,11 +3202,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     // reference audio is a video-model feature; the H3 image variant ignores it
-    if(info.is_minimaxh3 && info.is_video_model && gp.vid.ref_audios.size()>0)
+    if(info.is_minimaxh3 && info.is_video_model && gp.vid_ref_audios.size()>0)
     {
-        for(int i=0;i<gp.vid.ref_audios.size();++i)
+        for(int i=0;i<gp.vid_ref_audios.size();++i)
         {
-            sd_audio_t ref_audio = load_audio_from_b64(gp.vid.ref_audios[i]);
+            sd_audio_t ref_audio = load_audio_from_b64(gp.vid_ref_audios[i]);
             if (ref_audio.data == nullptr) {
                 return sd_generation.error("KCPP SD: load reference audio from base64 failed!");
             }
@@ -3301,7 +3293,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.pm_params.id_images_count = photomaker_imgs.size();
 
      //special case, is img2img and denoise strength is 0 and steps is 1, do a passthru
-    bool is_passthrough = (gp.sample_steps<=1 && gp.strength<=0 && is_img2img && gp.vid.req_frames<=1 && gp.img.extra_images.size()==0);
+    bool is_passthrough = (gp.sample_steps<=1 && gp.strength<=0 && is_img2img && gp.vid_req_frames<=1 && gp.img_extra_images.size()==0);
     sd_audio_t* generated_audio = nullptr;
 
     sd_image_generation_result_t* img_result = nullptr;
@@ -3323,8 +3315,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         vid_gen_params.sample_params = params.sample_params;
         vid_gen_params.strength = params.strength;
         vid_gen_params.seed = params.seed;
-        vid_gen_params.video_frames = gp.vid.req_frames;
-        vid_gen_params.fps = gp.vid.fps;
+        vid_gen_params.video_frames = gp.vid_req_frames;
+        vid_gen_params.fps = gp.vid_fps;
         vid_gen_params.vae_tiling_params = params.vae_tiling_params;
         vid_gen_params.loras = params.loras;
         vid_gen_params.lora_count = params.lora_count;
@@ -3377,16 +3369,16 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         vid_result = nullptr;
         generated_audio = nullptr;
-        int output_fps = gp.vid.fps;
+        int output_fps = gp.vid_fps;
         if (is_passthrough) {
             // passthrough: skip generation and return the start frame (the img2img
             // input, swapped in above) as-is. input_image feeds the passthrough block
             // below; generated_num_results stays 0 so the result loop is skipped.
             if (video_start_image.data) {
                 input_image = video_start_image;
-            } else if (gp.img.init_image != "") {
+            } else if (gp.img_init_image != "") {
                 // a mask prevented the init->start-frame swap; load the input directly
-                image_buffer.input = load_image_from_b64(gp.img.init_image, nx, ny, img2imgW, img2imgH, 3);
+                image_buffer.input = load_image_from_b64(gp.img_init_image, nx, ny, img2imgW, img2imgH, 3);
                 input_image.width = img2imgW;
                 input_image.height = img2imgH;
                 input_image.channel = 3;
@@ -3405,12 +3397,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
-            printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid.req_frames, generated_num_results);
-            if (output_fps != gp.vid.fps) {
-                printf("\nRequested FPS: %d, Generated FPS: %d\n", gp.vid.fps, output_fps);
+            printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid_req_frames, generated_num_results);
+            if (output_fps != gp.vid_fps) {
+                printf("\nRequested FPS: %d, Generated FPS: %d\n", gp.vid_fps, output_fps);
             }
         }
-        gp.vid.fps = output_fps;
+        gp.vid_fps = output_fps;
     }
     else if (!is_img2img)
     {
@@ -3434,22 +3426,22 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     } else {
 
-        image_buffer.input = load_image_from_b64(gp.img.init_image,nx,ny,img2imgW,img2imgH,3);
+        image_buffer.input = load_image_from_b64(gp.img_init_image,nx,ny,img2imgW,img2imgH,3);
 
         if (!image_buffer.input) {
             return sd_generation.error("KCPP SD: load image from memory failed!");
         }
 
-        if(gp.img.mask!="")
+        if(gp.img_mask!="")
         {
             int nx2, ny2, nc2;
-            image_buffer.mask = load_image_from_b64(gp.img.mask,nx2,ny2,img2imgW,img2imgH,1);
+            image_buffer.mask = load_image_from_b64(gp.img_mask,nx2,ny2,img2imgW,img2imgH,1);
 
             if (!image_buffer.mask) {
                 return sd_generation.error("KCPP SD: load mask from memory failed!");
             }
 
-            if(gp.img.flip_mask)
+            if(gp.img_flip_mask)
             {
                 int bufsiz = nx2 * ny2 * 1; //1 channel
                 for (int i = 0; i < bufsiz; ++i) {
@@ -3505,7 +3497,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         return sd_generation.error("KCPP SD generate failed!");
     }
 
-    bool isanim = (gp.vid.req_frames>1 && generated_num_results>1 && info.is_video_model);
+    bool isanim = (gp.vid_req_frames>1 && generated_num_results>1 && info.is_video_model);
     nlohmann::json jsoninfo = nlohmann::json::object();
     if (!isanim) {
         jsoninfo["prompt"] = params.prompt + gp.lora_meta;
@@ -3568,7 +3560,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         {
             if(!sd_is_quiet && sddebugmode==1)
             {
-                printf("\nSaving video buffer, VIDEO_OUTPUT_TYPE=%d...",gp.vid.output_type);
+                printf("\nSaving video buffer, VIDEO_OUTPUT_TYPE=%d...",gp.vid_output_type);
             }
             uint8_t * out_data = nullptr;
             uint8_t * out_data2 = nullptr;
@@ -3577,21 +3569,21 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             int status = 0;
             int status2 = 0;
 
-            const bool output_gif  = gp.vid.output_type == 0 || gp.vid.output_type == 2;
-            const bool output_webp = gp.vid.output_type == 3 || gp.vid.output_type == 4;
-            const bool output_avi  = gp.vid.output_type == 1 || gp.vid.output_type == 2 || gp.vid.output_type == 4;
+            const bool output_gif  = gp.vid_output_type == 0 || gp.vid_output_type == 2;
+            const bool output_webp = gp.vid_output_type == 3 || gp.vid_output_type == 4;
+            const bool output_avi  = gp.vid_output_type == 1 || gp.vid_output_type == 2 || gp.vid_output_type == 4;
 
             if(output_gif)
             {
-                status = create_gif_buf_from_sd_images_msf(vid_result->frames, generated_num_results, gp.vid.fps, &out_data,&out_len);
+                status = create_gif_buf_from_sd_images_msf(vid_result->frames, generated_num_results, gp.vid_fps, &out_data,&out_len);
             }
             else if(output_webp)
             {
-                status = create_animated_webp_buf_from_sd_images(vid_result->frames, generated_num_results, gp.vid.fps, &out_data,&out_len);
+                status = create_animated_webp_buf_from_sd_images(vid_result->frames, generated_num_results, gp.vid_fps, &out_data,&out_len);
             }
             if(output_avi)
             {
-                status2 = create_mjpg_avi_membuf_from_sd_images(vid_result->frames, generated_num_results, gp.vid.fps, 40, &out_data2,&out_len2, generated_audio);
+                status2 = create_mjpg_avi_membuf_from_sd_images(vid_result->frames, generated_num_results, gp.vid_fps, 40, &out_data2,&out_len2, generated_audio);
             }
 
             if(generated_num_results>1)
