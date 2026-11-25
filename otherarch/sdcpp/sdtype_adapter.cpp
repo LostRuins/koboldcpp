@@ -555,6 +555,7 @@ struct KcppLoadParams {
     LoraMap lora_map;
     bool lora_dynamic = false;
     bool lora_cache = false;
+    int kcpp_lora_apply_mode = 0;
 
     int quant = 0;              // decoded into wtype
     bool flash_attention = false;
@@ -1895,116 +1896,52 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     // lp.taesd_path);
 }
 
+// helper to unify the loading table
+struct LoadParams: public SDLoadParams, public KcppLoadParams {};
+
 // field-row binding for the sd_load_model payload: one row per wire
 // parameter, binding the JSON key (in), the upstream sd_opt key (out, phase
 // 3; nullptr = kcpp-only, never forwarded) and the IR member. The decode loop
 // walks the rows with one strict sdjson_get each; converted fields (quant,
 // taesd, flash_attention, lora_apply_mode) name the upstream key they resolve
-// to in the QoL/routing step. Executable_path, lora_apply_mode and loras
-// stay explicit.
-struct LoadStr  { const char* in; const char* out; std::string SDLoadParams::*  p; };
-struct LoadI32  { const char* in; const char* out; int         SDLoadParams::*  p; };
-struct LoadBool { const char* in; const char* out; bool        SDLoadParams::*  p; };
-struct KloadStr  { const char* in; const char* out; std::string KcppLoadParams::* p; };
-struct KloadI32  { const char* in; const char* out; int         KcppLoadParams::* p; };
-struct KloadBool { const char* in; const char* out; bool        KcppLoadParams::* p; };
+// to in the QoL/routing step. Executable_path and loras stay explicit.
+struct LoadStr  { const char* in; const char* out; std::string LoadParams::*  p; };
+struct LoadI32  { const char* in; const char* out; int         LoadParams::*  p; };
+struct LoadBool { const char* in; const char* out; bool        LoadParams::*  p; };
 
 static const LoadStr load_str[] = {
     // in key               out key (sd_opt)     IR member
-    {"model_filename",     "model_path",        &SDLoadParams::model_path},
-    {"vae_filename",       "vae_path",          &SDLoadParams::vae_path},
-    {"audio_vae_filename", "audio_vae_path",    &SDLoadParams::audio_vae_path},
-    {"llm_filename",       "t5xxl_path",        &SDLoadParams::t5xxl_path},
-    {"clip1_filename",     "clip_l_path",       &SDLoadParams::clip_l_path},
-    {"clip2_filename",     "clip_g_path",       &SDLoadParams::clip_g_path},
-    {"photomaker_filename","photo_maker_path",  &SDLoadParams::photo_maker_path},
-    {"backend",            "backend",           &SDLoadParams::backend},
-    {"params_backend",     "params_backend",    &SDLoadParams::params_backend},
-    {"split_mode",         "split_mode",        &SDLoadParams::split_mode},
-    {"conv_direct_mode",   "conv_direct_mode",  &SDLoadParams::conv_direct_mode},
-    {"max_vram",           "max_vram",          &SDLoadParams::max_vram},
+    {"model_filename",     "model_path",        &LoadParams::model_path},
+    {"vae_filename",       "vae_path",          &LoadParams::vae_path},
+    {"audio_vae_filename", "audio_vae_path",    &LoadParams::audio_vae_path},
+    {"llm_filename",       "t5xxl_path",        &LoadParams::t5xxl_path},
+    {"clip1_filename",     "clip_l_path",       &LoadParams::clip_l_path},
+    {"clip2_filename",     "clip_g_path",       &LoadParams::clip_g_path},
+    {"photomaker_filename","photo_maker_path",  &LoadParams::photo_maker_path},
+    {"backend",            "backend",           &LoadParams::backend},
+    {"params_backend",     "params_backend",    &LoadParams::params_backend},
+    {"split_mode",         "split_mode",        &LoadParams::split_mode},
+    {"conv_direct_mode",   "conv_direct_mode",  &LoadParams::conv_direct_mode},
+    {"max_vram",           "max_vram",          &LoadParams::max_vram},
+    {"upscaler_filename",  nullptr,             &LoadParams::upscaler_filename},
 };
 static const LoadI32 load_i32[] = {
-    {"threads",            "n_threads",         &SDLoadParams::n_threads},
+    {"threads",            "n_threads",         &LoadParams::n_threads},
+    {"lora_apply_mode",    nullptr,             &LoadParams::kcpp_lora_apply_mode},
+    {"quant",              "wtype",             &LoadParams::quant},
+    {"tiled_vae_threshold",nullptr,             &LoadParams::tiled_vae_threshold},
+    {"img_hard_limit",     nullptr,             &LoadParams::img_hard_limit},
+    {"img_soft_limit",     nullptr,             &LoadParams::img_soft_limit},
 };
 static const LoadBool load_bool[] = {
-    {"use_mmap",           "enable_mmap",       &SDLoadParams::enable_mmap},
-    {"auto_fit",           "auto_fit",          &SDLoadParams::auto_fit},
-};
-static const KloadStr kload_str[] = {
-    // upscaler_filename has no upstream counterpart (kcpp-only)
-    {"upscaler_filename",  nullptr,             &KcppLoadParams::upscaler_filename},
-};
-static const KloadI32 kload_i32[] = {
-    {"quant",              "wtype",             &KcppLoadParams::quant},
-    {"tiled_vae_threshold",nullptr,             &KcppLoadParams::tiled_vae_threshold},
-    {"img_hard_limit",     nullptr,             &KcppLoadParams::img_hard_limit},
-    {"img_soft_limit",     nullptr,             &KcppLoadParams::img_soft_limit},
-};
-static const KloadBool kload_bool[] = {
-    {"flash_attention",    "flash_attn_mode",   &KcppLoadParams::flash_attention},
-    {"taesd",              "taesd_path",        &KcppLoadParams::taesd},
+    {"use_mmap",           "enable_mmap",       &LoadParams::enable_mmap},
+    {"auto_fit",           "auto_fit",          &LoadParams::auto_fit},
+    {"flash_attention",    "flash_attn_mode",   &LoadParams::flash_attention},
+    {"taesd",              "taesd_path",        &LoadParams::taesd},
 };
 
-bool sdtype_load_model(const sd_load_model_inputs inputs) {
-
-    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
-    if (!no_concurrency.owns_lock()) {
-        // shouldn't happen
-        printf("\nError: ImageGen Init - another operation is in progress\n");
-        return false;
-    }
-
-    // globals
-    sddebugmode = inputs.debugmode;
-    set_sd_log_level(sddebugmode);
-    sd_is_quiet = inputs.quiet;
-    set_sd_quiet(sd_is_quiet);
-
-    auto new_params = std::make_unique<SDParams>();
-    SDLoadParams& lp = new_params->load_params;
-    KcppLoadParams& klp = new_params->kcpp_load_params;
-    int lora_apply_mode = 0;
-
-    {
-        SdErrors errors;
-        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
-        if (payload.is_object()) {
-            // assigned to the global before any QoL probe
-            std::string executable_path;
-            sdjson_get(executable_path, "executable_path", payload, errors);
-            sd_executable_path = sd_get_u8path(executable_path);
-
-            // one strict getter per field row
-            for (const auto& f : load_str)
-                sdjson_get(lp.*f.p, f.in, payload, errors);
-            for (const auto& f : load_i32)
-                sdjson_get(lp.*f.p, f.in, payload, errors);
-            for (const auto& f : load_bool)
-                sdjson_get(lp.*f.p, f.in, payload, errors);
-            for (const auto& f : kload_str)
-                sdjson_get(klp.*f.p, f.in, payload, errors);
-            for (const auto& f : kload_i32)
-                sdjson_get(klp.*f.p, f.in, payload, errors);
-            for (const auto& f : kload_bool)
-                sdjson_get(klp.*f.p, f.in, payload, errors);
-
-            // lora_apply_mode: int -> mode + dynamic/cache bits, resolved in
-            // the LoRA block below
-            sdjson_get(lora_apply_mode, "lora_apply_mode", payload, errors);
-
-            sdjson_get_loras("loras", payload, errors, klp.lora_map);
-
-            if (sddebugmode) {
-                sdjson_warn_unknown_keys(payload, errors);
-            }
-        }
-        if (!errors.empty()) {
-            printf("\nError: KCPP SD load: %s\n", errors.message().c_str());
-            return false;
-        }
-    }
-
+static void kcpp_resolve_load_parameters(SDLoadParams& lp, KcppLoadParams& klp)
+{
     klp.tiled_vae_threshold = (klp.tiled_vae_threshold > 8192 ? 8192 : klp.tiled_vae_threshold);
     klp.tiled_vae_threshold = (klp.tiled_vae_threshold <= 0 ? 8192 : klp.tiled_vae_threshold); //if negative dont tile
     if (klp.quant > 0) {
@@ -2017,14 +1954,14 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         lp.lora_apply_mode = LORA_APPLY_AT_RUNTIME;
         klp.lora_dynamic = false;
 
-        if(lora_apply_mode >= 1 && lora_apply_mode <= 2) {
-            lp.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
+        if(klp.kcpp_lora_apply_mode >= 1 && klp.kcpp_lora_apply_mode <= 2) {
+            lp.lora_apply_mode = (lora_apply_mode_t)klp.kcpp_lora_apply_mode;
         }
         else {
             // bit 3: LoRAs can be changed dynamically
             // bit 4: cache the initial LoRA list in VRAM
-            klp.lora_dynamic = !!(lora_apply_mode & (1<<3));
-            klp.lora_cache   = klp.lora_dynamic && !!(lora_apply_mode & (1<<4));
+            klp.lora_dynamic = !!(klp.kcpp_lora_apply_mode & (1<<3));
+            klp.lora_cache   = klp.lora_dynamic && !!(klp.kcpp_lora_apply_mode & (1<<4));
         }
         // TODO: LoRA caching produces errors after a preloaded LoRA is later removed on a request
         klp.lora_cache = false;
@@ -2124,8 +2061,61 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
     }
 
-
     kcpp_set_model_paths(lp, klp);
+}
+
+bool sdtype_load_model(const sd_load_model_inputs inputs) {
+
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        // shouldn't happen
+        printf("\nError: ImageGen Init - another operation is in progress\n");
+        return false;
+    }
+
+    // globals
+    sddebugmode = inputs.debugmode;
+    set_sd_log_level(sddebugmode);
+    sd_is_quiet = inputs.quiet;
+    set_sd_quiet(sd_is_quiet);
+
+    auto new_params = std::make_unique<SDParams>();
+    SDLoadParams& lp = new_params->load_params;
+    KcppLoadParams& klp = new_params->kcpp_load_params;
+
+    {
+        // assigned to the global before any QoL probe
+        std::string executable_path;
+        SdErrors errors;
+        LoadParams lptmp;
+        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
+        if (payload.is_object()) {
+            sdjson_get(executable_path, "executable_path", payload, errors);
+
+            // one strict getter per field row
+            for (const auto& f : load_str)
+                sdjson_get(lptmp.*f.p, f.in, payload, errors);
+            for (const auto& f : load_i32)
+                sdjson_get(lptmp.*f.p, f.in, payload, errors);
+            for (const auto& f : load_bool)
+                sdjson_get(lptmp.*f.p, f.in, payload, errors);
+
+            sdjson_get_loras("loras", payload, errors, lptmp.lora_map);
+
+            if (sddebugmode) {
+                sdjson_warn_unknown_keys(payload, errors);
+            }
+        }
+        if (!errors.empty()) {
+            printf("\nError: KCPP SD load: %s\n", errors.message().c_str());
+            return false;
+        }
+        sd_executable_path = sd_get_u8path(executable_path);
+        lp = static_cast<SDLoadParams&>(lptmp);
+        klp = static_cast<KcppLoadParams&>(lptmp);
+    }
+
+    kcpp_resolve_load_parameters(lp, klp);
 
     sd_ctx_params_t params = {};
     sd_ctx_params_init(&params);
