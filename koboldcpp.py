@@ -4795,7 +4795,15 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                 parser.stream.skip(1)
                 return parser.parse_statements( ("name:endgeneration",), drop_needle=True)
         from jinja2.sandbox import ImmutableSandboxedEnvironment
-        jinja_env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True,  extensions=[IgnoreGenerationTags,loopcontrols])
+        # Jinja calls finalize on output expressions after evaluating the template logic.
+        # Keep content iterable, but render a directly emitted text-only list as its text.
+        text_only_content = {}
+        def finalize_output(value):
+            content = text_only_content.get(id(value))
+            if content is value and content is not None:
+                return content[0]["text"]
+            return value
+        jinja_env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True, finalize=finalize_output, extensions=[IgnoreGenerationTags,loopcontrols])
         # sanitize messages to remove none types
         messages = json.loads(json.dumps(messages_orig))
         for m in messages:
@@ -4821,12 +4829,10 @@ def format_jinja(messages_orig, tools, chat_template_kwargs=None):
                         mediacount += 1
                     else:
                         normalized.append(item)
-                if turn_text and not normalized:
-                    # text-only turn: pass a plain string, as for string-content messages
-                    m["content"] = turn_text
-                    continue
                 if turn_text:
                     normalized.append({"type": "text","text": turn_text})
+                    if all(item.get("type") == "text" for item in m["content"]):
+                        text_only_content[id(normalized)] = normalized
                 m["content"] = normalized
         for m in messages: # Fix tool_calls arguments and content if parsable
             if m.get("tool_calls"):
