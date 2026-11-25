@@ -2740,8 +2740,6 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
     // <image:N>/<image:+N> prompt tags reference gp.img_extra_images by position
     // and route the images to the VLM conditioner; images will be removed from
     // the ref_images parameter unless a reference has a '+' tag
-    prompt_image_ref.image_pool.clear();
-    prompt_image_ref.zero_based = false;
     image_tag_refs image_tags;
     bool vision_tags_active = false;
     {
