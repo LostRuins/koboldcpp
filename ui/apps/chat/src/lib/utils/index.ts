@@ -11,6 +11,7 @@
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
 export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { withBase } from './base-path';
+export { getServerBase, loadServerConfig, serverUrl, setServerBase } from './server-config';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -295,7 +296,6 @@ export { computeLineDiff, prefixFor, renderUnifiedDiff, type DiffLine } from './
 
 // Partial-incremental JSON parser for streaming tool arguments
 export { memoizeBounded } from './memoize-bounded';
-export { parsePartialJsonArgs } from './parse-partial-json-args';
 
 // `exec_shell_command` result parsing
 export { parseExecShellCommandError } from './parse-exec-shell-error';

@@ -15,6 +15,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <cstdlib>
+#include <deque>
 #include <forward_list>
 #include <limits>
 #include <map>
@@ -278,7 +279,6 @@ struct llm_bigram_bpe {
     using queue = llama_priority_queue<llm_bigram_bpe, queue_storage, comparator>;
     llm_symbol::index left;
     llm_symbol::index right;
-    std::string text;
     int rank;
     size_t size;
 };
@@ -375,12 +375,8 @@ struct llm_tokenizer_bpe_old {
                 auto & left_symbol = symbols[bigram.left];
                 auto & right_symbol = symbols[bigram.right];
 
-                if (left_symbol.n == 0 || right_symbol.n == 0) {
-                    continue;
-                }
-                std::string left_token = std::string(left_symbol.text, left_symbol.n);
-                std::string right_token = std::string(right_symbol.text, right_symbol.n);
-                if (left_token + right_token != bigram.text) {
+                if (left_symbol.n == 0 || right_symbol.n == 0 ||
+                    left_symbol.n + right_symbol.n != bigram.size) {
                     continue;  // Skip this bigram if it's outdated
                 }
 
@@ -467,7 +463,6 @@ private:
 
         bigram.left  = left;
         bigram.right = right;
-        bigram.text  = left_token + right_token;
         bigram.size  = left_token.size() + right_token.size();
         bigram.rank  = rank_found;
 
@@ -980,13 +975,9 @@ struct llm_tokenizer_bpe_session {
                 auto & left_symbol = symbols[bigram.left];
                 auto & right_symbol = symbols[bigram.right];
 
-                if (left_symbol.n == 0 || right_symbol.n == 0) {
+                if (left_symbol.n == 0 || right_symbol.n == 0 ||
+                    left_symbol.n + right_symbol.n != bigram.size) {
                     continue;
-                }
-                std::string left_token = std::string(left_symbol.text, left_symbol.n);
-                std::string right_token = std::string(right_symbol.text, right_symbol.n);
-                if (left_token + right_token != bigram.text) {
-                    continue;  // Skip this bigram if it's outdated
                 }
 
                 // merge the right sym into the left one
@@ -1060,12 +1051,9 @@ private:
         if (left == -1 || right == -1) {
             return;
         }
-        std::string left_token  = std::string(symbols[left].text,  symbols[left].n);
-        std::string right_token = std::string(symbols[right].text, symbols[right].n);
-
-        int rank_found = -1;
-
-        rank_found = vocab.find_bpe_rank(left_token, right_token);
+        int rank_found = vocab.find_bpe_rank(
+                std::string_view(symbols[left].text,  symbols[left].n),
+                std::string_view(symbols[right].text, symbols[right].n));
 
         if (rank_found < 0) {
             return;
@@ -1075,8 +1063,7 @@ private:
 
         bigram.left  = left;
         bigram.right = right;
-        bigram.text  = left_token + right_token;
-        bigram.size  = left_token.size() + right_token.size();
+        bigram.size  = symbols[left].n + symbols[right].n;
         bigram.rank  = rank_found;
 
         work_queue.push(bigram);
@@ -2378,13 +2365,15 @@ struct llama_vocab::impl {
 
     std::vector<llama_token> cache_special_tokens;
     std::vector<std::string> cache_token_to_piece; // llama_token_to_piece(special = true);
+    using bpe_rank_key = std::pair<std::string_view, std::string_view>;
     struct pair_hash {
-        size_t operator()(const std::pair<std::string, std::string> & p) const {
-            return std::hash<std::string>{}(p.first) ^  //create some hash for pair
-                   (std::hash<std::string>{}(p.second) << 1);
+        size_t operator()(const bpe_rank_key & p) const {
+            return std::hash<std::string_view>{}(p.first) ^
+                   (std::hash<std::string_view>{}(p.second) << 1);
         }
     };
-    std::unordered_map<std::pair<std::string, std::string>, int, pair_hash> bpe_ranks;
+    std::deque<std::string> bpe_rank_strs; // stable backing storage for bpe_ranks keys
+    std::unordered_map<bpe_rank_key, int, pair_hash> bpe_ranks;
 
     // set of all tokens that cause "end of generation"
     std::set<llama_token> special_eog_ids;
@@ -2397,6 +2386,8 @@ struct llama_vocab::impl {
 
     impl(const llama_vocab & vocab) : vocab(vocab) {
     }
+
+    impl(const impl &) = delete;
 
     ~impl() = default;
 
@@ -2496,17 +2487,11 @@ bool llama_vocab::impl::load_bpe_ranks(const gguf_context * ctx, const LLM_KV & 
             }
         }
 
-        std::string first;
-        std::string second;
-
         const char * sep = *word ? strchr(word + 1, ' ') : nullptr;
 
-        if (sep) {
-            first.assign(word, sep - word);
-            second.assign(sep + 1);
-        }
-
-        bpe_ranks.emplace(std::make_pair(std::move(first), std::move(second)), i);
+        auto & left  = bpe_rank_strs.emplace_back(word, sep ? sep - word : 0);
+        auto & right = bpe_rank_strs.emplace_back(sep ? sep + 1 : "");
+        bpe_ranks.emplace(bpe_rank_key(left, right), i);
     }
     return true;
 }
@@ -4911,20 +4896,25 @@ int llama_vocab::max_token_len() const {
     return pimpl->max_token_len;
 }
 
-int llama_vocab::find_bpe_rank(const std::string & token_left, const std::string & token_right) const {
-    // GGML_ASSERT(token_left.find(' ')   == std::string::npos);
-    // GGML_ASSERT(token_left.find('\n')  == std::string::npos);
-    // GGML_ASSERT(token_right.find(' ')  == std::string::npos);
-    // GGML_ASSERT(token_right.find('\n') == std::string::npos);
-    //the above breaks gguf v1 falcons
-    std::string tl = token_left;
-    std::string tr = token_right;
-    replace_all(tl,  " ",  "\u0120");
-    replace_all(tl,  "\n", "\u010A");
-    replace_all(tr, " ",  "\u0120");
-    replace_all(tr, "\n", "\u010A");
+int llama_vocab::find_bpe_rank(std::string_view token_left, std::string_view token_right) const {
+    // GGUF v1 Falcon tokens can contain raw spaces and newlines.
+    // Keep the string-view lookup allocation-free unless normalization is needed.
+    std::string normalized_left;
+    std::string normalized_right;
+    if (token_left.find_first_of(" \n") != std::string_view::npos) {
+        normalized_left = std::string(token_left);
+        replace_all(normalized_left, " ", "\u0120");
+        replace_all(normalized_left, "\n", "\u010A");
+        token_left = normalized_left;
+    }
+    if (token_right.find_first_of(" \n") != std::string_view::npos) {
+        normalized_right = std::string(token_right);
+        replace_all(normalized_right, " ", "\u0120");
+        replace_all(normalized_right, "\n", "\u010A");
+        token_right = normalized_right;
+    }
 
-    auto it = pimpl->bpe_ranks.find(std::make_pair(tl, tr));
+    auto it = pimpl->bpe_ranks.find(std::make_pair(token_left, token_right));
     if (it == pimpl->bpe_ranks.end()) {
         return -1;
     }
@@ -4940,7 +4930,7 @@ std::vector<std::string> llama_vocab::get_bpe_merges() const {
     std::vector<std::string> result(max_rank + 1);
 
     for (const auto & pair : pimpl->bpe_ranks) {
-        result[pair.second] = pair.first.first + " " + pair.first.second;
+        result[pair.second] = std::string(pair.first.first) + " " + std::string(pair.first.second);
     }
 
     return result;
