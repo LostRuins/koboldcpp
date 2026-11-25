@@ -3344,6 +3344,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             if (gp.vid_end_frame.valid()) {
                 vid_gen_params.end_image = gp.vid_end_frame.view();
             }
+            parse_cache_options(vid_gen_params.cache, gp.cache_mode, gp.cache_options);
+            vid_gen_params.circular_x = gp.circular_x;
+            vid_gen_params.circular_y = gp.circular_y;
         }
 
         if(!sd_is_quiet && sddebugmode==1)
