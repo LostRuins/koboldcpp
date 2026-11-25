@@ -1057,6 +1057,26 @@ def compare_position(
     }
 
 
+def bf16_relaxed_position_verdict(
+    actual: list[tuple[int, float]],
+    expected: list[tuple[int, float]],
+    quantity: str,
+    tol: float,
+) -> tuple[bool, dict]:
+    """Accept numerical order noise without hiding argmax or large-delta errors."""
+    cmp = compare_position(actual, expected, quantity, tol)
+    if cmp["max_delta"] > tol:
+        return False, cmp
+    if cmp["argmax_match"]:
+        return True, cmp
+    if len(expected) < 2 or len(actual) < 2:
+        return False, cmp
+    margin = abs(expected[0][1] - expected[1][1])
+    actual_ids = {tid for tid, _ in actual}
+    near_tie = margin <= 0.05 and expected[0][0] in actual_ids and expected[1][0] in actual_ids
+    return near_tie, cmp
+
+
 def dump_observed(path: Path, positions: list[list[tuple[int, float]]], meta: dict) -> Path:
     """Write what the port emitted.  Labelled NOT a reference so it cannot be
     laundered into an oracle: it is the artifact under test."""
@@ -1083,6 +1103,7 @@ def report_logits(
     id_field: str,
     observed: list[list[tuple[int, float]]],
     dump_path: Path | None,
+    allow_bf16_noise: bool = False,
 ) -> int:
     banner("4. per-position top-5 comparison  (the re-cut acceptance)")
     print(f"oracle    : {oracle_path}   (expected ids from '{id_field}')")
@@ -1125,6 +1146,13 @@ def report_logits(
             EXIT_PLUMBING,
             "NO REFERENCE -- not a pass and not a failure; the comparison never happened",
             "  The port's own top-5 was printed and dumped above.  Do not read it as acceptance.",
+        )
+
+    if allow_bf16_noise and "BF16" not in reference["provenance"].upper():
+        return fail(
+            EXIT_PLUMBING,
+            "--accept-bf16-noise requires a BF16 reference",
+            f"  reference provenance is: {reference['provenance']}",
         )
 
     quantity = reference["quantity"]
@@ -1214,6 +1242,29 @@ def report_logits(
             "EMPTY COMPARISON -- loud data, not a model verdict",
             "  Check that the oracle and reference describe the same prompt and token-id space.",
         )
+
+    if allow_bf16_noise:
+        if failures:
+            print()
+            print("VERDICT: FAIL -- at least one position breaks the strict SET/ORDER acceptance")
+        if skipped:
+            print()
+            print("BF16 VERDICT: INCOMPLETE -- some positions could not be compared.")
+            return fail(EXIT_PLUMBING, "BF16 COMPARISON INCOMPLETE -- not a pass and not a failure")
+        relaxed_failures = []
+        for row in rows:
+            idx = row["position"]
+            expected_top = reference["positions"][idx]
+            relaxed, _ = bf16_relaxed_position_verdict(row["actual"], expected_top, quantity, tol)
+            if not relaxed:
+                relaxed_failures.append(idx)
+        print()
+        if relaxed_failures:
+            print(f"BF16 VERDICT: FAIL -- delta > {tol} or a non-tie argmax flip at {relaxed_failures}")
+            return EXIT_MISMATCH
+        print(f"BF16 VERDICT: PASS -- {compared} positions, shared-token delta <= {tol}; "
+              "set/order are informational, argmax ties <= 0.05 logprob allowed")
+        return EXIT_MATCH
 
     if failures:
         print()
@@ -1416,7 +1467,7 @@ def run_logits(args, binary: Path, model: Path, oracle_path: Path) -> int:
                 })
 
             return report_logits(rows, reference, args.tol, mode, oracle_path,
-                                 id_field, observed, dump_path)
+                                 id_field, observed, dump_path, args.accept_bf16_noise)
     finally:
         if not args.keep_logs:
             shutil.rmtree(log_dir, ignore_errors=True)
@@ -1550,6 +1601,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     logits.add_argument("--ctx", type=int, default=64, help="server -c for the logits route")
     logits.add_argument("--ngl", type=int, default=0, help="server -ngl for the logits route")
+    logits.add_argument(
+        "--accept-bf16-noise",
+        action="store_true",
+        help="BF16-only acceptance: shared-token delta <= tol plus argmax, allowing <=0.05 ties; strict SET/ORDER remains printed",
+    )
     logits.add_argument(
         "--dump-observed",
         default="",

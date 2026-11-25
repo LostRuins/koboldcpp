@@ -130,3 +130,55 @@ def test_nonempty_matching_comparison_still_passes(capsys: pytest.CaptureFixture
     captured = capsys.readouterr()
     assert rc == oracle_check.EXIT_MATCH == 0
     assert "VERDICT: PASS -- 1 positions" in captured.out
+
+
+def test_bf16_mode_allows_order_noise_but_prints_strict_failure(capsys: pytest.CaptureFixture[str]) -> None:
+    reference = report_reference()
+    reference["provenance"] = "BF16 pytest"
+    reference["positions"] = {0: [(1032, -0.1), (2007, -5.0), (1659, -5.5)]}
+    actual = [(1032, -0.2), (1659, -5.6), (2007, -5.1)]
+    rows = [{"position": 0, "actual": actual, "why": ""}]
+
+    rc = oracle_check.report_logits(
+        rows,
+        reference,
+        0.5,
+        "pytest",
+        Path("oracle.json"),
+        "ids_loops4",
+        [actual],
+        None,
+        allow_bf16_noise=True,
+    )
+
+    captured = capsys.readouterr()
+    assert rc == oracle_check.EXIT_MATCH == 0
+    assert "VERDICT: FAIL" in captured.out
+    assert "BF16 VERDICT: PASS" in captured.out
+
+
+def test_bf16_mode_allows_a_near_tie_argmax_flip() -> None:
+    expected = [(5675, -2.8758), (9032, -2.8844), (1032, -2.9129)]
+    actual = [(9032, -2.880), (5675, -2.893), (1032, -2.991)]
+
+    relaxed, _ = oracle_check.bf16_relaxed_position_verdict(actual, expected, "logprobs", 0.5)
+
+    assert relaxed
+
+
+def test_bf16_mode_rejects_a_large_delta() -> None:
+    expected = [(1032, -0.1), (2007, -5.0)]
+    actual = [(1032, -0.7), (2007, -5.0)]
+
+    relaxed, _ = oracle_check.bf16_relaxed_position_verdict(actual, expected, "logprobs", 0.5)
+
+    assert not relaxed
+
+
+def test_bf16_mode_rejects_a_non_tie_argmax_flip() -> None:
+    expected = [(1032, -0.1), (2007, -1.0)]
+    actual = [(2007, -0.9), (1032, -0.2)]
+
+    relaxed, _ = oracle_check.bf16_relaxed_position_verdict(actual, expected, "logprobs", 0.5)
+
+    assert not relaxed
