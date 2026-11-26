@@ -2,6 +2,7 @@
 #include <string.h>
 #include <time.h>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <iomanip>
@@ -378,7 +379,7 @@ struct SDGenParams {
     int height = 512;
     float strength = 0.75f;
 
-    // vae cache
+    // inference cache
     std::string cache_mode;
     std::string cache_options;
 
@@ -392,41 +393,66 @@ struct SDGenParams {
     std::vector<sd_lora_t> loras;
     std::string lora_meta;
 
+    bool upscale = false;
+
     // state tracking
     bool force_image_edit = false;
     int req_width  = 512;
     int req_height = 512;
+
+    struct {
+        std::string init_image;
+        std::string mask;
+        bool flip_mask = false;
+        std::vector<std::string> extra_images;
+    } img;
+
+    struct {
+        std::string start_frame;
+        std::string end_frame;
+        std::vector<std::string> ref_audios;
+        int req_frames   = 0;
+        int output_type  = 0;
+        int fps          = 0;
+    } vid;
 };
 
 struct SDParams {
     SDLoadParams load_params;
     KcppLoadParams kcpp_load_params;
+
+    // owned sd_* resources of the loaded model, released here
+    sd_ctx_t* sd_ctx = nullptr;
+    upscaler_ctx_t* upscaler_ctx = nullptr;
+
+    ~SDParams() {
+        // only runs on model reload: the sd_params global is a raw pointer,
+        // so the model is intentionally leaked at process exit
+        if (sd_ctx != nullptr) {
+            free_sd_ctx(sd_ctx);
+            sd_ctx = nullptr;
+        }
+        if (upscaler_ctx != nullptr) {
+            free_upscaler_ctx(upscaler_ctx);
+            upscaler_ctx = nullptr;
+        }
+    }
 };
 
 //shared
 int total_img_gens = 0;
 
 //global static vars for SD
-static SDParams * sd_params = nullptr;
-static sd_ctx_t * sd_ctx = nullptr;
-static upscaler_ctx_t* upscaler_ctx = nullptr;
+static std::mutex g_sd_params_mux;
+// raw pointer on purpose: a static unique_ptr would destroy the model during
+// process exit, when free_sd_ctx()/free_upscaler_ctx() may touch global state
+// that is already gone (crashes, particularly on Windows). Leaking the model
+// at exit is harmless.
+static SDParams* sd_params = nullptr;
 static int sddebugmode = 0;
-static uint8_t * input_image_buffer = NULL;
-static uint8_t * input_mask_buffer = NULL;
-static uint8_t * upscale_src_buffer = NULL;
-static std::vector<uint8_t *> input_extraimage_buffers;
+static std::string sd_executable_path;
 const int max_extra_images = 4;
 
-// per-request pool of reference images (original request order) served by
-// prompt_image_from_refs for <image:N> prompt tags; the callback itself is
-// registered once at model load
-static std::vector<sd_image_t> prompt_ref_image_pool;
-static bool prompt_refs_zero_based = false;
-
-static std::string sdmaingpuenv;
-static int cfg_tiled_vae_threshold = 0;
-static int cfg_square_limit = 0;
-static int cfg_side_limit = 0;
 static bool sd_is_quiet = false;
 
 struct gendata_st {
@@ -446,7 +472,14 @@ struct {
     gendata_st gendata;
 } geninfo;
 
-static struct {
+// this mutex, and thread_local return buffer declarations, are intended as
+// safety nets: although the generation can concur with preview and cancellation
+// functions, generations can't be called concurrently (sd_ctx_t does not
+// support it)
+static std::mutex g_sd_op_mutex;
+using TryLocker = std::unique_lock<std::mutex>;
+
+static thread_local struct {
     std::string data;
     std::string data_extra;
     std::string final_frame;
@@ -515,7 +548,7 @@ static KcppTokenizerResources kcpp_tokenizer_resources;
 static std::string load_embd_file(std::string& cache, const char* filename)
 {
     if (cache.empty()) {
-        std::string filepath = executable_path + filename;
+        std::string filepath = sd_executable_path + filename;
         cache = read_str_from_disk(filepath);
     }
     return cache;
@@ -832,20 +865,30 @@ static std::string strip_image_tags(const std::string& text, bool zero_based)
     }
 }
 
-// callback registered at model load (sd_set_prompt_image_callback): resolves
-// <image:N> / <image:+N> prompt tags to the per-request reference image pool
-static bool prompt_image_from_refs(const char* source, void* /*data*/, sd_image_t* image_out)
+struct PromptImageRef {
+    // per-request pool of reference images (original request order) served by
+    // prompt_image_from_refs for <image:N> prompt tags
+    std::vector<sd_image_t> image_pool;
+    bool zero_based = false;
+};
+
+// callback registered per-generation: resolves
+// <image:N> / <image:+N> prompt tags to the reference image pool
+static bool prompt_image_from_refs(const char* source, void* data, sd_image_t* image_out)
 {
+    PromptImageRef *rdata = reinterpret_cast<PromptImageRef*>(data);
+    if (rdata == nullptr)
+        return false;
     int idx;
     bool plus;
     if (!source || !parse_image_tag_source(source, idx, plus)) {
         return false;
     }
-    idx = prompt_refs_zero_based ? idx : idx - 1;
-    if (idx < 0 || idx >= (int)prompt_ref_image_pool.size()) {
+    idx = rdata->zero_based ? idx : idx - 1;
+    if (idx < 0 || idx >= (int)rdata->image_pool.size()) {
         return false;
     }
-    const sd_image_t& image = prompt_ref_image_pool[idx];
+    const sd_image_t& image = rdata->image_pool[idx];
     if (!image.data) {
         return false;
     }
@@ -1490,7 +1533,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
 
         if(tae_name)
         {
-            kcpp_taesd_path = executable_path + "embd_res/" + tae_name;
+            kcpp_taesd_path = sd_executable_path + "embd_res/" + tae_name;
             if(!file_exists(kcpp_taesd_path))
             {
                 printf("\nCannot use TAESD: \"%s\" not found. TAESD Disabled!\n", kcpp_taesd_path.c_str());
@@ -1531,7 +1574,7 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     }
 
     const auto resource_missing = [&](const char* name) {
-        return !file_exists(executable_path + "embd_res/" + name);
+        return !file_exists(sd_executable_path + "embd_res/" + name);
     };
 
     // Reconstruct exactly what the existing tokenizer classes need from the
@@ -1637,17 +1680,23 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
 
 bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        // shouldn't happen
+        printf("\nError: ImageGen Init - another operation is in progress\n");
+        return false;
+    }
+
     // globals
     sddebugmode = inputs.debugmode;
     set_sd_log_level(sddebugmode);
     sd_is_quiet = inputs.quiet;
     set_sd_quiet(sd_is_quiet);
-    executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
+    sd_executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
 
-    // TODO: do we really need a struct allocated with new?
-    sd_params = new SDParams();
-    SDLoadParams& lp = sd_params->load_params;
-    KcppLoadParams& klp = sd_params->kcpp_load_params;
+    auto new_params = std::make_unique<SDParams>();
+    SDLoadParams& lp = new_params->load_params;
+    KcppLoadParams& klp = new_params->kcpp_load_params;
 
     lp.model_path = SAFE_STR(inputs.model_filename);
     lp.vae_path = SAFE_STR(inputs.vae_filename);
@@ -1658,13 +1707,10 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     lp.photo_maker_path = SAFE_STR(inputs.photomaker_filename);
     klp.upscaler_filename = SAFE_STR(inputs.upscaler_filename);
     klp.tiled_vae_threshold = inputs.tiled_vae_threshold;
-    cfg_tiled_vae_threshold = klp.tiled_vae_threshold;
-    cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold > 8192 ? 8192 : cfg_tiled_vae_threshold);
-    cfg_tiled_vae_threshold = (cfg_tiled_vae_threshold <= 0 ? 8192 : cfg_tiled_vae_threshold); //if negative dont tile
+    klp.tiled_vae_threshold = (klp.tiled_vae_threshold > 8192 ? 8192 : klp.tiled_vae_threshold);
+    klp.tiled_vae_threshold = (klp.tiled_vae_threshold <= 0 ? 8192 : klp.tiled_vae_threshold); //if negative dont tile
     klp.img_hard_limit = inputs.img_hard_limit;
     klp.img_soft_limit = inputs.img_soft_limit;
-    cfg_side_limit = klp.img_hard_limit;
-    cfg_square_limit = klp.img_soft_limit;
 
     lp.backend = SAFE_STR(inputs.backend);
     lp.params_backend = SAFE_STR(inputs.params_backend);
@@ -1722,9 +1768,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(klp.taesd)
     {
         printf("With Tiny Autoencoder (TAE)\n");
-        if (cfg_tiled_vae_threshold < 8192) {
+        if (klp.tiled_vae_threshold < 8192) {
             printf("  disabling VAE tiling for TAESD\n");
-            cfg_tiled_vae_threshold = 8192;
+            klp.tiled_vae_threshold = 8192;
         }
     }
     else if(lp.vae_path!="")
@@ -1852,14 +1898,27 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         }
     }
 
-    sd_ctx = new_sd_ctx(&params);
+    {
+        // release the previous model (if any) to free resources, before building
+        // the new one; we can't risk a failure to load the new one due to low VRAM
+        std::unique_ptr<SDParams> old_params;
+        {
+            std::lock_guard<std::mutex> lock(g_sd_params_mux);
+            // take ownership so the old model is destroyed when the
+            // temporary goes out of scope
+            old_params.reset(sd_params);
+            sd_params = nullptr;
+        }
+    }
 
-    if (sd_ctx == NULL) {
+    new_params->sd_ctx = new_sd_ctx(&params);
+
+    if (new_params->sd_ctx == NULL) {
         printf("\nError: Image generation failed to setup!\nMake sure you have ALL files required (e.g. VAE, T5, Clip...) or baked into the model!\n");
         return false;
     }
 
-    const auto& info = klp.info = get_model_info(sd_ctx);
+    const auto& info = klp.info = get_model_info(new_params->sd_ctx);
 
     if (info.is_video_model)
     {
@@ -1871,24 +1930,22 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     if(lora_specs.size()>0)
     {
         printf("  applying %zu LoRAs...\n", lora_specs.size());
-        set_lora_cache(sd_ctx, klp.lora_cache);
-        apply_loras(sd_ctx, lora_specs);
-        set_lora_cache(sd_ctx, false);
+        set_lora_cache(new_params->sd_ctx, klp.lora_cache);
+        apply_loras(new_params->sd_ctx, lora_specs);
+        set_lora_cache(new_params->sd_ctx, false);
     }
 
-    input_extraimage_buffers.reserve(max_extra_images);
-
     //load upscaler if provided
-    if (sd_params->kcpp_load_params.upscaler_filename!="") {
+    if (klp.upscaler_filename!="") {
         const int upscale_tile_size = 128;
-        upscaler_ctx = new_upscaler_ctx(klp.upscaler_filename.c_str(),
+        new_params->upscaler_ctx = new_upscaler_ctx(klp.upscaler_filename.c_str(),
                                         lp.conv_direct_mode == "on",
                                         params.n_threads,
                                         upscale_tile_size,
                                         params.backend,
                                         params.params_backend);
 
-        if (upscaler_ctx == nullptr) {
+        if (new_params->upscaler_ctx == nullptr) {
              printf("\nError: KCPP failed to load upscaler!\n");
         } else {
             printf("\nUpscaler has been loaded.\n");
@@ -1898,9 +1955,13 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     set_preview_images(0);
 
     sd_set_progress_callback(progress_callback, nullptr);
-    sd_set_generation_progress_callback(sd_ctx, generation_progress_callback, nullptr);
-    // <image:N> prompt tag resolution; the per-request pool is set in sdtype_generate
-    sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, nullptr);
+    sd_set_generation_progress_callback(new_params->sd_ctx, generation_progress_callback, nullptr);
+
+    {
+        std::lock_guard<std::mutex> lock(g_sd_params_mux);
+        // publish the new model (the previous one, if any, was released above)
+        sd_params = new_params.release();
+    }
 
     return true;
 }
@@ -2359,11 +2420,20 @@ void sdtype_abort_generation() {
         geninfo.preview_requested = false;
         geninfo.preview_enabled = false;
     }
-    sd_cancel_generation(sd_ctx, SD_CANCEL_ALL);
+    {
+        std::lock_guard<std::mutex> lock(g_sd_params_mux);
+        // safe to call while holding the mutex: it's a signal-safe flag store
+        sd_cancel_generation(sd_params ? sd_params->sd_ctx : nullptr, SD_CANCEL_ALL);
+    }
 }
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        return sd_generation.error("Error: Generate: another operation is in progress");
+    }
+
     struct CleanupInfoOnExit {
         ~CleanupInfoOnExit() {
             {
@@ -2378,7 +2448,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     } cleanup_info_on_exit;
 
-    if(sd_ctx == nullptr || sd_params == nullptr)
+    if(!sd_params)
     {
         return sd_generation.error("Warning: KCPP image generation not initialized!");
     }
@@ -2418,6 +2488,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
     gp.loras = gp.lora_map.get_lora_specs();
     gp.lora_meta = gp.lora_map.get_lora_meta();
+    gp.upscale = inputs.upscale;
 
     gp.ref_image_args = "resize_before_vae=on"; // auto resize ref image
     if (inputs.ref_image_args && *inputs.ref_image_args) {
@@ -2431,29 +2502,27 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    std::string img2img_data = SAFE_STR(inputs.init_images);
-    std::string img2img_mask = SAFE_STR(inputs.mask);
-    std::string video_start_frame_data = SAFE_STR(inputs.video_start_frame);
-    std::string video_end_frame_data = SAFE_STR(inputs.video_end_frame);
-    std::vector<std::string> extra_image_data;
+    gp.img.init_image = SAFE_STR(inputs.init_images);
+    gp.img.mask = SAFE_STR(inputs.mask);
+    gp.img.flip_mask = inputs.flip_mask;
     for(int i=0;i<inputs.extra_images_len;++i)
     {
-        extra_image_data.push_back(std::string(inputs.extra_images[i]));
+        gp.img.extra_images.push_back(std::string(inputs.extra_images[i]));
     }
-    std::vector<std::string> ref_audio_data;
+
+    gp.vid.req_frames = inputs.vid_req_frames;
+    gp.vid.output_type = inputs.video_output_type;
+    gp.vid.fps = inputs.vid_fps;
+    gp.vid.start_frame = SAFE_STR(inputs.video_start_frame);
+    gp.vid.end_frame = SAFE_STR(inputs.video_end_frame);
     for(int i=0;i<inputs.ref_audios_len;++i)
     {
-        ref_audio_data.push_back(std::string(inputs.ref_audios[i]));
+        gp.vid.ref_audios.push_back(std::string(inputs.ref_audios[i]));
     }
 
     const auto& info = klp.info;
     const bool supports_reference_images = (info.is_video_model || info.supports_ref_image || info.is_kontext || klp.photomaker_enabled);
     const bool remove_limits = inputs.remove_limits;
-
-    //the below params are only used in video models. May move into standalone object in future
-    int vid_req_frames = inputs.vid_req_frames;
-    int video_output_type = inputs.video_output_type;
-    int vid_fps = inputs.vid_fps;
 
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
@@ -2467,13 +2536,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         set_preview_images(1);
     }
 
-    // <image:N>/<image:+N> prompt tags reference extra_image_data by position
+    // <image:N>/<image:+N> prompt tags reference gp.img.extra_images by position
     // and route the images to the VLM conditioner; images will be removed from
     // the ref_images parameter unless a reference has a '+' tag
     image_tag_refs image_tags;
     bool vision_tags_active = false;
     {
-        size_t ref_count = std::min(extra_image_data.size(), (size_t)max_extra_images);
+        size_t ref_count = std::min(gp.img.extra_images.size(), (size_t)max_extra_images);
         std::string tag_err;
         if (!collect_image_tags(gp.prompt, gp.negative_prompt, ref_count, image_tags, tag_err)) {
             return sd_generation.error(("KCPP SD: " + tag_err).c_str());
@@ -2492,14 +2561,24 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             }
         }
     }
-    prompt_ref_image_pool.clear();
-    prompt_refs_zero_based = image_tags.zero_based;
+
+    sd_ctx_t* sd_ctx = sd_params->sd_ctx; // protected by no_concurrency mutex
+
+    PromptImageRef prompt_image_ref;
+    struct CleanupImageCallbackOnExit {
+        sd_ctx_t* sd_ctx;
+        ~CleanupImageCallbackOnExit() {
+            sd_set_prompt_image_callback(sd_ctx, nullptr, nullptr);
+        }
+    } cleanup_image_callback_onexit{sd_ctx};
+    sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, &prompt_image_ref);
+    prompt_image_ref.zero_based = image_tags.zero_based;
 
     if (gp.sample_method == sample_method_t::SAMPLE_METHOD_COUNT) {
         gp.sample_method = sd_get_default_sample_method(sd_ctx);
     }
 
-    bool is_img2img = img2img_data != "";
+    bool is_img2img = gp.img.init_image != "";
 
     if (!remove_limits && info.is_flux1)
     {
@@ -2548,7 +2627,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             // we are not doing img2img already
             !is_img2img
             // a single extra image is provided, and mask is NOT provided
-            && extra_image_data.size()==1 && img2img_mask==""
+            && gp.img.extra_images.size()==1 && gp.img.mask==""
             // the model does not support references natively, or through an edit mode/LoRa
             && !supports_reference_images && !gp.force_image_edit
             // the model can't handle image tags, or the user didn't ask for them
@@ -2557,34 +2636,35 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     if(redirect_single_reference_to_img2img)
     {
         is_img2img = true;
-        img2img_data = extra_image_data[0];
-        extra_image_data.clear();
+        gp.img.init_image = gp.img.extra_images[0];
+        gp.img.extra_images.clear();
         if (!sd_is_quiet && sddebugmode == 1) {
             printf("Switching reference image to img2img\n");
         }
     }
 
-    if (info.is_video_model && video_start_frame_data.empty() && is_img2img && img2img_mask=="")
+    if (info.is_video_model && gp.vid.start_frame.empty() && is_img2img && gp.img.mask=="")
     {
-        video_start_frame_data = img2img_data;
+        // no explicit video start frame: the img2img input becomes the video start frame
+        std::swap(gp.vid.start_frame, gp.img.init_image);
     }
 
     // limit by image side
     int img_hard_limit = 8192; // "large enough", just to simplify the code
-    if (cfg_side_limit > 0) {
-        img_hard_limit = std::max(std::min(cfg_side_limit, img_hard_limit), img_side_min);
+    if (klp.img_hard_limit > 0) {
+        img_hard_limit = std::max(std::min(klp.img_hard_limit, img_hard_limit), img_side_min);
     }
 
     // limit by image area: avoid crashes due to bugs/limitations on certain models
     // a single side can be larger, but width*height are limited by img_soft_limit²
     int img_soft_limit;
     int hard_megapixel_res_limit = 2048; // hard area limit, no matter the config
-    if (cfg_square_limit <= 0) {
+    if (klp.img_soft_limit <= 0) {
         // default limit is model dependent: ~0.66 megapixel for SD1.5/SD2, 1 megapixel for most models
         img_soft_limit = (info.is_sd1 || info.is_sd2)?832:1024;
     } else {
         // force img_side_min <= limit <= hard_megapixel_res_limit
-        img_soft_limit = std::max(std::min(cfg_square_limit, hard_megapixel_res_limit), img_side_min);
+        img_soft_limit = std::max(std::min(klp.img_soft_limit, hard_megapixel_res_limit), img_side_min);
     }
 
     // unet is limited to multiples of 64; dit models vary
@@ -2597,14 +2677,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
-    bool dotile = (gp.width*gp.height > cfg_tiled_vae_threshold*cfg_tiled_vae_threshold);
+    bool dotile = (gp.width*gp.height > klp.tiled_vae_threshold*klp.tiled_vae_threshold);
 
     int vae_tile_size = -1;
     if (dotile) {
         // bump tile size to 1/4 of the configured maximum non-tiled image size
         // (so 1/4 of the memory that would be used for that image)
         const int minimum_tile_size = 256; // from mainline sdcpp
-        int new_vae_tile_size = cfg_tiled_vae_threshold;
+        int new_vae_tile_size = klp.tiled_vae_threshold;
         new_vae_tile_size = new_vae_tile_size / 2;
         new_vae_tile_size = roundup_to(new_vae_tile_size, 64);
         if (new_vae_tile_size > minimum_tile_size) {
@@ -2647,14 +2727,18 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     fflush(stdout);
 
-    if(input_extraimage_buffers.size()>0) //just in time free old buffer
-    {
-        for(int i=0;i<input_extraimage_buffers.size();++i)
-        {
-            stbi_image_free(input_extraimage_buffers[i]);
+    struct ImageBuffer {
+        uint8_t * input = nullptr;
+        uint8_t * mask = nullptr;
+        std::vector<uint8_t *> extra;
+        ~ImageBuffer() {
+            stbi_image_free(input);
+            stbi_image_free(mask);
+            for(auto buf : extra) {
+                stbi_image_free(buf);
+            }
         }
-        input_extraimage_buffers.clear();
-    }
+    } image_buffer;
 
     auto load_extra_image = [&](const std::string& b64, bool resize_to_generation) -> sd_image_t {
         sd_image_t image = {0,0,0,nullptr};
@@ -2667,7 +2751,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             : load_image_from_b64(b64,nx2,ny2);
         if(loaded)
         {
-            input_extraimage_buffers.push_back(loaded);
+            image_buffer.extra.push_back(loaded);
             image.width = nx2;
             image.height = ny2;
             image.channel = 3;
@@ -2678,19 +2762,19 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     if (info.is_video_model)
     {
-        video_start_image = load_extra_image(video_start_frame_data, true);
-        video_end_image = load_extra_image(video_end_frame_data, true);
+        video_start_image = load_extra_image(gp.vid.start_frame, true);
+        video_end_image = load_extra_image(gp.vid.end_frame, true);
     }
 
-    if(extra_image_data.size()>0)
+    if(gp.img.extra_images.size()>0)
     {
         if (vision_tags_active) {
-            prompt_ref_image_pool.resize(std::min(extra_image_data.size(), (size_t)max_extra_images));
+            prompt_image_ref.image_pool.resize(std::min(gp.img.extra_images.size(), (size_t)max_extra_images));
         }
-        for(int i=0;i<extra_image_data.size() && i<max_extra_images;++i)
+        for(int i=0;i<gp.img.extra_images.size() && i<max_extra_images;++i)
         {
             const bool duplicates_video_frame = info.is_video_model && info.is_minimaxh3
-                && (extra_image_data[i] == video_start_frame_data || extra_image_data[i] == video_end_frame_data);
+                && (gp.img.extra_images[i] == gp.vid.start_frame || gp.img.extra_images[i] == gp.vid.end_frame);
             sd_image_t image = {0,0,0,nullptr};
             if(supports_reference_images||gp.force_image_edit||vision_tags_active)
             {
@@ -2700,12 +2784,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 {
                     if (!duplicates_video_frame || (vision_tags_active && image_tags.mentioned.count(i)))
                     {
-                        image = load_extra_image(extra_image_data[i], !info.is_minimaxh3);
+                        image = load_extra_image(gp.img.extra_images[i], !info.is_minimaxh3);
                     }
                 }
                 else if(info.supports_ref_image||gp.force_image_edit)
                 {
-                    uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2);
+                    uint8_t * loaded = load_image_from_b64(gp.img.extra_images[i],nx2,ny2);
                     if(loaded)
                     {
                         //kcpp fix: qwen image can stack overflow and crash when ref images exceed
@@ -2727,7 +2811,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                         }
                         if(loaded)
                         {
-                            input_extraimage_buffers.push_back(loaded);
+                            image_buffer.extra.push_back(loaded);
                             image.width = nx2;
                             image.height = ny2;
                             image.channel = desiredchannels;
@@ -2737,10 +2821,10 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 }
                 else if (info.is_kontext || klp.photomaker_enabled || vision_tags_active)
                 {
-                    uint8_t * loaded = load_image_from_b64(extra_image_data[i],nx2,ny2);
+                    uint8_t * loaded = load_image_from_b64(gp.img.extra_images[i],nx2,ny2);
                     if(loaded)
                     {
-                        input_extraimage_buffers.push_back(loaded);
+                        image_buffer.extra.push_back(loaded);
                         image.width = nx2;
                         image.height = ny2;
                         image.channel = desiredchannels;
@@ -2753,7 +2837,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 continue;
             }
             if (vision_tags_active) {
-                prompt_ref_image_pool[i] = image;
+                prompt_image_ref.image_pool[i] = image;
                 if (image_tags.hidden.count(i)) {
                     continue; // used only as VLM context, kept out of the ref list
                 }
@@ -2797,11 +2881,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
 
     // reference audio is a video-model feature; the H3 image variant ignores it
-    if(info.is_minimaxh3 && info.is_video_model && ref_audio_data.size()>0)
+    if(info.is_minimaxh3 && info.is_video_model && gp.vid.ref_audios.size()>0)
     {
-        for(int i=0;i<ref_audio_data.size();++i)
+        for(int i=0;i<gp.vid.ref_audios.size();++i)
         {
-            sd_audio_t ref_audio = load_audio_from_b64(ref_audio_data[i]);
+            sd_audio_t ref_audio = load_audio_from_b64(gp.vid.ref_audios[i]);
             if (ref_audio.data == nullptr) {
                 return sd_generation.error("KCPP SD: load reference audio from base64 failed!");
             }
@@ -2888,7 +2972,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     params.pm_params.id_images_count = photomaker_imgs.size();
 
      //special case, is img2img and denoise strength is 0 and steps is 1, do a passthru
-    bool is_passthrough = (gp.sample_steps<=1 && gp.strength<=0 && is_img2img && vid_req_frames<=1 && extra_image_data.size()==0);
+    bool is_passthrough = (gp.sample_steps<=1 && gp.strength<=0 && is_img2img && gp.vid.req_frames<=1 && gp.img.extra_images.size()==0);
     sd_audio_t* generated_audio = nullptr;
 
     sd_image_generation_result_t* img_result = nullptr;
@@ -2910,8 +2994,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         vid_gen_params.sample_params = params.sample_params;
         vid_gen_params.strength = params.strength;
         vid_gen_params.seed = params.seed;
-        vid_gen_params.video_frames = vid_req_frames;
-        vid_gen_params.fps = vid_fps;
+        vid_gen_params.video_frames = gp.vid.req_frames;
+        vid_gen_params.fps = gp.vid.fps;
         vid_gen_params.vae_tiling_params = params.vae_tiling_params;
         vid_gen_params.loras = params.loras;
         vid_gen_params.lora_count = params.lora_count;
@@ -2964,8 +3048,25 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         vid_result = nullptr;
         generated_audio = nullptr;
-        int output_fps = vid_fps;
-        if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
+        int output_fps = gp.vid.fps;
+        if (is_passthrough) {
+            // passthrough: skip generation and return the start frame (the img2img
+            // input, swapped in above) as-is. input_image feeds the passthrough block
+            // below; generated_num_results stays 0 so the result loop is skipped.
+            if (video_start_image.data) {
+                input_image = video_start_image;
+            } else if (gp.img.init_image != "") {
+                // a mask prevented the init->start-frame swap; load the input directly
+                image_buffer.input = load_image_from_b64(gp.img.init_image, nx, ny, img2imgW, img2imgH, 3);
+                input_image.width = img2imgW;
+                input_image.height = img2imgH;
+                input_image.channel = 3;
+                input_image.data = image_buffer.input;
+            }
+            if (!input_image.data) {
+                return sd_generation.error("KCPP SD: load image from memory failed!");
+            }
+        } else if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
             vid_result = nullptr;
         }
         if (vid_result) {
@@ -2975,12 +3076,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
         if(!sd_is_quiet && sddebugmode==1)
         {
-            printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",vid_req_frames, generated_num_results);
-            if (output_fps != vid_fps) {
-                printf("\nRequested FPS: %d, Generated FPS: %d\n", vid_fps, output_fps);
+            printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid.req_frames, generated_num_results);
+            if (output_fps != gp.vid.fps) {
+                printf("\nRequested FPS: %d, Generated FPS: %d\n", gp.vid.fps, output_fps);
             }
         }
-        vid_fps = output_fps;
+        gp.vid.fps = output_fps;
     }
     else if (!is_img2img)
     {
@@ -3004,33 +3105,26 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     } else {
 
-        if(input_image_buffer!=nullptr) //just in time free old buffer
-        {
-             stbi_image_free(input_image_buffer);
-             input_image_buffer = nullptr;
-        }
+        image_buffer.input = load_image_from_b64(gp.img.init_image,nx,ny,img2imgW,img2imgH,3);
 
-        input_image_buffer = load_image_from_b64(img2img_data,nx,ny,img2imgW,img2imgH,3);
-
-        if (!input_image_buffer) {
+        if (!image_buffer.input) {
             return sd_generation.error("KCPP SD: load image from memory failed!");
         }
 
-        if(img2img_mask!="")
+        if(gp.img.mask!="")
         {
             int nx2, ny2, nc2;
-            if(input_mask_buffer!=nullptr) //just in time free old buffer
-            {
-                stbi_image_free(input_mask_buffer);
-                input_mask_buffer = nullptr;
-            }
-            input_mask_buffer = load_image_from_b64(img2img_mask,nx2,ny2,img2imgW,img2imgH,1);
+            image_buffer.mask = load_image_from_b64(gp.img.mask,nx2,ny2,img2imgW,img2imgH,1);
 
-            if(inputs.flip_mask)
+            if (!image_buffer.mask) {
+                return sd_generation.error("KCPP SD: load mask from memory failed!");
+            }
+
+            if(gp.img.flip_mask)
             {
                 int bufsiz = nx2 * ny2 * 1; //1 channel
                 for (int i = 0; i < bufsiz; ++i) {
-                    input_mask_buffer[i] = 255 - input_mask_buffer[i];
+                    image_buffer.mask[i] = 255 - image_buffer.mask[i];
                 }
             }
         }
@@ -3038,12 +3132,12 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         input_image.width = img2imgW;
         input_image.height = img2imgH;
         input_image.channel = img2imgC;
-        input_image.data = input_image_buffer;
+        input_image.data = image_buffer.input;
 
         uint8_t* mask_image_buffer    = NULL;
-        std::vector<uint8_t> default_mask_image_vec(img2imgW * img2imgH * img2imgC, 255);
-        if (img2img_mask != "") {
-            mask_image_buffer = input_mask_buffer;
+        std::vector<uint8_t> default_mask_image_vec(img2imgW * img2imgH, 255);
+        if (image_buffer.mask) {
+            mask_image_buffer = image_buffer.mask;
         } else {
             mask_image_buffer = default_mask_image_vec.data();
         }
@@ -3082,7 +3176,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         return sd_generation.error("KCPP SD generate failed!");
     }
 
-    bool isanim = (vid_req_frames>1 && generated_num_results>1 && info.is_video_model);
+    bool isanim = (gp.vid.req_frames>1 && generated_num_results>1 && info.is_video_model);
     nlohmann::json jsoninfo = nlohmann::json::object();
     if (!isanim) {
         jsoninfo["prompt"] = params.prompt + gp.lora_meta;
@@ -3125,9 +3219,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     std::string gen_data2;
     std::string final_frame_data;
 
+    auto upscaler_ctx = gp.upscale ? sd_params->upscaler_ctx : nullptr;
+
     if (is_passthrough)
     {
-        if(inputs.upscale && upscaler_ctx != nullptr)
+        if(upscaler_ctx != nullptr)
         {
             printf("Upscaling original image (passthrough)...\n");
             gen_data = upscale_image_to_png_base64(upscaler_ctx, input_image, 2);
@@ -3143,7 +3239,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         {
             if(!sd_is_quiet && sddebugmode==1)
             {
-                printf("\nSaving video buffer, VIDEO_OUTPUT_TYPE=%d...",video_output_type);
+                printf("\nSaving video buffer, VIDEO_OUTPUT_TYPE=%d...",gp.vid.output_type);
             }
             uint8_t * out_data = nullptr;
             uint8_t * out_data2 = nullptr;
@@ -3152,21 +3248,21 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             int status = 0;
             int status2 = 0;
 
-            const bool output_gif  = video_output_type == 0 || video_output_type == 2;
-            const bool output_webp = video_output_type == 3 || video_output_type == 4;
-            const bool output_avi  = video_output_type == 1 || video_output_type == 2 || video_output_type == 4;
+            const bool output_gif  = gp.vid.output_type == 0 || gp.vid.output_type == 2;
+            const bool output_webp = gp.vid.output_type == 3 || gp.vid.output_type == 4;
+            const bool output_avi  = gp.vid.output_type == 1 || gp.vid.output_type == 2 || gp.vid.output_type == 4;
 
             if(output_gif)
             {
-                status = create_gif_buf_from_sd_images_msf(vid_result->frames, generated_num_results, vid_fps, &out_data,&out_len);
+                status = create_gif_buf_from_sd_images_msf(vid_result->frames, generated_num_results, gp.vid.fps, &out_data,&out_len);
             }
             else if(output_webp)
             {
-                status = create_animated_webp_buf_from_sd_images(vid_result->frames, generated_num_results, vid_fps, &out_data,&out_len);
+                status = create_animated_webp_buf_from_sd_images(vid_result->frames, generated_num_results, gp.vid.fps, &out_data,&out_len);
             }
             if(output_avi)
             {
-                status2 = create_mjpg_avi_membuf_from_sd_images(vid_result->frames, generated_num_results, vid_fps, 40, &out_data2,&out_len2, generated_audio);
+                status2 = create_mjpg_avi_membuf_from_sd_images(vid_result->frames, generated_num_results, gp.vid.fps, 40, &out_data2,&out_len2, generated_audio);
             }
 
             if(generated_num_results>1)
@@ -3214,7 +3310,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 continue;
             }
             std::string meta_image_info = get_image_params(params, gp.lora_meta, i);
-            if(inputs.upscale && upscaler_ctx != nullptr)
+            if(upscaler_ctx != nullptr)
             {
                 printf("Upscaling output image...\n");
                 gen_data = upscale_image_to_png_base64(upscaler_ctx, result_image, 2, meta_image_info);
@@ -3351,21 +3447,23 @@ void sdtype_request_ongoing_generation_preview()
 
 sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
 {
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        return sd_generation.error("Error: Upscale: another operation is in progress");
+    }
+    auto upscaler_ctx = sd_params ? sd_params->upscaler_ctx : nullptr;
+
     sd_generation.reset();
 
-    if(sd_ctx == nullptr || upscaler_ctx == nullptr || sd_params == nullptr)
+    if(!upscaler_ctx)
     {
         return sd_generation.error("Warning: KCPP image upscaling not initialized!");
     }
 
     std::string rawb64 = inputs.init_images;
     int nx, ny;
-    if(upscale_src_buffer!=nullptr) //just in time free old buffer
-    {
-        stbi_image_free(upscale_src_buffer);
-        upscale_src_buffer = nullptr;
-    }
-    upscale_src_buffer = load_image_from_b64(rawb64,nx,ny);
+    std::unique_ptr<uint8_t, decltype(&stbi_image_free)> upscale_src_buffer(
+        load_image_from_b64(rawb64,nx,ny), &stbi_image_free);
     sd_image_t source_img;
     source_img.data = nullptr;
     std::string result;
@@ -3374,7 +3472,7 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         source_img.width = nx;
         source_img.height = ny;
         source_img.channel = 3;
-        source_img.data = upscale_src_buffer;
+        source_img.data = upscale_src_buffer.get();
 
         result = upscale_image_to_png_base64(upscaler_ctx, source_img, inputs.upscaling_resize);
     }
@@ -3434,7 +3532,7 @@ sd_info_outputs sdtype_get_info()
     }
     j["devices"] = devices;
 
-    static std::string recent_info = j.dump();
+    static thread_local std::string recent_info = j.dump();
     sd_info_outputs output;
     output.status = 0;
     output.data = recent_info.c_str();
