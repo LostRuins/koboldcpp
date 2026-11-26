@@ -3310,7 +3310,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 continue;
             }
             std::string meta_image_info = get_image_params(params, gp.lora_meta, i);
-            if(upscaler_ctx != nullptr)
+            if(upscaler_ctx != nullptr && gp.upscale)
             {
                 printf("Upscaling output image...\n");
                 gen_data = upscale_image_to_png_base64(upscaler_ctx, result_image, 2, meta_image_info);
