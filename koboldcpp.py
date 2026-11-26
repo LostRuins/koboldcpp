@@ -5579,6 +5579,14 @@ ws ::= | " " | "\n" [ \t]{0,20}
             latest_turn_was_assistant = False
             latest_turn_was_tool = False
 
+            # ollama chat requests structured outputs via "format": either "json" or a JSON schema object
+            if api_format==7 and not genparams.get('response_format', None):
+                ollamaformat = genparams.get('format', None)
+                if isinstance(ollamaformat, str) and ollamaformat.lower() == "json":
+                    genparams['response_format'] = {"type": "json_object"}
+                elif isinstance(ollamaformat, dict) and ollamaformat:
+                    genparams['response_format'] = {"type": "json_schema", "json_schema": {"schema": ollamaformat}}
+
             # handle structured outputs
             respformat = genparams.get('response_format', None)
             if respformat:
