@@ -6460,7 +6460,7 @@ std::string gpttype_parse_chat_tool_calls(const std::string & generated_text,
         inputs.use_jinja = true;
         inputs.messages = { msg };
         inputs.tools = common_chat_tools_parse_oaicompat(tools);
-        inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tool_choice.empty() ? "auto" : tool_choice);
+        inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(common_json(tool_choice.empty() ? "auto" : tool_choice), inputs.tools);
         inputs.parallel_tool_calls = parallel_tool_calls;
         inputs.add_generation_prompt = true;
         // Consume reasoning (including a <think> in the generation prompt) before tools.

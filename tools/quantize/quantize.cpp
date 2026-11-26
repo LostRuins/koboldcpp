@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <clocale>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
