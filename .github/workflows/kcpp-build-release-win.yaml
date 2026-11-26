@@ -150,6 +150,7 @@ jobs:
           echo "If you cannot compile vulkan shaders yourself with glslc, you can manually patch in precompiled vulkan shader source files. Copy ggml-vulkan-shaders.cpp and ggml-vulkan-shaders.hpp to the ggml/src subdirectory in KoboldCpp source files before building." > vulkan-readme.txt
 
       - name: Upload to GitHub Rolling Release
+        if: ${{ inputs.commit_hash == '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -217,6 +218,7 @@ jobs:
             -Force
 
       - name: Upload tools to GitHub Rolling Tools Release
+        if: ${{ inputs.commit_hash == '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh

@@ -99,6 +99,7 @@ jobs:
           apt-get install -y gh
 
       - name: Upload to GitHub Rolling Release
+        if: ${{ inputs.commit_hash == '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

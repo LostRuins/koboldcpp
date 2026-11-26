@@ -4445,8 +4445,8 @@ Current version indicated by LITEVER below.
 	var documentdb_provider = 0; //0 = disables, 1 = textdb, 2 = kcpp, 3 = openai embeddings
 	var documentdb_searchhistory = false;
 	var documentdb_numresults = 3;
-	var documentdb_searchrange = 300;
-	var documentdb_chunksize = 800;
+	var documentdb_searchrange = 450;
+	var documentdb_chunksize = 1600;
 	var documentdb_data = "";
 	var generateimagesinterval = 750; //if generated images is enabled, it will trigger after every 700 new characters in context.
 	var nextgeneratedimagemilestone = generateimagesinterval; //used to keep track of when to generate the next image
@@ -20147,9 +20147,9 @@ Current version indicated by LITEVER below.
 		documentdb_numresults = parseInt(documentdb_numresults);
 		documentdb_numresults = cleannum(documentdb_numresults,1,10);
 		documentdb_searchrange = parseInt(documentdb_searchrange);
-		documentdb_searchrange = cleannum(documentdb_searchrange,0,1024);
+		documentdb_searchrange = cleannum(documentdb_searchrange,0,2048);
 		documentdb_chunksize = parseInt(documentdb_chunksize);
-		documentdb_chunksize = cleannum(documentdb_chunksize,32,2048);
+		documentdb_chunksize = cleannum(documentdb_chunksize,32,4096);
 	}
 
 	function set_personal_notes()
@@ -20743,8 +20743,8 @@ Current version indicated by LITEVER below.
 			documentdb_provider = 0; //disabled
 			documentdb_searchhistory = false;
 			documentdb_numresults = 3;
-			documentdb_searchrange = 300;
-			documentdb_chunksize = 800;
+			documentdb_searchrange = 450;
+			documentdb_chunksize = 1600;
 			documentdb_data = "";
 			newlineaftermemory = true;
 			localsettings.groupchat_data = {};
@@ -33601,11 +33601,11 @@ Current version indicated by LITEVER below.
 						<input title="Extra Text For Search" inputmode="numeric" class="justifyright" style="margin-left:3px" id="documentdb_searchrange" oninput="
 						document.getElementById('documentdb_searchrange_slide').value = this.value;">
 					</div>
-					<div><input title="Extra Text For Search Slider" type="range" min="50" max="500" step="10" id="documentdb_searchrange_slide" oninput="
+					<div><input title="Extra Text For Search Slider" type="range" min="50" max="1000" step="10" id="documentdb_searchrange_slide" oninput="
 						document.getElementById('documentdb_searchrange').value = this.value;"></div>
 					<div class="settingminmax">
 						<div class="justifyleft">50</div>
-						<div class="justifyright">500</div>
+						<div class="justifyright">1000</div>
 					</div>
 				</div>
 
@@ -33615,11 +33615,11 @@ Current version indicated by LITEVER below.
 						<input title="Snippet Size" inputmode="numeric" class="justifyright" style="margin-left:3px" id="documentdb_chunksize" oninput="
 						document.getElementById('documentdb_chunksize_slide').value = this.value; estimate_and_show_textDB_usage();">
 					</div>
-					<div><input title="Snippet Size Slider" type="range" min="100" max="3000" step="50" id="documentdb_chunksize_slide" oninput="
+					<div><input title="Snippet Size Slider" type="range" min="100" max="4000" step="50" id="documentdb_chunksize_slide" oninput="
 						document.getElementById('documentdb_chunksize').value = this.value; estimate_and_show_textDB_usage();"></div>
 					<div class="settingminmax">
 						<div class="justifyleft">100</div>
-						<div class="justifyright">3000</div>
+						<div class="justifyright">4000</div>
 					</div>
 				</div>
 
