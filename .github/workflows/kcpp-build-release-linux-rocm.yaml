@@ -97,6 +97,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload rocm-rolling dist/koboldcpp-linux-x64-rocm --clobber
+          gh release upload rolling dist/koboldcpp-linux-x64-rocm --clobber
 
       - name: Upload version pinned tagged binary
         if: ${{ inputs.tag_name != '' }}
