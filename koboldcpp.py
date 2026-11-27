@@ -5481,6 +5481,27 @@ def apply_forced_sysprompt(genparams, api_format):
     return genparams
 
 
+def apply_ollama_options(genparams):
+    # Map the sampler/length settings from an Ollama request's "options" object onto genparams.
+    # Shared by the Ollama /api/generate and /api/chat endpoints.
+    ollamaopts = genparams.get('options', {})
+    if not isinstance(ollamaopts, dict):
+        return
+    if "num_predict" in ollamaopts:
+        genparams["max_length"] = ollamaopts.get('num_predict', args.defaultgenamt)
+    if "num_ctx" in ollamaopts:
+        genparams["max_context_length"] = ollamaopts.get('num_ctx', maxctx)
+    if "temperature" in ollamaopts:
+        genparams["temperature"] = ollamaopts.get('temperature', 0.7)
+    if "top_k" in ollamaopts:
+        genparams["top_k"] = ollamaopts.get('top_k', 100)
+    if "top_p" in ollamaopts:
+        genparams["top_p"] = ollamaopts.get('top_p', 0.9)
+    if "seed" in ollamaopts:
+        genparams["sampler_seed"] = tryparseint(ollamaopts.get('seed', -1),-1)
+    if "stop" in ollamaopts:
+        genparams["stop_sequence"] = ollamaopts.get('stop', [])
+
 def transform_genparams(genparams, api_format, use_jinja):
     global chatcompl_adapter, maxctx, thinkformats, cached_jinja_kwargs
 
@@ -5555,6 +5576,11 @@ ws ::= | " " | "\n" [ \t]{0,20}
 
         genparams["sampler_seed"] = tryparseint(genparams.get('seed', -1),-1)
         genparams["mirostat"] = genparams.get('mirostat_mode', 0)
+
+        if api_format==7: # ollama chat passes sampler settings inside "options", same as /api/generate
+            apply_ollama_options(genparams)
+            if tryparseint(genparams.get("max_length", 0),0) <= 0:
+                genparams["max_length"] = default_max_tok
 
         if api_format==4 or api_format==7: #handle ollama chat here too
             if genparams.get("tools"):
@@ -5839,23 +5865,9 @@ ws ::= | " " | "\n" [ \t]{0,20}
             utfprint("Ollama Context Error: " + str(e))
         ollamasysprompt = genparams.get('system', "")
         ollamabodyprompt = f"{detokstr}{user_message_start}{genparams.get('prompt', '')}{assistant_message_gen}"
-        ollamaopts = genparams.get('options', {})
         if genparams.get('stop',[]) is not None:
             genparams["stop_sequence"] = genparams.get('stop', [])
-        if "num_predict" in ollamaopts:
-            genparams["max_length"] = ollamaopts.get('num_predict', args.defaultgenamt)
-        if "num_ctx" in ollamaopts:
-            genparams["max_context_length"] = ollamaopts.get('num_ctx', maxctx)
-        if "temperature" in ollamaopts:
-            genparams["temperature"] = ollamaopts.get('temperature', 0.7)
-        if "top_k" in ollamaopts:
-            genparams["top_k"] = ollamaopts.get('top_k', 100)
-        if "top_p" in ollamaopts:
-            genparams["top_p"] = ollamaopts.get('top_p', 0.9)
-        if "seed" in ollamaopts:
-            genparams["sampler_seed"] = tryparseint(ollamaopts.get('seed', -1),-1)
-        if "stop" in ollamaopts:
-            genparams["stop_sequence"] = ollamaopts.get('stop', [])
+        apply_ollama_options(genparams)
         genparams["stop_sequence"].append(user_message_start.strip())
         genparams["stop_sequence"].append(assistant_message_start.strip())
         genparams["trim_stop"] = True
