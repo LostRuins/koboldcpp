@@ -60,26 +60,25 @@ using namespace kcpp_sd;
 // Encodes an array of RGB, RGBA or grayscale frames into an animated WebP.
 // The returned buffer uses malloc so callers can continue to release it with
 // free(), matching the old GIF helper's ownership contract.
-static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
-                                                    int num_images,
-                                                    int fps,
-                                                    uint8_t** out_data,
-                                                    size_t* out_len) {
+static int create_animated_webp_buf(const KcppImages& images,
+                                     int fps,
+                                     uint8_t** out_data,
+                                     size_t* out_len) {
     if (out_data == nullptr || out_len == nullptr) {
         return -1;
     }
     *out_data = nullptr;
     *out_len  = 0;
 
-    if (images == nullptr || num_images <= 0 || fps <= 0 ||
-        images[0].data == nullptr || images[0].width == 0 || images[0].height == 0 ||
-        images[0].width > WEBP_MAX_DIMENSION || images[0].height > WEBP_MAX_DIMENSION) {
+    if (images.empty() || fps <= 0 ||
+        !images.at(0).valid() ||
+        images.at(0).w > WEBP_MAX_DIMENSION || images.at(0).h > WEBP_MAX_DIMENSION) {
         fprintf(stderr, "Invalid animated WebP input.\n");
         return -1;
     }
 
-    const int width  = static_cast<int>(images[0].width);
-    const int height = static_cast<int>(images[0].height);
+    const int width  = static_cast<int>(images.at(0).w);
+    const int height = static_cast<int>(images.at(0).h);
 
     WebPAnimEncoderOptions anim_options;
     WebPConfig config;
@@ -107,11 +106,11 @@ static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
     }
 
     int last_timestamp_ms = -1;
-    for (int i = 0; i < num_images; ++i) {
-        const sd_image_t& image = images[i];
-        if (image.data == nullptr || static_cast<int>(image.width) != width ||
-            static_cast<int>(image.height) != height ||
-            (image.channel != 1 && image.channel != 3 && image.channel != 4)) {
+    for (int i = 0; i < (int)images.size(); ++i) {
+        const KcppImage& image = images.at(i);
+        if (!image.valid() || static_cast<int>(image.w) != width ||
+            static_cast<int>(image.h) != height ||
+            (image.c != 1 && image.c != 3 && image.c != 4)) {
             fprintf(stderr, "Animated WebP frame %d has invalid dimensions or channels.\n", i);
             WebPAnimEncoderDelete(encoder);
             return -1;
@@ -129,19 +128,19 @@ static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
 
         int imported = 0;
         std::vector<uint8_t> rgb_buffer;
-        if (image.channel == 1) {
+        if (image.c == 1) {
             const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
             rgb_buffer.resize(pixel_count * 3);
             for (size_t p = 0; p < pixel_count; ++p) {
-                rgb_buffer[p * 3 + 0] = image.data[p];
-                rgb_buffer[p * 3 + 1] = image.data[p];
-                rgb_buffer[p * 3 + 2] = image.data[p];
+                rgb_buffer[p * 3 + 0] = image.px->data()[p];
+                rgb_buffer[p * 3 + 1] = image.px->data()[p];
+                rgb_buffer[p * 3 + 2] = image.px->data()[p];
             }
             imported = WebPPictureImportRGB(&picture, rgb_buffer.data(), width * 3);
-        } else if (image.channel == 4) {
-            imported = WebPPictureImportRGBA(&picture, image.data, width * 4);
+        } else if (image.c == 4) {
+            imported = WebPPictureImportRGBA(&picture, image.px->data(), width * 4);
         } else {
-            imported = WebPPictureImportRGB(&picture, image.data, width * 3);
+            imported = WebPPictureImportRGB(&picture, image.px->data(), width * 3);
         }
 
         if (!imported) {
@@ -169,7 +168,7 @@ static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
     }
 
     int final_timestamp_ms = static_cast<int>(
-        (static_cast<int64_t>(num_images) * 1000 + fps / 2) / fps);
+        (static_cast<int64_t>(images.size()) * 1000 + fps / 2) / fps);
     if (final_timestamp_ms <= last_timestamp_ms) {
         final_timestamp_ms = last_timestamp_ms + 1;
     }
@@ -2602,10 +2601,13 @@ static void parse_cache_options(sd_cache_params_t & params, const std::string& c
     }
 }
 
-static std::string raw_image_to_png_base64(const sd_image_t& img, std::string parameters = "") {
+static std::string raw_image_to_png_base64(const KcppImage& img, std::string parameters = "") {
     std::string result;
+    if (!img.valid()) {
+        return result;
+    }
     int out_data_len = 0;
-    unsigned char * png = stbi_write_png_to_mem(img.data, 0, img.width, img.height, img.channel, &out_data_len, parameters != "" ? parameters.c_str() : nullptr);
+    unsigned char * png = stbi_write_png_to_mem(img.px->data(), 0, img.w, img.h, img.c, &out_data_len, parameters != "" ? parameters.c_str() : nullptr);
     if (png != NULL) {
         result = kcpp_base64_encode(png,out_data_len);
         free(png);
@@ -2613,12 +2615,12 @@ static std::string raw_image_to_png_base64(const sd_image_t& img, std::string pa
     return result;
 }
 
-static std::string upscale_image_to_png_base64(upscaler_ctx_t* upscaler_ctx, const sd_image_t& input_image, int upscale_factor = 2, const std::string& meta_image_info = "")
+static std::string upscale_image_to_png_base64(upscaler_ctx_t* upscaler_ctx, const KcppImage& input_image, int upscale_factor = 2, const std::string& meta_image_info = "")
 {
     std::string gen_data;
     sd_image_generation_result_t* upscaled = nullptr;
-    if (upscale(upscaler_ctx, input_image, upscale_factor, &upscaled)) {
-        gen_data = raw_image_to_png_base64(upscaled->items[0].image, meta_image_info);
+    if (upscale(upscaler_ctx, input_image.view(), upscale_factor, &upscaled)) {
+        gen_data = raw_image_to_png_base64(KcppImage::from_sd_image(upscaled->items[0].image), meta_image_info);
         free_sd_image_generation_result(upscaled);
     } else {
         printf("Upscaling failed!\n");
@@ -2644,8 +2646,8 @@ void sdtype_abort_generation() {
 }
 
 // field-row binding for the sd_generate payload: one row per wire
-// parameter, binding the JSON key (in), the upstream sd_opt key (out,
-// phase 3; nullptr = kcpp-only, never forwarded) and the IR member. The
+// parameter, binding the JSON key (in), the upstream sd_opt key (out;
+// nullptr = kcpp-only, never forwarded) and the IR member. The
 // decode loop walks the rows with one strict sdjson_get each. Explicit:
 // sample_method/scheduler (string -> enum), images (base64 decode), loras
 // and custom_sigmas.
@@ -3268,17 +3270,17 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    sd_audio_t* generated_audio = nullptr;
-    sd_image_generation_result_t* img_result = nullptr;
-    sd_video_generation_result_t* vid_result = nullptr;
-    int generated_num_results = 0;
+    KcppAudio generated_audio;
+    KcppImages result_images;
+    int generated_num_results = -1; // -1 failure, 0 passthrough
 
     // the timestamped start line lives in each branch: it names what is about to
     // run, and passthrough gets one too, since the upscaler may still run
     if (gp.is_passthrough)
     {
         // no generation at all: the output block below returns the input image
-        // (upscaled when requested) as-is, and generated_num_results stays 0
+        // (upscaled when requested) as-is
+        generated_num_results = 0;
         printf("\n[%s] No generation triggered, passthrough mode.\n", get_timestamp_str().c_str());
         fflush(stdout);
     }
@@ -3381,25 +3383,26 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         fflush(stdout);
 
-        vid_result = nullptr;
-        generated_audio = nullptr;
+        generated_audio = KcppAudio{};
         int output_fps = gp.vid_fps;
-        if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
-            vid_result = nullptr;
-        }
-        if (vid_result) {
+        sd_video_generation_result_t* vid_result = nullptr;
+        if (generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
             generated_num_results = vid_result->frame_count;
-            generated_audio = vid_result->audio;
+            generated_audio = vid_result->audio ? KcppAudio::from_sd_audio(*vid_result->audio) : KcppAudio{};
             output_fps = vid_result->fps;
-        }
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid_req_frames, generated_num_results);
-            if (output_fps != gp.vid_fps) {
-                printf("\nRequested FPS: %d, Generated FPS: %d\n", gp.vid_fps, output_fps);
+            for (int i = 0; i < generated_num_results; ++i) {
+                result_images.push_back(KcppImage::from_sd_image(vid_result->frames[i]));
             }
+            free_sd_video_generation_result(vid_result);
+            if(!sd_is_quiet && sddebugmode==1)
+            {
+                printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid_req_frames, generated_num_results);
+                if (output_fps != gp.vid_fps) {
+                    printf("\nRequested FPS: %d, Generated FPS: %d\n", gp.vid_fps, output_fps);
+                }
+            }
+            gp.vid_fps = output_fps;
         }
-        gp.vid_fps = output_fps;
     }
     else
     {
@@ -3427,14 +3430,17 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         fflush(stdout);
 
-        img_result = nullptr;
-        if (!generate_image(sd_ctx, &params, &img_result)) {
-            img_result = nullptr;
+        sd_image_generation_result_t* img_result = nullptr;
+        if (generate_image(sd_ctx, &params, &img_result)) {
+            generated_num_results = img_result->count;
+            for (int i = 0; i < generated_num_results; ++i) {
+                result_images.push_back(KcppImage::from_sd_image(img_result->items[i].image));
+            }
+            free_sd_image_generation_result(img_result);
         }
-        generated_num_results = img_result ? img_result->count : 0;
     }
 
-    if (!gp.is_passthrough && (gp.is_vidgen ? vid_result == nullptr : img_result == nullptr)) {
+    if (generated_num_results < 0) {
         if (info.is_qwenimg && gp.reference_imgs.size() > 0) {
             printf("\nKCPP SD: If using Qwen Image 2.1, editing requires Qwen3-VL vision mmproj!\n");
         }
@@ -3479,7 +3485,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         jsoninfo["lora_meta"] = gp.lora_meta;
         jsoninfo["version"] = "KoboldCpp";
     }
-    sd_image_t* upscaled_image = nullptr;
     std::string gen_data;
     std::string gen_data2;
     std::string final_frame_data;
@@ -3493,16 +3498,16 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         if(upscaler_ctx != nullptr)
         {
             printf("Upscaling original image (passthrough)...\n");
-            gen_data = upscale_image_to_png_base64(upscaler_ctx, pimg.view(), 2);
+            gen_data = upscale_image_to_png_base64(upscaler_ctx, pimg, 2);
         }
         else {
-            gen_data = raw_image_to_png_base64(pimg.view());
+            gen_data = raw_image_to_png_base64(pimg);
         }
     }
     else if (isanim)
     {
         //if multiframe, make a video
-        if (generated_num_results > 0 && vid_result && vid_result->frames && vid_result->frames[0].data)
+        if (!result_images.empty() && result_images.at(0).valid())
         {
             if(!sd_is_quiet && sddebugmode==1)
             {
@@ -3521,21 +3526,20 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
             if(output_gif)
             {
-                status = create_gif_buf_from_sd_images_msf(vid_result->frames, generated_num_results, gp.vid_fps, &out_data,&out_len);
+                status = create_gif_buf_msf(result_images, gp.vid_fps, &out_data,&out_len);
             }
             else if(output_webp)
             {
-                status = create_animated_webp_buf_from_sd_images(vid_result->frames, generated_num_results, gp.vid_fps, &out_data,&out_len);
+                status = create_animated_webp_buf(result_images, gp.vid_fps, &out_data,&out_len);
             }
             if(output_avi)
             {
-                status2 = create_mjpg_avi_membuf_from_sd_images(vid_result->frames, generated_num_results, gp.vid_fps, 40, &out_data2,&out_len2, generated_audio);
+                status2 = create_mjpg_avi_membuf(result_images, gp.vid_fps, 40, &out_data2,&out_len2, &generated_audio);
             }
 
             if(generated_num_results>1)
             {
-                sd_image_t *final_frame_image = &vid_result->frames[generated_num_results-1];
-                final_frame_data = raw_image_to_png_base64(*final_frame_image);
+                final_frame_data = raw_image_to_png_base64(result_images.at(generated_num_results-1));
             }
 
             if(!sd_is_quiet && sddebugmode==1)
@@ -3565,15 +3569,13 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 free(out_data2);
             }
         }
-        free_sd_video_generation_result(vid_result);
-        vid_result = nullptr;
     }
     else
     {
         for (int i = 0; i < generated_num_results; i++)
         {
-            sd_image_t& result_image = gp.is_vidgen ? vid_result->frames[i] : img_result->items[i].image;
-            if (result_image.data == NULL) {
+            const KcppImage& result_image = result_images.at(i);
+            if (!result_image.valid()) {
                 continue;
             }
             std::string meta_image_info = get_image_params(params, gp.lora_meta, i);
@@ -3588,13 +3590,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             jsoninfo["all_seeds"][i] = params.seed + i;
             jsoninfo["all_prompts"][i] = params.prompt;
             jsoninfo["all_negative_prompts"][i] = params.negative_prompt;
-        }
-        if (gp.is_vidgen) {
-            free_sd_video_generation_result(vid_result);
-            vid_result = nullptr;
-        } else {
-            free_sd_image_generation_result(img_result);
-            img_result = nullptr;
         }
     }
 
@@ -3645,13 +3640,14 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
     std::string preview;
     if (image != nullptr && frame_count > 0) {
         constexpr uint32_t preview_max_dimension = 128;
-        std::vector<sd_image_t> resized_images(image, image + frame_count);
+        KcppImages preview_images;
         std::vector<std::vector<uint8_t>> resized_image_data(static_cast<size_t>(frame_count));
         bool resize_ok = true;
 
         for (int i = 0; i < frame_count; ++i) {
             const sd_image_t& source = image[i];
             if (source.width <= preview_max_dimension && source.height <= preview_max_dimension) {
+                preview_images.push_back(KcppImage::from_sd_image(source));
                 continue;
             }
 
@@ -3675,24 +3671,22 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
                 resize_ok = false;
                 break;
             }
-            resized_images[static_cast<size_t>(i)] = {
-                resized_width, resized_height, source.channel, pixels.data()
-            };
+            auto v = std::make_shared<std::vector<uint8_t>>(std::move(pixels));
+            preview_images.push_back(KcppImage{resized_width, resized_height, source.channel, std::move(v)});
         }
 
-        sd_image_t* preview_images = resize_ok ? resized_images.data() : nullptr;
-        if (frame_count == 1) {
-            if (preview_images != nullptr) {
-                preview = raw_image_to_png_base64(*preview_images);
-            }
-        } else if (preview_images != nullptr) {
-            uint8_t * out_data = nullptr;
-            size_t out_len = 0;
-            if (create_gif_buf_from_sd_images_msf(preview_images, frame_count, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
-                preview = kcpp_base64_encode(out_data, out_len);
-            }
-            if (out_data) {
-                free(out_data);
+        if (resize_ok) {
+            if (frame_count == 1) {
+                preview = raw_image_to_png_base64(preview_images.at(0));
+            } else {
+                uint8_t * out_data = nullptr;
+                size_t out_len = 0;
+                if (create_gif_buf_msf(preview_images, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
+                    preview = kcpp_base64_encode(out_data, out_len);
+                }
+                if (out_data) {
+                    free(out_data);
+                }
             }
         }
     }
@@ -3751,7 +3745,7 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
     std::string result;
     if(source_img.valid())
     {
-        result = upscale_image_to_png_base64(upscaler_ctx, source_img.view(), params.upscaling_resize);
+        result = upscale_image_to_png_base64(upscaler_ctx, source_img, params.upscaling_resize);
     }
 
     if (result == "") {

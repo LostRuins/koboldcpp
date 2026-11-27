@@ -1,5 +1,5 @@
 // kcpp_media.h — read-only media views over shared storage (pixels, audio
-// samples) for the sdcpp boundary.
+// samples) for the sdcpp boundary. Owned by Koboldcpp.
 //
 // A KcppImage owns its pixels (HWC, interleaved uint8) and a KcppAudio owns
 // its samples (interleaved float) through a shared_ptr, and both hand out
@@ -13,8 +13,6 @@
 // px->size() == w*h*c). An audio is null the same way (sample_rate/channels
 // == 0, samples == nullptr) or valid (both > 0, samples non-empty with
 // samples->size() a multiple of channels).
-//
-// kcpp-owned; currently used only by sdtype_adapter.cpp.
 
 #pragma once
 
@@ -41,6 +39,10 @@ struct KcppImage {
     // decode only (always 3 channels, any source channel count), no fit;
     // null image on failure
     static KcppImage from_b64(const std::string& b64);
+
+    // old API bridge: copy of a vendored sd_image_t (replaced by from_tensor
+    // once the sdcpp results move to tensors); null image on an invalid source
+    static KcppImage from_sd_image(const sd_image_t&);
 
     // center-crop to the target aspect, resize to exact w/h, convert to c
     // channels; short-circuits when the target already matches; null image
@@ -91,6 +93,16 @@ inline KcppImage KcppImage::from_b64(const std::string& b64)
     auto v = std::make_shared<std::vector<uint8_t>>(raw, raw + (size_t)w * h * channels);
     stbi_image_free(raw);
     return KcppImage{(uint32_t)w, (uint32_t)h, channels, std::move(v)};
+}
+
+inline KcppImage KcppImage::from_sd_image(const sd_image_t& image)
+{
+    if (image.width == 0 || image.height == 0 || image.channel == 0 || image.data == nullptr) {
+        return KcppImage{};
+    }
+    auto v = std::make_shared<std::vector<uint8_t>>(
+        image.data, image.data + (size_t)image.width * image.height * image.channel);
+    return KcppImage{image.width, image.height, image.channel, std::move(v)};
 }
 
 inline KcppImage KcppImage::resize(uint32_t w, uint32_t h, uint32_t c) const
@@ -268,6 +280,11 @@ struct KcppAudio {
     // rate/channels, no resampling; null audio on failure
     static KcppAudio from_b64(const std::string& b64audio);
 
+    // old API bridge: copy of a vendored sd_audio_t (interleaved; replaced by
+    // from_audio once the sdcpp results move to tensors); null audio on an
+    // invalid source
+    static KcppAudio from_sd_audio(const sd_audio_t&);
+
     // old API boundary: borrows the samples; a null audio views as {0,0,0,nullptr}
     sd_audio_t view() const;
 
@@ -299,6 +316,16 @@ inline KcppAudio KcppAudio::from_b64(const std::string& b64audio)
     }
     auto v = std::make_shared<std::vector<float>>(std::move(pcm));
     return KcppAudio{(uint32_t)sample_rate, (uint32_t)channels, std::move(v)};
+}
+
+inline KcppAudio KcppAudio::from_sd_audio(const sd_audio_t& audio)
+{
+    if (audio.sample_rate == 0 || audio.channels == 0 || audio.sample_count == 0 || audio.data == nullptr) {
+        return KcppAudio{};
+    }
+    const size_t count = (size_t)audio.sample_count * audio.channels;
+    auto v = std::make_shared<std::vector<float>>(audio.data, audio.data + count);
+    return KcppAudio{audio.sample_rate, audio.channels, std::move(v)};
 }
 
 inline sd_audio_t KcppAudio::view() const
