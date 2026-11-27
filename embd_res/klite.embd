@@ -22743,7 +22743,7 @@ Current version indicated by LITEVER below.
 		return newgen;
 	}
 
-	function prepare_submit_generation() //wrap websearch into this
+	function prepare_submit_generation(onSubmitted = null) //wrap websearch into this
 	{
 		if(is_corpo_ui() && corpo_editing_turn != -1)
 		{
@@ -22771,6 +22771,10 @@ Current version indicated by LITEVER below.
 		document.getElementById("input_text").value = "";
 		PerformWebsearch(senttext,(res)=>{
 			submit_generation(senttext);
+			if(onSubmitted)
+			{
+				onSubmitted();
+			}
 		});
 	}
 
@@ -31000,14 +31004,19 @@ Current version indicated by LITEVER below.
 			}
 			retry_preserve_last = false;
 			let last_retry_stack_temp = retry_prev_text;
-			prepare_submit_generation();
-			retry_in_progress = erased_last;
-			retry_prev_text = last_retry_stack_temp;
-			retry_prev_text.push(temp);
-			if(retry_prev_text.length > 3) //undo limit for retries
+			last_retry_stack_temp.push(temp);
+			if(last_retry_stack_temp.length > 3) //undo limit for retries
 			{
-				retry_prev_text.shift();
+				last_retry_stack_temp.shift();
 			}
+			let restore_retry_history = ()=>{
+				retry_in_progress = erased_last;
+				retry_prev_text = last_retry_stack_temp;
+			};
+			// Keep abort working while web search is pending, then restore the
+			// history again after submit_generation clears the global stacks.
+			restore_retry_history();
+			prepare_submit_generation(restore_retry_history);
 			redo_arr = [];
 			document.getElementById("input_text").value = boxtextstash;
 		}
