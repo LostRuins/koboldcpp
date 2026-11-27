@@ -1,5 +1,79 @@
 #pragma once
 
+// kcpp: mirror the CMake-generated FlashAttention defines for our fixed template instances.
+// Keep enabled pairs in sync with Makefile and CMakeLists.txt.
+#define GGML_CUDA_FA_F16_F16 1
+#define GGML_CUDA_FA_Q4_0_F16 0
+#define GGML_CUDA_FA_Q4_1_F16 0
+#define GGML_CUDA_FA_Q5_0_F16 0
+#define GGML_CUDA_FA_Q5_1_F16 0
+#define GGML_CUDA_FA_Q8_0_F16 0
+#define GGML_CUDA_FA_BF16_F16 0
+#define GGML_CUDA_FA_F16_F8_E4M3 0
+
+#define GGML_CUDA_FA_F16_Q4_0 0
+#define GGML_CUDA_FA_Q4_0_Q4_0 1
+#define GGML_CUDA_FA_Q4_1_Q4_0 0
+#define GGML_CUDA_FA_Q5_0_Q4_0 0
+#define GGML_CUDA_FA_Q5_1_Q4_0 0
+#define GGML_CUDA_FA_Q8_0_Q4_0 0
+#define GGML_CUDA_FA_BF16_Q4_0 0
+#define GGML_CUDA_FA_Q4_0_F8_E4M3 0
+
+#define GGML_CUDA_FA_F16_Q4_1 0
+#define GGML_CUDA_FA_Q4_0_Q4_1 0
+#define GGML_CUDA_FA_Q4_1_Q4_1 0
+#define GGML_CUDA_FA_Q5_0_Q4_1 0
+#define GGML_CUDA_FA_Q5_1_Q4_1 0
+#define GGML_CUDA_FA_Q8_0_Q4_1 0
+#define GGML_CUDA_FA_BF16_Q4_1 0
+#define GGML_CUDA_FA_Q4_1_F8_E4M3 0
+
+#define GGML_CUDA_FA_F16_Q5_0 0
+#define GGML_CUDA_FA_Q4_0_Q5_0 0
+#define GGML_CUDA_FA_Q4_1_Q5_0 0
+#define GGML_CUDA_FA_Q5_0_Q5_0 0
+#define GGML_CUDA_FA_Q5_1_Q5_0 0
+#define GGML_CUDA_FA_Q8_0_Q5_0 0
+#define GGML_CUDA_FA_BF16_Q5_0 0
+#define GGML_CUDA_FA_Q5_0_F8_E4M3 0
+
+#define GGML_CUDA_FA_F16_Q5_1 0
+#define GGML_CUDA_FA_Q4_0_Q5_1 0
+#define GGML_CUDA_FA_Q4_1_Q5_1 0
+#define GGML_CUDA_FA_Q5_0_Q5_1 0
+#define GGML_CUDA_FA_Q5_1_Q5_1 1
+#define GGML_CUDA_FA_Q8_0_Q5_1 0
+#define GGML_CUDA_FA_BF16_Q5_1 0
+#define GGML_CUDA_FA_Q5_1_F8_E4M3 0
+
+#define GGML_CUDA_FA_F16_Q8_0 0
+#define GGML_CUDA_FA_Q4_0_Q8_0 0
+#define GGML_CUDA_FA_Q4_1_Q8_0 0
+#define GGML_CUDA_FA_Q5_0_Q8_0 0
+#define GGML_CUDA_FA_Q5_1_Q8_0 0
+#define GGML_CUDA_FA_Q8_0_Q8_0 1
+#define GGML_CUDA_FA_BF16_Q8_0 0
+#define GGML_CUDA_FA_Q8_0_F8_E4M3 0
+
+#define GGML_CUDA_FA_F16_BF16 0
+#define GGML_CUDA_FA_Q4_0_BF16 0
+#define GGML_CUDA_FA_Q4_1_BF16 0
+#define GGML_CUDA_FA_Q5_0_BF16 0
+#define GGML_CUDA_FA_Q5_1_BF16 0
+#define GGML_CUDA_FA_Q8_0_BF16 0
+#define GGML_CUDA_FA_BF16_BF16 1
+#define GGML_CUDA_FA_BF16_F8_E4M3 0
+
+#define GGML_CUDA_FA_F8_E4M3_F16 0
+#define GGML_CUDA_FA_F8_E4M3_Q4_0 0
+#define GGML_CUDA_FA_F8_E4M3_Q4_1 0
+#define GGML_CUDA_FA_F8_E4M3_Q5_0 0
+#define GGML_CUDA_FA_F8_E4M3_Q5_1 0
+#define GGML_CUDA_FA_F8_E4M3_Q8_0 0
+#define GGML_CUDA_FA_F8_E4M3_BF16 0
+#define GGML_CUDA_FA_F8_E4M3_F8_E4M3 0
+
 #include "ggml.h"
 #include "ggml-impl.h"
 #include "ggml-cuda.h"
