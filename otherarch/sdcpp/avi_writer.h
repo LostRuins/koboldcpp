@@ -11,7 +11,7 @@
 #ifndef MSF_GIF_IMPL
 #define MSF_GIF_IMPL
 #endif
-#include "./examples/cli/msf_gif.h" //notnullnotvoid/msf_gif
+#include "msf_gif.h" //notnullnotvoid/msf_gif
 
 #ifndef INCLUDE_STB_IMAGE_WRITE_H
 #include "stb_image_write.h"
