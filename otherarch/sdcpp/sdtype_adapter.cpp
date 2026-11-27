@@ -22,6 +22,8 @@
 #include <type_traits>
 #include <limits>
 #include <cmath>
+#include <cstdlib>
+#include <optional>
 
 #include "otherarch/utils.h"
 #include "otherarch/webp_image.h"
@@ -257,19 +259,6 @@ struct LoraMap {
             }
         }
         return lora_specs;
-    }
-
-    std::string get_lora_meta() {
-        std::stringstream lora_meta;
-        lora_meta << std::setprecision(6);
-        for (const auto & lora: items) {
-            float multiplier = check_small_mult(lora.second);
-            if (multiplier != 0.f) {
-                std::string lora_name = std::filesystem::path(lora.first).stem().string();
-                lora_meta << "<lora:" << lora_name << ":" << multiplier << ">";
-            }
-        }
-        return lora_meta.str();
     }
 
 };
@@ -673,7 +662,6 @@ struct SDGenParams {
     // loras[i].path points into lora_map, which must outlive loras
     LoraMap lora_map;
     std::vector<sd_lora_t> loras;
-    std::string lora_meta;
 
     bool upscale = false;
     bool remove_limits = false;
@@ -2314,54 +2302,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     return true;
 }
 
-static std::string friendly_model_name(std::filesystem::path model_path) {
-    return model_path.filename().string();
-}
-
-static std::string get_scheduler_name(scheduler_t scheduler, bool as_sampler_suffix = false)
-{
-    if (scheduler == scheduler_t::SCHEDULER_COUNT) {
-        return as_sampler_suffix ? "" : "default";
-    } else {
-        std::string prefix = as_sampler_suffix ? " " : "";
-        return prefix + sd_scheduler_name(scheduler);
-    }
-}
-
-static std::string get_image_params(const sd_img_gen_params_t & params, const std::string& lora_meta, int seed_offset) {
-    std::string model = sd_params->load_params.model_path;
-    if (model.empty())
-        model = sd_params->load_params.diffusion_model_path;
-    model = friendly_model_name(model);
-    std::stringstream ss;
-    ss << std::setprecision(3)
-        <<    "Prompt: " << params.prompt << lora_meta
-        << " | NegativePrompt: " << params.negative_prompt
-        << " | Steps: " << params.sample_params.sample_steps
-        << " | CFGScale: " << params.sample_params.guidance.txt_cfg
-        << " | Guidance: " << params.sample_params.guidance.distilled_guidance
-        << " | Seed: " << (params.seed + seed_offset)
-        << " | Size: " << params.width << "x" << params.height
-        << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method)
-        << get_scheduler_name(params.sample_params.scheduler, true);
-    if (params.sample_params.eta != -1.0f && params.sample_params.eta != INFINITY)
-        ss << "| Eta: " << params.sample_params.eta;
-    if (params.sample_params.shifted_timestep != 0)
-        ss << "| Timestep Shift: " << params.sample_params.shifted_timestep;
-    if (params.sample_params.flow_shift > 0.f && params.sample_params.flow_shift != INFINITY)
-        ss << "| Flow Shift: " << params.sample_params.flow_shift;
-    ss  << " | Clip skip: " << params.clip_skip
-        << " | Model: " << model;
-    std::string vae = sd_params->load_params.vae_path;
-    if (!vae.empty())
-        ss << " | VAE: " << friendly_model_name(vae);
-    std::string tae = sd_params->load_params.taesd_path;
-    if (!tae.empty())
-        ss << " | TAE: " << friendly_model_name(tae);
-    ss << " | Version: KoboldCpp";
-    return ss.str();
-}
-
 static inline int rounddown_to(int n, int fac) {
     return n - n % fac;
 }
@@ -2376,6 +2316,203 @@ static inline double round_for_info(double v) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%.6f", v);
     return strtod(buf, nullptr);
+}
+
+// the library's generation-info string, parsed without exceptions; a failed
+// parse is a library bug, not a request problem, so it degrades to a null
+// entry (which the info builders below skip) rather than an SdErrors problem
+static nlohmann::json parse_generation_info(const char* data) {
+    if (data == nullptr)
+        return nullptr;
+    try {
+        return nlohmann::json::parse(data);
+    } catch (const nlohmann::json::exception& e) {
+        printf("KCPP SD: invalid generation info from sdcpp: %s\n", e.what());
+        return nullptr;
+    }
+}
+
+// accessors for the library's generation-info JSON (the resolved effective
+// parameters; key presence replaces the old sentinel/range gates)
+// keys are dotted paths (the same convention the input requests use); a
+// missing key or a type mismatch yields nullopt, so unavailable items can be
+// omitted
+static const nlohmann::json* info_path(const nlohmann::json& info, const std::string& path) {
+    const nlohmann::json* cur = &info;
+    size_t start = 0;
+    while (true) {
+        const size_t dot = path.find('.', start);
+        const std::string key = path.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+        if (!cur->is_object())
+            return nullptr;
+        auto it = cur->find(key);
+        if (it == cur->end())
+            return nullptr;
+        cur = &*it;
+        if (dot == std::string::npos)
+            return cur;
+        start = dot + 1;
+    }
+}
+
+static std::optional<std::string> info_str(const nlohmann::json& info, const std::string& key) {
+    if (const auto* v = info_path(info, key); v != nullptr && v->is_string())
+        return v->get<std::string>();
+    return std::nullopt;
+}
+
+static std::optional<int> info_int(const nlohmann::json& info, const std::string& key) {
+    if (const auto* v = info_path(info, key); v != nullptr && v->is_number_integer())
+        return v->get<int>();
+    return std::nullopt;
+}
+
+static std::optional<double> info_double(const nlohmann::json& info, const std::string& key, bool round = true) {
+    if (const auto* v = info_path(info, key); v != nullptr && v->is_number()) {
+        auto res = v->get<double>();
+        return round ? round_for_info(res) : res;
+    }
+    return std::nullopt;
+}
+
+// for an int64 (e.g. seed), accept a numeric string, too
+static std::optional<int64_t> info_int64(const nlohmann::json& info, const std::string& key) {
+    if (const auto* v = info_path(info, key); v != nullptr) {
+        if (v->is_number_integer())
+            return v->get<int64_t>();
+        if (v->is_string())
+            return std::strtoll(v->get<std::string>().c_str(), nullptr, 10);
+    }
+    return std::nullopt;
+}
+
+// the loaded model filenames are reported under "models", keyed by role
+static std::string info_model_name(const nlohmann::json& info, const char* key) {
+    auto models = info.find("models");
+    if (models == info.end() || !models->is_object())
+        return "";
+    auto it = models->find(key);
+    if (it == models->end() || !it->is_string() || it->get_ref<const std::string&>().empty())
+        return "";
+    return it->get<std::string>();
+}
+
+// the <lora:name:multiplier> line, reconstructed from the resolved loras list
+static std::string get_lora_meta_from_info(const nlohmann::json& info) {
+    std::stringstream lora_meta;
+    lora_meta << std::setprecision(6);
+    auto loras = info.find("loras");
+    if (loras != info.end() && loras->is_array()) {
+        for (const auto& lora : *loras) {
+            auto path = lora.find("path");
+            auto mult = lora.find("multiplier");
+            if (path == lora.end() || !path->is_string() || mult == lora.end() || !mult->is_number())
+                continue;
+            const float multiplier = mult->get<float>();
+            if (multiplier == 0.f)
+                continue;
+            lora_meta << "<lora:" << std::filesystem::path(path->get<std::string>()).stem().string()
+                      << ":" << multiplier << ">";
+        }
+    }
+    return lora_meta.str();
+}
+
+static std::string get_image_info_text(const nlohmann::json& info, int seed_offset) {
+    std::stringstream ss;
+    ss << std::setprecision(3)
+        << "Prompt: " << info_str(info, "prompt").value_or("") + get_lora_meta_from_info(info);
+    if (auto v = info_str(info, "negative_prompt"); v.has_value())
+        ss << " | NegativePrompt: " << *v;
+    if (auto v = info_int(info, "sample_params.sample_steps"); v.has_value())
+        ss << " | Steps: " << *v;
+    if (auto v = info_double(info, "sample_params.guidance.txt_cfg"); v.has_value())
+        ss << " | CFGScale: " << *v;
+    if (auto v = info_double(info, "sample_params.guidance.distilled_guidance"); v.has_value())
+        ss << " | Guidance: " << *v;
+    if (auto v = info_int64(info, "seed"); v.has_value())
+        ss << " | Seed: " << (*v + seed_offset);
+    if (auto w = info_int(info, "width"); w.has_value()) {
+        if (auto h = info_int(info, "height"); h.has_value()) {
+            ss << " | Size: " << *w << "x" << *h;
+        }
+    }
+    if (auto sampler = info_str(info, "sample_params.sample_method"); sampler.has_value()) {
+        ss << " | Sampler: " << *sampler;
+        if (auto scheduler = info_str(info, "sample_params.scheduler"); scheduler.has_value())
+            ss << " " << *scheduler;
+    }
+    if (auto v = info_double(info, "sample_params.eta"); v.has_value())
+        ss << " | Eta: " << *v;
+    if (auto v = info_int(info, "sample_params.shifted_timestep"); v.has_value())
+        ss << " | Timestep Shift: " << *v;
+    if (auto v = info_double(info, "sample_params.flow_shift"); v.has_value())
+        ss << " | Flow Shift: " << *v;
+    if (auto v = info_int(info, "clip_skip"); v.has_value())
+        ss << " | Clip skip: " << *v;
+    std::string model = info_model_name(info, "model");
+    if (model.empty())
+        model = info_model_name(info, "diffusion_model");
+    if (!model.empty())
+        ss << " | Model: " << model;
+    if (auto vae = info_model_name(info, "vae"); !vae.empty())
+        ss << " | VAE: " << vae;
+    if (auto tae = info_model_name(info, "taesd"); !tae.empty())
+        ss << " | TAE: " << tae;
+    ss << " | Version: KoboldCpp";
+    return ss.str();
+}
+
+// the A1111-style "info" object for the generation result, built from the
+// library's per-item generation info (in a batch, the first valid item wins)
+static nlohmann::json build_result_jsoninfo(const std::vector<nlohmann::json>& jsonresults) {
+    nlohmann::json jsoninfo = nlohmann::json::object();
+    for (const auto& geninfo : jsonresults) {
+        if (geninfo.is_null())
+            continue;
+        jsoninfo["prompt"] = info_str(geninfo, "prompt").value_or("") + get_lora_meta_from_info(geninfo);
+        if (auto v = info_str(geninfo, "negative_prompt"); v.has_value() && !v->empty())
+            jsoninfo["negative_prompt"] = *v;
+        if (auto v = info_int64(geninfo, "seed"); v.has_value())
+            jsoninfo["seed"] = *v;
+        if (auto v = info_int(geninfo, "width"); v.has_value())
+            jsoninfo["width"] = *v;
+        if (auto v = info_int(geninfo, "height"); v.has_value())
+            jsoninfo["height"] = *v;
+        if (auto v = info_int(geninfo, "sample_params.sample_steps"); v.has_value())
+            jsoninfo["steps"] = *v;
+        if (auto v = info_double(geninfo, "sample_params.guidance.txt_cfg"); v.has_value())
+            jsoninfo["cfg_scale"] = *v;
+        if (auto v = info_double(geninfo, "sample_params.eta"); v.has_value())
+            jsoninfo["eta"] = *v;
+        if (auto v = info_int(geninfo, "clip_skip"); v.has_value())
+            jsoninfo["clip_skip"] = *v;
+        if (auto v = info_double(geninfo, "strength"); v.has_value())
+            jsoninfo["denoising_strength"] = *v;
+        if (auto v = info_str(geninfo, "sample_params.sample_method"); v.has_value())
+            jsoninfo["sampler_name"] = *v;
+        {
+            nlohmann::json extra = nlohmann::json::object();
+            if (auto v = info_str(geninfo, "sample_params.scheduler"); v.has_value())
+                extra["Schedule type"] = *v;
+            if (!extra.empty())
+                jsoninfo["extra_generation_params"] = extra;
+        }
+        std::string model = info_model_name(geninfo, "model");
+        if (model.empty())
+            model = info_model_name(geninfo, "diffusion_model");
+        if (!model.empty())
+            jsoninfo["sd_model_name"] = model;
+        std::string vae = info_model_name(geninfo, "vae");
+        if (vae.empty())
+            vae = info_model_name(geninfo, "taesd");
+        if (!vae.empty())
+            jsoninfo["sd_vae_name"] = vae;
+        jsoninfo["lora_meta"] = get_lora_meta_from_info(geninfo);
+        jsoninfo["version"] = "KoboldCpp";
+        break;
+    }
+    return jsoninfo;
 }
 
 const int img_side_min = 64;
@@ -2729,7 +2866,6 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
     gp.ref_image_args = "resize_before_vae=on" + ((gp.ref_image_args.empty() ? "" : ",") + gp.ref_image_args);
 
     gp.loras = gp.lora_map.get_lora_specs();
-    gp.lora_meta = gp.lora_map.get_lora_meta();
 
     gp.req_width = gp.width;
     gp.req_height = gp.height;
@@ -3273,6 +3409,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     KcppAudio generated_audio;
     KcppImages result_images;
     int generated_num_results = -1; // -1 failure, 0 passthrough
+    std::vector<nlohmann::json> jsonresults; // the library's per-result generation info
 
     // the timestamped start line lives in each branch: it names what is about to
     // run, and passthrough gets one too, since the upscaler may still run
@@ -3388,6 +3525,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         sd_video_generation_result_t* vid_result = nullptr;
         if (generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
             generated_num_results = vid_result->frame_count;
+            jsonresults.push_back(parse_generation_info(vid_result->generation_info));
             generated_audio = vid_result->audio ? KcppAudio::from_sd_audio(*vid_result->audio) : KcppAudio{};
             output_fps = vid_result->fps;
             for (int i = 0; i < generated_num_results; ++i) {
@@ -3435,6 +3573,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             generated_num_results = img_result->count;
             for (int i = 0; i < generated_num_results; ++i) {
                 result_images.push_back(KcppImage::from_sd_image(img_result->items[i].image));
+                jsonresults.push_back(parse_generation_info(img_result->items[i].generation_info));
             }
             free_sd_image_generation_result(img_result);
         }
@@ -3449,42 +3588,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     bool isanim = (gp.vid_req_frames>1 && generated_num_results>1 && gp.is_vidgen);
     nlohmann::json jsoninfo = nlohmann::json::object();
-    if (!isanim) {
-        jsoninfo["prompt"] = params.prompt + gp.lora_meta;
-        if (*params.negative_prompt)
-            jsoninfo["negative_prompt"] = params.negative_prompt;
-        jsoninfo["seed"] = params.seed;
-        jsoninfo["cfg_scale"] = round_for_info(params.sample_params.guidance.txt_cfg);
-        jsoninfo["width"] = params.width;
-        jsoninfo["height"] = params.height;
-        jsoninfo["steps"] = params.sample_params.sample_steps;
-        jsoninfo["sampler_name"] = sd_sample_method_name(params.sample_params.sample_method);
-        if (params.clip_skip > 0)
-            jsoninfo["clip_skip"] = params.clip_skip;
-        jsoninfo["extra_generation_params"] = nlohmann::json::object();
-        if (params.sample_params.scheduler != scheduler_t::SCHEDULER_COUNT)
-            jsoninfo["extra_generation_params"]["Schedule type"] = get_scheduler_name(params.sample_params.scheduler);
-        if (params.sample_params.eta >= 0 && params.sample_params.eta <= 1)
-            jsoninfo["eta"] = round_for_info(params.sample_params.eta);
-        if (gp.is_img2img)
-            jsoninfo["denoising_strength"] = round_for_info(params.strength);
-        if (sd_params->load_params.model_path.empty())
-            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.diffusion_model_path);
-        else
-            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.model_path);
-        std::string vae = sd_params->load_params.vae_path;
-        if (vae.empty())
-            // TODO: check if auto1111 uses a specific field for tae
-            vae = sd_params->load_params.taesd_path;
-        if (!vae.empty())
-            jsoninfo["sd_vae_name"] = friendly_model_name(vae);
-        jsoninfo["infotexts"] = nlohmann::json::array();
-        jsoninfo["all_prompts"] = nlohmann::json::array();
-        jsoninfo["all_negative_prompts"] = nlohmann::json::array();
-        jsoninfo["all_seeds"] = nlohmann::json::array();
-        jsoninfo["lora_meta"] = gp.lora_meta;
-        jsoninfo["version"] = "KoboldCpp";
-    }
     std::string gen_data;
     std::string gen_data2;
     std::string final_frame_data;
@@ -3493,6 +3596,11 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     if (gp.is_passthrough)
     {
+        // passthrough ran no generation: don't report the parameters as if it did,
+        // only echo the prompt, which may describe the imported image
+        if (!gp.prompt.empty())
+            jsoninfo["prompt"] = gp.prompt;
+
         // the start frame (the swapped-in img2img input) if present, else the input
         const KcppImage& pimg = gp.vid_start_frame.valid() ? gp.vid_start_frame : gp.img_init_image;
         if(upscaler_ctx != nullptr)
@@ -3506,6 +3614,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
     else if (isanim)
     {
+        jsoninfo = build_result_jsoninfo(jsonresults);
         //if multiframe, make a video
         if (!result_images.empty() && result_images.at(0).valid())
         {
@@ -3572,13 +3681,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
     else
     {
+        jsoninfo = build_result_jsoninfo(jsonresults);
         for (int i = 0; i < generated_num_results; i++)
         {
             const KcppImage& result_image = result_images.at(i);
             if (!result_image.valid()) {
                 continue;
             }
-            std::string meta_image_info = get_image_params(params, gp.lora_meta, i);
+            std::string meta_image_info = get_image_info_text(jsonresults[i], i);
             if(upscaler_ctx != nullptr && gp.upscale)
             {
                 printf("Upscaling output image...\n");
@@ -3587,9 +3697,9 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 gen_data = raw_image_to_png_base64(result_image, meta_image_info);
             }
             jsoninfo["infotexts"][i] = meta_image_info;
-            jsoninfo["all_seeds"][i] = params.seed + i;
-            jsoninfo["all_prompts"][i] = params.prompt;
-            jsoninfo["all_negative_prompts"][i] = params.negative_prompt;
+            jsoninfo["all_seeds"][i] = jsoninfo.value("seed", gp.seed) + i;
+            jsoninfo["all_prompts"][i] = jsoninfo["prompt"];
+            jsoninfo["all_negative_prompts"][i] = jsoninfo.value("negative_prompt", "");
         }
     }
 
