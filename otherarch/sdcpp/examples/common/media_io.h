@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "stable-diffusion.h"
+#include "resource_owners.hpp"
 
 enum class EncodedImageFormat {
     JPEG,
@@ -43,7 +43,7 @@ uint8_t* load_image_from_file(const char* image_path,
                               int expected_height  = 0,
                               int expected_channel = 3);
 
-bool load_sd_image_from_file(sd_image_t* image,
+bool load_sd_image_from_file(SDImage* image,
                              const char* image_path,
                              int expected_width   = 0,
                              int expected_height  = 0,
@@ -59,26 +59,26 @@ uint8_t* load_image_from_memory(const char* image_bytes,
                                 int expected_channel = 3);
 
 int create_mjpg_avi_from_sd_images(const char* filename,
-                                   sd_image_t* images,
+                                   SDImage* images,
                                    int num_images,
                                    int fps,
                                    int quality                   = 90,
-                                   const sd_audio_t* audio       = nullptr,
+                                   const SDAudio* audio          = nullptr,
                                    const std::string& parameters = "");
-std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(sd_image_t* images,
+std::vector<uint8_t> create_mjpg_avi_from_sd_images_to_vector(SDImage* images,
                                                               int num_images,
                                                               int fps,
                                                               int quality                   = 90,
-                                                              const sd_audio_t* audio       = nullptr,
+                                                              const SDAudio* audio          = nullptr,
                                                               const std::string& parameters = "");
 
 #ifdef SD_USE_WEBP
 int create_animated_webp_from_sd_images(const char* filename,
-                                        sd_image_t* images,
+                                        SDImage* images,
                                         int num_images,
                                         int fps,
                                         int quality = 90);
-std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(sd_image_t* images,
+std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(SDImage* images,
                                                                    int num_images,
                                                                    int fps,
                                                                    int quality = 90);
@@ -86,33 +86,33 @@ std::vector<uint8_t> create_animated_webp_from_sd_images_to_vector(sd_image_t* i
 
 #ifdef SD_USE_WEBM
 int create_webm_from_sd_images(const char* filename,
-                               sd_image_t* images,
+                               SDImage* images,
                                int num_images,
                                int fps,
                                int quality                   = 90,
-                               const sd_audio_t* audio       = nullptr,
+                               const SDAudio* audio          = nullptr,
                                const std::string& parameters = "");
-std::vector<uint8_t> create_webm_from_sd_images_to_vector(sd_image_t* images,
+std::vector<uint8_t> create_webm_from_sd_images_to_vector(SDImage* images,
                                                           int num_images,
                                                           int fps,
                                                           int quality                   = 90,
-                                                          const sd_audio_t* audio       = nullptr,
+                                                          const SDAudio* audio          = nullptr,
                                                           const std::string& parameters = "");
 #endif
 
 int create_video_from_sd_images(const char* filename,
-                                sd_image_t* images,
+                                SDImage* images,
                                 int num_images,
                                 int fps,
                                 int quality                   = 90,
-                                const sd_audio_t* audio       = nullptr,
+                                const SDAudio* audio          = nullptr,
                                 const std::string& parameters = "");
 std::vector<uint8_t> create_video_from_sd_images_to_vector(const std::string& output_format,
-                                                           sd_image_t* images,
+                                                           SDImage* images,
                                                            int num_images,
                                                            int fps,
                                                            int quality                   = 90,
-                                                           const sd_audio_t* audio       = nullptr,
+                                                           const SDAudio* audio          = nullptr,
                                                            const std::string& parameters = "");
 
 bool write_wav_to_file(const std::string& path,
@@ -120,8 +120,6 @@ bool write_wav_to_file(const std::string& path,
                        uint64_t sample_count,
                        uint32_t channels,
                        uint32_t sample_rate);
-
-sd_audio_t load_pcm_wav_from_file(const std::string& path);
 
 bool load_wav_from_file(const std::string& path,
                         std::vector<float>& interleaved_samples,

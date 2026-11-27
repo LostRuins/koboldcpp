@@ -1,3 +1,4 @@
+#include "api/result.h"
 #include "pipeline/video_upscale.h"
 
 #include <climits>
@@ -11,7 +12,7 @@
 namespace sd {
     namespace pipeline {
 
-        static sd::Tensor<float> prepare_vsr_frame(const sd_image_t& frame, int width, int height) {
+        static sd::Tensor<float> prepare_vsr_frame(const sd::Image& frame, int width, int height) {
             auto result = sd_image_to_tensor(frame, -1, -1, false);
             result /= 127.5f;
             result -= 1.f;
@@ -103,7 +104,7 @@ namespace sd {
                     flash_->runner_end();
             }
 
-            bool upscale(const sd_video_upscale_params_t& params, sd_video_generation_result_t* result) override {
+            bool upscale(const sd::VideoUpscaleConfig& params, sd::VideoGenerationResult* result) override {
                 const auto* frames    = params.frames;
                 const int frame_count = params.frame_count, fps = params.fps, window_size = params.window_size;
                 const int64_t seed = params.seed;

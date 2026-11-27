@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "config.h"
 #include "core/ggml_extend_backend.h"
 #include "model.h"
 #include "stable-diffusion.h"
@@ -28,7 +29,7 @@ namespace IPAdapter {
 namespace sd::model_builders {
 
     struct Context {
-        const sd_ctx_params_t& params;
+        const sd::ContextConfig& params;
         SDVersion version;
         const String2TensorStorage& tensor_storage_map;
         SDBackendManager& backends;

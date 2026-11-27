@@ -1,3 +1,4 @@
+#include "core/option_types.h"
 #include "generation.h"
 #include "generation_info.h"
 
@@ -22,8 +23,8 @@
 
 namespace sd::pipeline {
 
-    static sd_audio_t* waveform_to_sd_audio(const StableDiffusionGGML* sd,
-                                            const sd::Tensor<float>& waveform) {
+    static sd::Audio* waveform_to_sd_audio(const StableDiffusionGGML* sd,
+                                           const sd::Tensor<float>& waveform) {
         if (sd == nullptr || waveform.empty()) {
             return nullptr;
         }
@@ -34,7 +35,7 @@ namespace sd::pipeline {
             return nullptr;
         }
 
-        sd_audio_t* audio = (sd_audio_t*)malloc(sizeof(sd_audio_t));
+        sd::Audio* audio = (sd::Audio*)malloc(sizeof(sd::Audio));
         if (audio == nullptr) {
             return nullptr;
         }
@@ -374,7 +375,7 @@ namespace sd::pipeline {
         return sd::zeros<float>({audio_length, 2, 32, 1});
     }
 
-    static sd::Tensor<float> prepare_minimax_h3_reference_waveform(const sd_audio_t& audio,
+    static sd::Tensor<float> prepare_minimax_h3_reference_waveform(const sd::Audio& audio,
                                                                    int target_sample_rate = 32000) {
         if (audio.data == nullptr || audio.sample_count == 0 || audio.channels == 0 || audio.sample_rate == 0) {
             return {};
@@ -490,7 +491,7 @@ namespace sd::pipeline {
     }
 
     static std::optional<ImageGenerationLatents> prepare_video_generation_latents(StableDiffusionGGML* sd,
-                                                                                  const sd_vid_gen_params_t* sd_vid_gen_params,
+                                                                                  const sd::VideoConfig* sd_vid_gen_params,
                                                                                   GenerationRequest* request,
                                                                                   const RefImageParams& ref_image_params) {
         ImageGenerationLatents latents;
@@ -576,7 +577,7 @@ namespace sd::pipeline {
                     std::vector<int64_t>{width, height, image.shape()[2], image.shape()[3]});
             };
 
-            auto encode_reference_audio = [&](const sd_audio_t& audio,
+            auto encode_reference_audio = [&](const sd::Audio& audio,
                                               int32_t* audio_index) -> bool {
                 if (sd->audio_vae_model == nullptr) {
                     LOG_ERROR("MiniMax-H3 Ref2VA audio requires --audio-vae with encoder weights");
@@ -1194,7 +1195,7 @@ namespace sd::pipeline {
     }
 
     static std::optional<ImageGenerationEmbeds> prepare_video_generation_embeds(StableDiffusionGGML* sd,
-                                                                                const sd_vid_gen_params_t* sd_vid_gen_params,
+                                                                                const sd::VideoConfig* sd_vid_gen_params,
                                                                                 const GenerationRequest& request,
                                                                                 const ImageGenerationLatents& latents,
                                                                                 const RefImageParams& ref_image_params) {
@@ -1264,10 +1265,10 @@ namespace sd::pipeline {
         return embeds;
     }
 
-    static sd_image_t* decode_video_outputs(StableDiffusionGGML* sd,
-                                            const GenerationRequest& request,
-                                            const sd::Tensor<float>& final_latent,
-                                            int* num_frames_out) {
+    static sd::Image* decode_video_outputs(StableDiffusionGGML* sd,
+                                           const GenerationRequest& request,
+                                           const sd::Tensor<float>& final_latent,
+                                           int* num_frames_out) {
         if (final_latent.empty()) {
             LOG_ERROR("no latent video to decode");
             return nullptr;
@@ -1305,7 +1306,7 @@ namespace sd::pipeline {
             vid = sd::ops::slice(vid, 2, 0, request.frames);
         }
 
-        sd_image_t* result_images = (sd_image_t*)calloc(vid.shape()[2], sizeof(sd_image_t));
+        sd::Image* result_images = (sd::Image*)calloc(vid.shape()[2], sizeof(sd::Image));
         if (result_images == nullptr) {
             return nullptr;
         }
@@ -1661,7 +1662,7 @@ namespace sd::pipeline {
     }
 
     static bool apply_ltxv_refine_image_conditioning(StableDiffusionGGML* sd,
-                                                     const sd_vid_gen_params_t* sd_vid_gen_params,
+                                                     const sd::VideoConfig* sd_vid_gen_params,
                                                      const GenerationRequest& request,
                                                      const ImageGenerationLatents& latents,
                                                      sd::Tensor<float>* latent,
@@ -1765,8 +1766,8 @@ namespace sd::pipeline {
     }
 
     static bool generate_animatediff_video(StableDiffusionGGML* sd,
-                                           const sd_vid_gen_params_t* sd_vid_gen_params,
-                                           sd_image_t** frames_out,
+                                           const sd::VideoConfig* sd_vid_gen_params,
+                                           sd::Image** frames_out,
                                            int* num_frames_out) {
         int n_frames = sd_vid_gen_params->video_frames;
         if (n_frames < 1) {
@@ -1778,8 +1779,8 @@ namespace sd::pipeline {
             n_frames = 32;
         }
 
-        sd_img_gen_params_t img_gen_params;
-        sd_img_gen_params_init(&img_gen_params);
+        sd::ImageConfig img_gen_params;
+
         img_gen_params.loras             = sd_vid_gen_params->loras;
         img_gen_params.lora_count        = sd_vid_gen_params->lora_count;
         img_gen_params.prompt            = sd_vid_gen_params->prompt;
@@ -1815,10 +1816,10 @@ namespace sd::pipeline {
     }
 
     bool generate_video(StableDiffusionGGML* sd,
-                        const sd_vid_gen_params_t* sd_vid_gen_params,
-                        sd_image_t** frames_out,
+                        const sd::VideoConfig* sd_vid_gen_params,
+                        sd::Image** frames_out,
                         int* num_frames_out,
-                        sd_audio_t** audio_out,
+                        sd::Audio** audio_out,
                         int* fps_out,
                         nlohmann::json* info_out) {
         if (info_out)
@@ -1847,7 +1848,7 @@ namespace sd::pipeline {
         sd->vae_tiling_params = sd_vid_gen_params->vae_tiling_params;
         sd->apply_circular_axes(sd_vid_gen_params->circular_x, sd_vid_gen_params->circular_y);
         sd::ImagePreprocessor preprocessing(sd_vid_gen_params->image_preprocess.rules);
-        sd_vid_gen_params_t processed_params = *sd_vid_gen_params;
+        sd::VideoConfig processed_params = *sd_vid_gen_params;
         if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
             return false;
         sd_vid_gen_params = &processed_params;
@@ -1897,7 +1898,6 @@ namespace sd::pipeline {
 
         sd->rng->manual_seed(request.seed);
         sd->sampler_rng->manual_seed(request.seed);
-        sd->set_flow_shift(sd_vid_gen_params->sample_params.flow_shift);
         if (!sd->apply_loras(sd_vid_gen_params->loras, sd_vid_gen_params->lora_count))
             return false;
         sd->reset_generation_extensions();
@@ -2141,13 +2141,10 @@ namespace sd::pipeline {
                 make_hires_sigma_schedule(sd,
                                           request.hires,
                                           request.sample_params,
-                                          hires_sample_method,
                                           plan.sample_steps,
                                           sd->get_image_seq_len(hires_request.height, hires_request.width) * T,
                                           &hires_scheduler_steps);
-            float hires_eta = resolve_eta(sd,
-                                          sd_vid_gen_params->sample_params.eta,
-                                          hires_sample_method);
+            float hires_eta = plan.eta;
 
             LOG_VERBOSE("sample(latent upscale) %dx%dx%d", W, H, T);
             LOG_INFO("video latent spatial upscale refine: scheduler_steps=%d, denoising_strength=%.2f, sampler=%s, sigma_sched_size=%zu%s",
@@ -2197,11 +2194,11 @@ namespace sd::pipeline {
         int64_t latent_end = ggml_time_ms();
         LOG_INFO("generating latent video completed, taking %.2fs", (latent_end - latent_start) * 1.0f / 1000);
 
-        sd_audio_t* generated_audio = nullptr;
+        sd::Audio* generated_audio = nullptr;
         if (sd->version == VERSION_WAN2_2_S2V && sd_vid_gen_params->ref_audios_count > 0) {
             // Return the driving track for muxing with the generated video.
-            const sd_audio_t& driving = sd_vid_gen_params->ref_audios[0];
-            generated_audio           = (sd_audio_t*)malloc(sizeof(sd_audio_t));
+            const sd::Audio& driving = sd_vid_gen_params->ref_audios[0];
+            generated_audio          = (sd::Audio*)malloc(sizeof(sd::Audio));
             if (generated_audio != nullptr) {
                 generated_audio->sample_rate  = driving.sample_rate;
                 generated_audio->channels     = driving.channels;
@@ -2270,13 +2267,13 @@ namespace sd::pipeline {
 
         if (sd->get_cancel_flag() == SD_CANCEL_ALL) {
             LOG_ERROR("cancelling generation before video decode");
-            free_sd_audio(generated_audio);
+            sd::free_audio(generated_audio);
             return false;
         }
         auto result = decode_video_outputs(sd, latent_upscale_enabled ? hires_request : request, final_latent, num_frames_out);
         LOG_DEBUG("decode_video_outputs returned %s", result == nullptr ? "nullptr (failed)" : "frames");
         if (result == nullptr) {
-            free_sd_audio(generated_audio);
+            sd::free_audio(generated_audio);
             return false;
         }
 
@@ -2305,14 +2302,14 @@ namespace sd::pipeline {
             try {
                 *info_out = info;
             } catch (...) {
-                free_sd_audio(generated_audio);
+                sd::free_audio(generated_audio);
                 throw;
             }
         }
         if (audio_out != nullptr) {
             *audio_out = generated_audio;
         } else {
-            free_sd_audio(generated_audio);
+            sd::free_audio(generated_audio);
         }
         return true;
     }

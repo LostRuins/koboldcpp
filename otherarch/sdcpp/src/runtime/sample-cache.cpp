@@ -1,8 +1,9 @@
 #include "runtime/sample-cache.h"
+#include "config.h"
 
 namespace sd_sample {
 
-    static float get_cache_reuse_threshold(const sd_cache_params_t& params) {
+    static float get_cache_reuse_threshold(const sd::CacheConfig& params) {
         float reuse_threshold = params.reuse_threshold;
         if (reuse_threshold == INFINITY) {
             if (params.mode == SD_CACHE_EASYCACHE) {
@@ -26,7 +27,7 @@ namespace sd_sample {
         return mode == SampleCacheMode::CACHEDIT;
     }
 
-    static bool has_valid_cache_percent_range(const sd_cache_params_t& cache_params) {
+    static bool has_valid_cache_percent_range(const sd::CacheConfig& cache_params) {
         if (cache_params.mode != SD_CACHE_EASYCACHE && cache_params.mode != SD_CACHE_UCACHE) {
             return true;
         }
@@ -40,7 +41,7 @@ namespace sd_sample {
 
     static void init_easycache_runtime(SampleCacheRuntime& runtime,
                                        SDVersion version,
-                                       const sd_cache_params_t& cache_params,
+                                       const sd::CacheConfig& cache_params,
                                        Denoiser* denoiser) {
         if (!sd_version_is_dit(version)) {
             LOG_WARN("EasyCache requested but not supported for this model type");
@@ -68,7 +69,7 @@ namespace sd_sample {
 
     static void init_ucache_runtime(SampleCacheRuntime& runtime,
                                     SDVersion version,
-                                    const sd_cache_params_t& cache_params,
+                                    const sd::CacheConfig& cache_params,
                                     Denoiser* denoiser,
                                     const std::vector<float>& sigmas) {
         if (!sd_version_is_unet(version)) {
@@ -104,7 +105,7 @@ namespace sd_sample {
 
     static void init_cachedit_runtime(SampleCacheRuntime& runtime,
                                       SDVersion version,
-                                      const sd_cache_params_t& cache_params,
+                                      const sd::CacheConfig& cache_params,
                                       const std::vector<float>& sigmas) {
         if (!sd_version_is_dit(version)) {
             LOG_WARN("CacheDIT requested but not supported for this model type (only DiT models)");
@@ -147,7 +148,7 @@ namespace sd_sample {
 
     static void init_spectrum_runtime(SampleCacheRuntime& runtime,
                                       SDVersion version,
-                                      const sd_cache_params_t& cache_params,
+                                      const sd::CacheConfig& cache_params,
                                       const std::vector<float>& sigmas) {
         if (!sd_version_is_unet(version) && !sd_version_is_dit(version)) {
             LOG_WARN("Spectrum requested but not supported for this model type (only UNET and DiT models)");
@@ -174,7 +175,7 @@ namespace sd_sample {
     }
 
     SampleCacheRuntime init_sample_cache_runtime(SDVersion version,
-                                                 const sd_cache_params_t* cache_params,
+                                                 const sd::CacheConfig* cache_params,
                                                  Denoiser* denoiser,
                                                  const std::vector<float>& sigmas) {
         SampleCacheRuntime runtime;

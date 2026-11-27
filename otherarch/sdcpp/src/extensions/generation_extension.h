@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "conditioning/conditioner.hpp"
+#include "config.h"
 #include "core/ggml_extend_backend.h"
 #include "model/diffusion/model.hpp"
 #include "model_loader.h"
@@ -16,7 +17,7 @@
 #include "stable-diffusion.h"
 
 struct GenerationExtensionInitContext {
-    const sd_ctx_params_t* params;
+    const sd::ContextConfig* params;
     SDVersion version;
     const String2TensorStorage& tensor_storage_map;
     bool photomaker_source_available;
@@ -30,8 +31,8 @@ struct GenerationExtensionInitContext {
 struct GenerationExtensionConditionContext {
     Conditioner* conditioner;
     ConditionerParams& condition_params;
-    const sd_pm_params_t& pm_params;
-    const sd_pulid_params_t& pulid_params;
+    const sd::PhotoMakerConfig& pm_params;
+    const sd::PuLIDConfig& pulid_params;
     int n_threads;
     int total_steps;
 };

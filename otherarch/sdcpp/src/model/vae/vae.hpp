@@ -1,6 +1,8 @@
 #ifndef __SD_MODEL_VAE_VAE_HPP__
 #define __SD_MODEL_VAE_VAE_HPP__
 
+#include "config.h"
+
 #include <cmath>
 #include <limits>
 
@@ -82,7 +84,7 @@ protected:
     sd::Tensor<float> compute_with_temporal_tiling(const int n_threads,
                                                    const sd::Tensor<float>& input,
                                                    VAETemporalDirection direction,
-                                                   const sd_tiling_params_t& tiling_params) {
+                                                   const sd::TilingConfig& tiling_params) {
         if (!tiling_params.temporal_tiling || input.dim() != 5 || input.shape()[2] <= 1) {
             return _compute(n_threads, input, direction == VAETemporalDirection::DECODE);
         }
@@ -126,7 +128,7 @@ protected:
                                     bool circular_x,
                                     bool circular_y,
                                     bool decode_graph,
-                                    const sd_tiling_params_t& tiling_params,
+                                    const sd::TilingConfig& tiling_params,
                                     const char* error_message,
                                     bool silent = false) {
         auto on_processing = [&](const sd::Tensor<float>& input_tile) {
@@ -201,14 +203,14 @@ public:
         return supports_temporal_tiling(VAETemporalDirection::DECODE);
     }
 
-    virtual sd_tiling_params_t resolve_tiling_params(sd_tiling_params_t params) const {
+    virtual sd::TilingConfig resolve_tiling_params(sd::TilingConfig params) const {
         return params;
     }
 
     bool get_tile_sizes(int& tile_size_w,
                         int& tile_size_h,
                         float& tile_overlap,
-                        const sd_tiling_params_t& params,
+                        const sd::TilingConfig& params,
                         int64_t latent_w,
                         int64_t latent_h) {
         const auto tiling = resolve_tiling_params(params);
@@ -247,7 +249,7 @@ public:
 
     virtual sd::Tensor<float> encode(int n_threads,
                                      const sd::Tensor<float>& x,
-                                     sd_tiling_params_t tiling_params,
+                                     sd::TilingConfig tiling_params,
                                      bool circular_x = false,
                                      bool circular_y = false) {
         return encode(n_threads, x, tiling_params, circular_x, circular_y, true);
@@ -255,7 +257,7 @@ public:
 
     sd::Tensor<float> encode(int n_threads,
                              const sd::Tensor<float>& x,
-                             sd_tiling_params_t tiling_params,
+                             sd::TilingConfig tiling_params,
                              bool circular_x,
                              bool circular_y,
                              bool auto_end) {
@@ -313,7 +315,7 @@ public:
 
     virtual sd::Tensor<float> decode(int n_threads,
                                      const sd::Tensor<float>& x,
-                                     sd_tiling_params_t tiling_params,
+                                     sd::TilingConfig tiling_params,
                                      bool decode_video = false,
                                      bool circular_x   = false,
                                      bool circular_y   = false,
@@ -323,7 +325,7 @@ public:
 
     sd::Tensor<float> decode(int n_threads,
                              const sd::Tensor<float>& x,
-                             sd_tiling_params_t tiling_params,
+                             sd::TilingConfig tiling_params,
                              bool decode_video,
                              bool circular_x,
                              bool circular_y,

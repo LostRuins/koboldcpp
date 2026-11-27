@@ -1,10 +1,13 @@
 #ifndef __SD_PIPELINE_REQUEST_H__
 #define __SD_PIPELINE_REQUEST_H__
 
+#include "core/option_types.h"
+
 #include <map>
 #include <string>
 #include <vector>
 
+#include "config.h"
 #include "stable-diffusion.h"
 
 class StableDiffusionGGML;
@@ -19,52 +22,47 @@ namespace sd::pipeline {
 
     int64_t resolve_seed(int64_t seed);
 
-    float resolve_eta(StableDiffusionGGML* sd,
-                      float eta,
-                      enum sample_method_t sample_method);
-
     struct GenerationRequest {
         std::string prompt;
         std::string negative_prompt;
         std::map<std::string, std::string> models;
-        int width                                   = -1;
-        int height                                  = -1;
-        int clip_skip                               = -1;
-        int vae_scale_factor                        = -1;
-        int diffusion_model_down_factor             = -1;
-        int64_t seed                                = -1;
-        bool use_uncond                             = false;
-        bool use_img_uncond                         = false;
-        bool use_high_noise_uncond                  = false;
-        bool use_high_noise_img_uncond              = false;
-        bool has_ref_images                         = false;
-        bool is_layered_image                       = false;
-        bool use_high_noise                         = false;
-        bool use_vace                               = false;
-        const sd_cache_params_t* cache_params       = nullptr;
-        int batch_count                             = 1;
-        int qwen_image_layers                       = 3;
-        int shifted_timestep                        = 0;
-        float strength                              = 1.f;
-        float control_strength                      = 0.f;
-        sd_control_type_t control_type              = SD_CONTROL_TYPE_NONE;
-        float eta                                   = 0.f;
-        sd_sample_params_t sample_params            = {};
-        sd_sample_params_t high_noise_sample_params = {};
-        sd_guidance_params_t guidance               = {};
-        sd_guidance_params_t high_noise_guidance    = {};
-        sd_pm_params_t pm_params                    = {};
-        sd_pulid_params_t pulid_params              = {};
-        sd_hires_params_t hires                     = {};
-        sd_tiling_params_t vae_tiling_params        = {};
-        int frames                                  = -1;
-        int requested_frames                        = -1;
-        int fps                                     = 16;
-        float vace_strength                         = 1.f;
+        int width                                 = -1;
+        int height                                = -1;
+        int clip_skip                             = -1;
+        int vae_scale_factor                      = -1;
+        int diffusion_model_down_factor           = -1;
+        int64_t seed                              = -1;
+        bool use_uncond                           = false;
+        bool use_img_uncond                       = false;
+        bool use_high_noise_uncond                = false;
+        bool use_high_noise_img_uncond            = false;
+        bool has_ref_images                       = false;
+        bool is_layered_image                     = false;
+        bool use_high_noise                       = false;
+        bool use_vace                             = false;
+        const sd::CacheConfig* cache_params       = nullptr;
+        int batch_count                           = 1;
+        int qwen_image_layers                     = 3;
+        int shifted_timestep                      = 0;
+        float strength                            = 1.f;
+        float control_strength                    = 0.f;
+        sd_control_type_t control_type            = SD_CONTROL_TYPE_NONE;
+        sd::SampleConfig sample_params            = {};
+        sd::SampleConfig high_noise_sample_params = {};
+        sd::GuidanceConfig guidance               = {};
+        sd::GuidanceConfig high_noise_guidance    = {};
+        sd::PhotoMakerConfig pm_params            = {};
+        sd::PuLIDConfig pulid_params              = {};
+        sd::HiresConfig hires                     = {};
+        sd::TilingConfig vae_tiling_params        = {};
+        int frames                                = -1;
+        int requested_frames                      = -1;
+        int fps                                   = 16;
+        float vace_strength                       = 1.f;
 
-        GenerationRequest(StableDiffusionGGML* sd, const sd_img_gen_params_t* sd_img_gen_params);
+        GenerationRequest(StableDiffusionGGML* sd, const sd::ImageConfig* sd_img_gen_params);
 
-        GenerationRequest(StableDiffusionGGML* sd, const sd_vid_gen_params_t* sd_vid_gen_params);
+        GenerationRequest(StableDiffusionGGML* sd, const sd::VideoConfig* sd_vid_gen_params);
 
         int64_t seed_for_batch(int index) const;
 
@@ -75,7 +73,7 @@ namespace sd::pipeline {
         void resolve_hires();
 
         static void resolve_guidance(StableDiffusionGGML* sd,
-                                     sd_guidance_params_t* guidance,
+                                     sd::GuidanceConfig* guidance,
                                      bool* use_uncond,
                                      bool* use_img_uncond,
                                      bool has_ref_images,
@@ -99,22 +97,21 @@ namespace sd::pipeline {
         std::vector<float> sigmas;
 
         SamplePlan(StableDiffusionGGML* sd,
-                   const sd_img_gen_params_t* sd_img_gen_params,
+                   const sd::ImageConfig* sd_img_gen_params,
                    const GenerationRequest& request);
 
         SamplePlan(StableDiffusionGGML* sd,
-                   const sd_vid_gen_params_t* sd_vid_gen_params,
+                   const sd::VideoConfig* sd_vid_gen_params,
                    const GenerationRequest& request);
 
         void resolve(StableDiffusionGGML* sd,
                      const GenerationRequest* request,
-                     const sd_sample_params_t* sample_params);
+                     const sd::SampleConfig* sample_params);
     };
 
     std::vector<float> make_hires_sigma_schedule(StableDiffusionGGML* sd,
-                                                 const sd_hires_params_t& hires,
-                                                 const sd_sample_params_t& sample_params,
-                                                 sample_method_t sample_method,
+                                                 const sd::HiresConfig& hires,
+                                                 const sd::SampleConfig& sample_params,
                                                  int default_steps,
                                                  int sample_seq_len,
                                                  int* scheduler_steps_out);

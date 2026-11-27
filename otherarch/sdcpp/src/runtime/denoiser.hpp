@@ -1,6 +1,8 @@
 #ifndef __SD_RUNTIME_DENOISER_HPP__
 #define __SD_RUNTIME_DENOISER_HPP__
 
+#include "core/option_types.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>

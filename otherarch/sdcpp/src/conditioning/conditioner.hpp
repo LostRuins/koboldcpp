@@ -1997,13 +1997,13 @@ struct LLMEmbedder : public Conditioner {
         : version(version) {
         if (!tokenizers.has(TokenizerConfig::MAIN)) {
             if (sd_version_is_lens(version)) {
-                throw std::runtime_error("Lens requires an external GPT-OSS tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+                throw std::runtime_error("Lens requires an external GPT-OSS tokenizer.json; pass --tokenizer FILE or set the tokenizer context option");
             }
             if (sd_version_is_pid(version)) {
-                throw std::runtime_error("PiD requires an external Gemma 2 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+                throw std::runtime_error("PiD requires an external Gemma 2 tokenizer.json; pass --tokenizer FILE or set the tokenizer context option");
             }
             if (version == VERSION_MOSS_IMAGE) {
-                throw std::runtime_error("MOSS-Image requires the official Qwen3.5 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+                throw std::runtime_error("MOSS-Image requires the official Qwen3.5 tokenizer.json; pass --tokenizer FILE or set the tokenizer context option");
             }
         }
         LLM::LLMArch arch = LLM::LLMArch::QWEN2_5_VL;
@@ -3643,7 +3643,7 @@ struct LLaDAImageEmbedder : public Conditioner {
           text_projection_prefix(text_projection_prefix),
           sigvq_prefix(sigvq_prefix) {
         if (!tokenizers.has(TokenizerConfig::MAIN)) {
-            throw std::runtime_error("LLaDA-Image requires an external LLaDA2 tokenizer.json; pass --tokenizer FILE or set sd_ctx_params_t::tokenizer");
+            throw std::runtime_error("LLaDA-Image requires an external LLaDA2 tokenizer.json; pass --tokenizer FILE or set the tokenizer context option");
         }
         llm = std::make_shared<LLM::LLMRunner>(LLM::LLMArch::LLADA2_MOE,
                                                backend,

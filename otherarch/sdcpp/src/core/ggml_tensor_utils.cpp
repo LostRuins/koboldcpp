@@ -200,7 +200,7 @@ uint8_t* ggml_tensor_to_sd_image(ggml_tensor* input, int idx, bool video) {
     return image_data;
 }
 
-void sd_image_to_ggml_tensor(sd_image_t image,
+void sd_image_to_ggml_tensor(sd::Image image,
                              ggml_tensor* tensor,
                              bool scale) {
     GGML_ASSERT(image.width == tensor->ne[0]);

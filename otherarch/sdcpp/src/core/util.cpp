@@ -18,6 +18,7 @@
 #include <unordered_set>
 #include <vector>
 #include "core/ggml_tensor_utils.h"
+#include "core/option_types.h"
 #include "runtime/preprocessing.hpp"
 
 #include <inttypes.h>
@@ -769,7 +770,7 @@ void sd_set_progress_callback(sd_progress_cb_t cb, void* data) {
     sd_progress_cb      = cb;
     sd_progress_cb_data = data;
 }
-void sd_set_preview_callback(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
+void sd_set_preview_callback_impl(sd_preview_cb_t cb, preview_t mode, int interval, bool denoised, bool noisy, void* data) {
     sd_preview_info     = {};
     sd_preview_cb       = cb;
     sd_preview_cb_data  = data;
@@ -830,7 +831,7 @@ void* sd_get_progress_callback_data() {
     return sd_progress_cb_data;
 }
 
-sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
+sd::Image tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) {
     const auto& shape = tensor.shape();
     GGML_ASSERT(shape.size() == 4 || shape.size() == 5);
     int width     = static_cast<int>(shape[0]);
@@ -847,7 +848,7 @@ sd_image_t tensor_to_sd_image(const sd::Tensor<float>& tensor, int frame_index) 
     };
 }
 
-sd::Tensor<float> sd_image_to_tensor(sd_image_t image,
+sd::Tensor<float> sd_image_to_tensor(sd::Image image,
                                      int target_width,
                                      int target_height,
                                      bool scale) {

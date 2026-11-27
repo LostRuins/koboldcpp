@@ -1,6 +1,8 @@
 #ifndef __SD_RUNTIME_PREPROCESSING_HPP__
 #define __SD_RUNTIME_PREPROCESSING_HPP__
 
+#include "core/media.h"
+
 #include <cmath>
 #include <limits>
 
@@ -93,7 +95,7 @@ static inline void preprocessing_tensor_frame_to_sd_image(const sd::Tensor<float
     }
 }
 
-static inline sd::Tensor<float> sd_image_to_preprocessing_tensor(sd_image_t image) {
+static inline sd::Tensor<float> sd_image_to_preprocessing_tensor(sd::Image image) {
     sd::Tensor<float> tensor({static_cast<int64_t>(image.width), static_cast<int64_t>(image.height), static_cast<int64_t>(image.channel), 1});
     for (uint32_t y = 0; y < image.height; ++y) {
         for (uint32_t x = 0; x < image.width; ++x) {
@@ -293,7 +295,7 @@ static inline void threshold_hystersis(sd::Tensor<float>* img, float high_thresh
     }
 }
 
-bool preprocess_canny(sd_image_t img, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
+bool sd::preprocess_canny(sd::Image img, float high_threshold, float low_threshold, float weak, float strong, bool inverse) {
     float kX[9] = {
         -1, 0, 1,
         -2, 0, 2,

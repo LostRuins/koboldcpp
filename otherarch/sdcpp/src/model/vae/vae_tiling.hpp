@@ -1,6 +1,8 @@
 #ifndef __SD_MODEL_VAE_VAE_TILING_HPP__
 #define __SD_MODEL_VAE_VAE_TILING_HPP__
 
+#include "config.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <utility>
@@ -36,7 +38,7 @@ struct VAETemporalTilePlan {
     std::vector<VAETemporalTile> tiles;
 };
 
-inline VAETemporalTilingConfig resolve_vae_temporal_tiling_config(const sd_tiling_params_t& params,
+inline VAETemporalTilingConfig resolve_vae_temporal_tiling_config(const sd::TilingConfig& params,
                                                                   int default_tile_frames,
                                                                   int default_overlap) {
     VAETemporalTilingConfig config;

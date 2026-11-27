@@ -1,6 +1,10 @@
 #ifndef __SD_DETAILER_H__
 #define __SD_DETAILER_H__
 
+#include "core/media.h"
+
+#include "core/option_types.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -70,7 +74,7 @@ struct ADetailerGGML {
     ~ADetailerGGML();
 
     bool load_from_file(const std::string& detector_path);
-    std::vector<ADetailerDetection> predict(sd_image_t image,
+    std::vector<ADetailerDetection> predict(sd::Image image,
                                             const ADetailerParams& params);
 };
 

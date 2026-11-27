@@ -1,6 +1,8 @@
 #ifndef __SD_MODEL_DIFFUSION_CONTROL_HPP__
 #define __SD_MODEL_DIFFUSION_CONTROL_HPP__
 
+#include "core/option_types.h"
+
 #include "model/common/block.hpp"
 #include "stable-diffusion.h"
 

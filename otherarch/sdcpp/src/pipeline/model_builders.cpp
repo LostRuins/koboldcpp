@@ -1,4 +1,5 @@
 #include "model_builders.h"
+#include "core/option_types.h"
 
 #include <cmath>
 #include <cstring>

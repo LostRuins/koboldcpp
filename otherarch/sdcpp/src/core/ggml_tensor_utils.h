@@ -1,6 +1,8 @@
 #ifndef __SD_CORE_GGML_TENSOR_UTILS_H__
 #define __SD_CORE_GGML_TENSOR_UTILS_H__
 
+#include "core/media.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -58,7 +60,7 @@ __STATIC_INLINE__ ggml_fp16_t ggml_ext_tensor_get_f16(const ggml_tensor* tensor,
     return *(ggml_fp16_t*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]);
 }
 
-__STATIC_INLINE__ float sd_image_get_f32(sd_image_t image, int64_t iw, int64_t ih, int64_t ic, bool scale = true) {
+__STATIC_INLINE__ float sd_image_get_f32(sd::Image image, int64_t iw, int64_t ih, int64_t ic, bool scale = true) {
     float value = *(image.data + ih * image.width * image.channel + iw * image.channel + ic);
     if (scale) {
         value /= 255.f;
@@ -146,7 +148,7 @@ uint8_t* ggml_tensor_to_sd_image(ggml_tensor* input, uint8_t* image_data = nullp
 
 uint8_t* ggml_tensor_to_sd_image(ggml_tensor* input, int idx, bool video = false);
 
-void sd_image_to_ggml_tensor(sd_image_t image,
+void sd_image_to_ggml_tensor(sd::Image image,
                              ggml_tensor* tensor,
                              bool scale = true);
 
