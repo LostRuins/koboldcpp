@@ -1735,6 +1735,14 @@ def convert_json_to_gbnf(json_obj):
         print(f"JSON to GBNF failed: {e}")
         return ""
 
+def get_ollama_capabilities():
+    # capabilities reported by the Ollama-compatible /api/show endpoint.
+    # /api/chat supports tool calling, and images are accepted when a vision projector is available.
+    caps = ["completion", "tools"]
+    if has_vision_support or (autoswapmode and mmprojName is not None):
+        caps.append("vision")
+    return caps
+
 def get_capabilities():
     global savedata_obj, has_multiplayer, KcppVersion, friendlymodelname, friendlysdmodelname, fullsdmodelpath, password, fullwhispermodelpath, ttsmodelpath, embeddingsmodelpath, musicdiffusionmodelpath, musicllmmodelpath, has_audio_support, has_vision_support, mcp_connections
     global autoswapmode, textName, sttName, ttsName, embedName, musicName, imageName, mmprojName
@@ -8725,7 +8733,7 @@ Change Mode<br>
             response_body = (json.dumps({"message": "Settings successfully applied"}).encode())
 
         elif clean_path=="/api/show": #ollama compatible
-            response_body = (json.dumps({"parameters":"temperature 1.0","license":"Ollama Emulation. Running on KoboldCpp","modelfile":"KoboldCpp","capabilities":["completion"],"modified_at":"2025-01-01T01:00:00.0000000+00:00","details":{},"model_info":{}}).encode())
+            response_body = (json.dumps({"parameters":"temperature 1.0","license":"Ollama Emulation. Running on KoboldCpp","modelfile":"KoboldCpp","capabilities":get_ollama_capabilities(),"modified_at":"2025-01-01T01:00:00.0000000+00:00","details":{},"model_info":{}}).encode())
 
         elif clean_path=="/mcp": #simple mcp proxy
             if not self.secure_endpoint():
