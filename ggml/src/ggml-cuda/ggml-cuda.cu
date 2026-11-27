@@ -2131,6 +2131,9 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
         }
     } else if (compute_type == GGML_TYPE_F16 && !fast_fp16_hardware_available(cc)) {
         compute_type = GGML_TYPE_F32;
+    } else if (compute_type == GGML_TYPE_BF16 && GGML_CUDA_CC_IS_NVIDIA(cc) && cc < GGML_CUDA_CC_PASCAL) {
+        // kcpp: Kepler cuBLAS cannot execute BF16 GEMMs; use the chunked F32 fallback.
+        compute_type = GGML_TYPE_F32;
     // kcpp: Partial Revert of https://github.com/ggml-org/llama.cpp/pull/28846, Keep BF16 weights in BF16 storage even without native BF16 acceleration, converting the entire weight tensor to F32 can use too much vram.
     // } else if (compute_type == GGML_TYPE_BF16 && !fast_bf16_hardware_available(cc)) {
     //     if (GGML_CUDA_CC_IS_AMD(cc) && src1->ne[1] > 32) {
