@@ -1,6 +1,10 @@
 #include "common.cuh"
 #include "fattn-tile.cuh"
 
+// kcpp: this is a separate translation unit from fattn.cu, so the
+// GGML_CUDA_FA_* defines at the top of fattn.cu are not visible here.
+#define GGML_CUDA_FA_F16_F16 1
+
 template <ggml_type type_K, ggml_type type_V>
 static void ggml_cuda_flash_attn_ext_tile_switch_head_size(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * K = dst->src[1];
