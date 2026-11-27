@@ -5500,7 +5500,15 @@ def apply_ollama_options(genparams):
     if "seed" in ollamaopts:
         genparams["sampler_seed"] = tryparseint(ollamaopts.get('seed', -1),-1)
     if "stop" in ollamaopts:
-        genparams["stop_sequence"] = ollamaopts.get('stop', [])
+        stop_sequences = ollamaopts.get('stop')
+        if isinstance(stop_sequences, list):
+            # The transform appends template delimiters, so do not mutate the request's options list.
+            genparams["stop_sequence"] = list(stop_sequences)
+        elif isinstance(stop_sequences, str):
+            genparams["stop_sequence"] = [stop_sequences]
+        else:
+            genparams["stop_sequence"] = []
+
 
 def transform_genparams(genparams, api_format, use_jinja):
     global chatcompl_adapter, maxctx, thinkformats, cached_jinja_kwargs
@@ -5579,8 +5587,6 @@ ws ::= | " " | "\n" [ \t]{0,20}
 
         if api_format==7: # ollama chat passes sampler settings inside "options", same as /api/generate
             apply_ollama_options(genparams)
-            if tryparseint(genparams.get("max_length", 0),0) <= 0:
-                genparams["max_length"] = default_max_tok
 
         if api_format==4 or api_format==7: #handle ollama chat here too
             if genparams.get("tools"):
@@ -5865,8 +5871,13 @@ ws ::= | " " | "\n" [ \t]{0,20}
             utfprint("Ollama Context Error: " + str(e))
         ollamasysprompt = genparams.get('system', "")
         ollamabodyprompt = f"{detokstr}{user_message_start}{genparams.get('prompt', '')}{assistant_message_gen}"
-        if genparams.get('stop',[]) is not None:
-            genparams["stop_sequence"] = genparams.get('stop', [])
+        ollama_stop = genparams.get('stop', [])
+        if isinstance(ollama_stop, list):
+            genparams["stop_sequence"] = list(ollama_stop)
+        elif isinstance(ollama_stop, str):
+            genparams["stop_sequence"] = [ollama_stop]
+        else:
+            genparams["stop_sequence"] = []
         apply_ollama_options(genparams)
         genparams["stop_sequence"].append(user_message_start.strip())
         genparams["stop_sequence"].append(assistant_message_start.strip())
