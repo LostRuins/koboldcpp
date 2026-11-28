@@ -2363,7 +2363,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     load_prec_policy(ml);
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    ml.init_mappings(std::getenv("KCPP_NO_MMAP_PREFETCH") == nullptr, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
