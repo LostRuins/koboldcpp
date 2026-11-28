@@ -2665,32 +2665,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_RPC"));
     add_opt(common_arg(
         {"-lm", "--load-mode"}, "MODE",
-        "model loading mode and optional comma-separated flags (default: auto)\n"
+        "model loading mode (default: auto)\n"
         "- auto: mmap, unless a device does not support it\n"
         "- none: no special loading mode\n"
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
         "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
         "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
-        "- dio: use DirectIO if available\n"
-        "- noprefetch: optional flag to skip eager mmap prefetch (MADV_WILLNEED), e.g. mmap,noprefetch\n",
+        "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
-            const auto parts = string_split<std::string>(value, ',');
-            if (parts.empty()) { throw std::invalid_argument("invalid value"); }
-            const auto & mode = parts.front();
-            /**/ if (mode == "auto")       { params.load_mode = LLAMA_LOAD_MODE_AUTO;       }
-            else if (mode == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
-            else if (mode == "mmap")       { params.load_mode = LLAMA_LOAD_MODE_MMAP;       }
-            else if (mode == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
-            else if (mode == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
-            else if (mode == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }
+            /**/ if (value == "auto")       { params.load_mode = LLAMA_LOAD_MODE_AUTO;       }
+            else if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
+            else if (value == "mmap")       { params.load_mode = LLAMA_LOAD_MODE_MMAP;       }
+            else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
+            else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
+            else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }
             else { throw std::invalid_argument("invalid value"); }
-            for (size_t i = 1; i < parts.size(); i++) {
-                if (parts[i] == "noprefetch") {
-                    params.no_mmap_prefetch = true;
-                } else {
-                    throw std::invalid_argument("invalid value");
-                }
-            }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
