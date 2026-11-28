@@ -6,12 +6,12 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "stable-diffusion.h"
+#include "kcpp_media.h"
 
 #ifndef MSF_GIF_IMPL
 #define MSF_GIF_IMPL
 #endif
-#include "./examples/cli/msf_gif.h" //notnullnotvoid/msf_gif
+#include "msf_gif.h" //notnullnotvoid/msf_gif
 
 #ifndef INCLUDE_STB_IMAGE_WRITE_H
 #include "stb_image_write.h"
@@ -33,19 +33,23 @@ void write_u16_le(FILE* f, uint16_t val) {
 }
 
 /**
- * Create an MJPG AVI file from an array of sd_image_t images.
+ * Create an MJPG AVI file from a KcppImages.
  * Images are encoded to JPEG using stb_image_write.
  *
  * @param filename Output AVI file name.
- * @param images Array of input images.
- * @param num_images Number of images in the array.
+ * @param images Input images.
  * @param fps Frames per second for the video.
  * @param quality JPEG quality (0-100).
  * @return 0 on success, -1 on failure.
  */
-int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int num_images, int fps, int quality = 90) {
+int create_mjpg_avi(const char* filename, const KcppImages& images, int fps, int quality = 90) {
+    int num_images = (int)images.size();
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
+        return -1;
+    }
+    if (!images.at(0).valid()) {
+        fprintf(stderr, "Error: First image is invalid.\n");
         return -1;
     }
 
@@ -55,9 +59,9 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
         return -1;
     }
 
-    uint32_t width    = images[0].width;
-    uint32_t height   = images[0].height;
-    uint32_t channels = images[0].channel;
+    uint32_t width    = images.at(0).w;
+    uint32_t height   = images.at(0).h;
+    uint32_t channels = images.at(0).c;
     if (channels != 3 && channels != 4) {
         fprintf(stderr, "Error: Unsupported channel count: %u\n", channels);
         fclose(f);
@@ -166,13 +170,14 @@ int create_mjpg_avi_from_sd_images(const char* filename, sd_image_t* images, int
         };
 
         // Encode to JPEG in memory
+        const KcppImage& img = images.at(i);
         stbi_write_jpg_to_func(
             write_to_buf,
             &jpeg_data,
-            images[i].width,
-            images[i].height,
+            img.w,
+            img.h,
             channels,
-            images[i].data,
+            img.px->data(),
             quality);
 
         // Write '00dc' chunk (video frame)
@@ -244,22 +249,22 @@ static void mem_write_u16_le(mem_buffer_t* buf, uint16_t val) {
     mem_write(buf, &val, 2);
 }
 
-static uint8_t* sd_audio_to_pcm16_bytes(const sd_audio_t* audio, size_t* out_size) {
+static uint8_t* kcpp_audio_to_pcm16_bytes(const KcppAudio* audio, size_t* out_size) {
     *out_size = 0;
-    if (audio == NULL || audio->data == NULL || audio->sample_count == 0 || audio->channels == 0 || audio->sample_rate == 0) {
-        return NULL;
+    if (audio == nullptr || !audio->valid()) {
+        return nullptr;
     }
 
-    size_t pcm_samples = (size_t)audio->sample_count * (size_t)audio->channels;
+    size_t pcm_samples = audio->samples->size();
     size_t pcm_size = pcm_samples * sizeof(int16_t);
     uint8_t* bytes = (uint8_t*)malloc(pcm_size);
-    if (bytes == NULL) {
-        return NULL;
+    if (bytes == nullptr) {
+        return nullptr;
     }
 
     int16_t* pcm = (int16_t*)bytes;
     for (size_t i = 0; i < pcm_samples; ++i) {
-        float sample = audio->data[i];
+        float sample = audio->samples->data()[i];
         if (sample < -1.0f) sample = -1.0f;
         if (sample > 1.0f) sample = 1.0f;
         float scaled = sample * 32767.0f;
@@ -275,17 +280,22 @@ static uint8_t* sd_audio_to_pcm16_bytes(const sd_audio_t* audio, size_t* out_siz
  * Returns 0 on success, -1 on failure
  * must be freed by caller after use
  */
-int create_mjpg_avi_membuf_from_sd_images(sd_image_t* images, int num_images, int fps, int quality,  uint8_t** out_data, size_t *out_len, const sd_audio_t* audio = NULL)
+int create_mjpg_avi_membuf(const KcppImages& images, int fps, int quality,  uint8_t** out_data, size_t *out_len, const KcppAudio* audio = nullptr)
 {
+    int num_images = (int)images.size();
     if (num_images == 0) {
         fprintf(stderr, "Error: Image array is empty.\n");
         return -1;
     }
+    if (!images.at(0).valid()) {
+        fprintf(stderr, "Error: First image is invalid.\n");
+        return -1;
+    }
 
     mem_buffer_t buf = {NULL, 0};
-    uint32_t width    = images[0].width;
-    uint32_t height   = images[0].height;
-    uint32_t channels = images[0].channel;
+    uint32_t width    = images.at(0).w;
+    uint32_t height   = images.at(0).h;
+    uint32_t channels = images.at(0).c;
 
     if (channels != 3 && channels != 4) {
         fprintf(stderr, "Error: Unsupported channel count: %u\n", channels);
@@ -297,7 +307,7 @@ int create_mjpg_avi_membuf_from_sd_images(sd_image_t* images, int num_images, in
     if (mjpg_quality > 90) mjpg_quality = 90;
 
     size_t audio_pcm_size = 0;
-    uint8_t* audio_pcm = sd_audio_to_pcm16_bytes(audio, &audio_pcm_size);
+    uint8_t* audio_pcm = kcpp_audio_to_pcm16_bytes(audio, &audio_pcm_size);
     bool has_audio = audio_pcm != NULL && audio_pcm_size > 0;
     uint16_t audio_bits_per_sample = 16;
     uint16_t audio_block_align = has_audio ? (uint16_t)(audio->channels * (audio_bits_per_sample / 8)) : 0;
@@ -391,7 +401,7 @@ int create_mjpg_avi_membuf_from_sd_images(sd_image_t* images, int num_images, in
         mem_write_u32_le(&buf, audio_block_align);
         mem_write_u32_le(&buf, audio_byte_rate);
         mem_write_u32_le(&buf, 0);
-        mem_write_u32_le(&buf, (uint32_t)audio->sample_count);
+        mem_write_u32_le(&buf, (uint32_t)(audio->samples->size() / audio->channels));
         mem_write_u32_le(&buf, audio_data_size);
         mem_write_u32_le(&buf, (uint32_t)-1);
         mem_write_u32_le(&buf, audio_block_align);
@@ -430,10 +440,11 @@ int create_mjpg_avi_membuf_from_sd_images(sd_image_t* images, int num_images, in
             jd->size += size;
         };
 
+        const KcppImage& img = images.at(i);
         stbi_write_jpg_to_func(
             write_to_buf, &jpeg_data,
-            images[i].width, images[i].height,
-            channels, images[i].data, mjpg_quality
+            img.w, img.h,
+            channels, img.px->data(), mjpg_quality
         );
 
         mem_write(&buf, "00dc", 4);
@@ -489,20 +500,21 @@ int create_mjpg_avi_membuf_from_sd_images(sd_image_t* images, int num_images, in
 
 /// kcpp gif writer
 
-// ---------------- Helper: create_gif_buf_from_sd_images ----------------
-// Builds a GIF in memory from an array of sd_image_t. Returns 0 on success, -1 on failure.
+// ---------------- Helper: create_gif_buf_msf ----------------
+// Builds a GIF in memory from a KcppImages. Returns 0 on success, -1 on failure.
 // Caller must free(*out_data) when done.
-int create_gif_buf_from_sd_images_msf(sd_image_t* images, int num_images, int fps,  uint8_t** out_data, size_t *out_len)
+int create_gif_buf_msf(const KcppImages& images, int fps,  uint8_t** out_data, size_t *out_len)
 {
-    if(!images || num_images <= 0 || !out_data || !out_len) return -1;
+    if(images.empty() || !out_data || !out_len) return -1;
+    int num_images = (int)images.size();
 
     // basic parameter heuristics
     if(fps <= 0) fps = 16;
     uint32_t delay = (uint32_t)(100 / fps); // hundredths of a second per frame
 
     // assume all images same size; use first
-    uint32_t width = images[0].width;
-    uint32_t height = images[0].height;
+    uint32_t width = images.at(0).w;
+    uint32_t height = images.at(0).h;
 
     int centisecondsPerFrame = delay;
     int quality = 16;
@@ -512,15 +524,15 @@ int create_gif_buf_from_sd_images_msf(sd_image_t* images, int num_images, int fp
     // Feed frames
     for (int i = 0; i < num_images; i++)
     {
-        sd_image_t* img = &images[i];
-        if (img->width != width || img->height != height) {
+        const KcppImage& img = images.at(i);
+        if (!img.valid() || img.w != width || img.h != height) {
             fprintf(stderr, "Frame %d has mismatched dimensions.\n", i);
             return -1;
         }
 
         // gif expects 4 channels (RGBA) or 3 channels (RGB). It quantizes internally.
         // If your images have 3 channels, that’s fine. If 4 channels, it also works.
-        int channels = img->channel;
+        int channels = img.c;
         if (channels != 3 && channels != 4) {
             fprintf(stderr, "Unsupported channel count: %d\n", channels);
             return -1;
@@ -531,13 +543,13 @@ int create_gif_buf_from_sd_images_msf(sd_image_t* images, int num_images, int fp
         if (channels == 3) {
             frame_rgba = (uint8_t*)malloc(width * height * 4);
             for (int p = 0; p < width * height; p++) {
-                frame_rgba[p*4+0] = img->data[p*3+0];
-                frame_rgba[p*4+1] = img->data[p*3+1];
-                frame_rgba[p*4+2] = img->data[p*3+2];
+                frame_rgba[p*4+0] = img.px->data()[p*3+0];
+                frame_rgba[p*4+1] = img.px->data()[p*3+1];
+                frame_rgba[p*4+2] = img.px->data()[p*3+2];
                 frame_rgba[p*4+3] = 255;
             }
         } else {
-            frame_rgba = img->data; // already RGBA
+            frame_rgba = const_cast<uint8_t*>(img.px->data()); // already RGBA
         }
 
         int res = msf_gif_frame(&gifState, frame_rgba, centisecondsPerFrame, quality, width * 4); //frame

@@ -521,78 +521,12 @@ class generation_outputs(ctypes.Structure):
                 ("text", ctypes.c_char_p)]
 
 class sd_load_model_inputs(ctypes.Structure):
-    _fields_ = [("model_filename", ctypes.c_char_p),
-                ("executable_path", ctypes.c_char_p),
-                ("backend", ctypes.c_char_p),
-                ("threads", ctypes.c_int),
-                ("quant", ctypes.c_int),
-                ("flash_attention", ctypes.c_bool),
-                ("params_backend", ctypes.c_char_p),
-                ("use_mmap", ctypes.c_bool),
-                ("conv_direct_mode", ctypes.c_char_p),
-                ("taesd", ctypes.c_bool),
-                ("tiled_vae_threshold", ctypes.c_int),
-                ("llm_filename", ctypes.c_char_p),
-                ("clip1_filename", ctypes.c_char_p),
-                ("clip2_filename", ctypes.c_char_p),
-                ("vae_filename", ctypes.c_char_p),
-                ("audio_vae_filename", ctypes.c_char_p),
-                ("lora_len", ctypes.c_int),
-                ("lora_filenames", ctypes.POINTER(ctypes.c_char_p)),
-                ("lora_multipliers", ctypes.POINTER(ctypes.c_float)),
-                ("lora_apply_mode", ctypes.c_int),
-                ("photomaker_filename", ctypes.c_char_p),
-                ("upscaler_filename", ctypes.c_char_p),
-                ("img_hard_limit", ctypes.c_int),
-                ("img_soft_limit", ctypes.c_int),
-                ("max_vram", ctypes.c_char_p),
-                ("split_mode", ctypes.c_char_p),
-                ("auto_fit", ctypes.c_bool),
-                ("devices_override", ctypes.c_char_p),
-                ("quiet", ctypes.c_bool),
-                ("debugmode", ctypes.c_int)]
+    _fields_ = [("quiet", ctypes.c_bool),
+                ("debugmode", ctypes.c_int),
+                ("params_json", ctypes.c_char_p)]
 
 class sd_generation_inputs(ctypes.Structure):
-    _fields_ = [("prompt", ctypes.c_char_p),
-                ("negative_prompt", ctypes.c_char_p),
-                ("init_images", ctypes.c_char_p),
-                ("mask", ctypes.c_char_p),
-                ("video_start_frame", ctypes.c_char_p),
-                ("video_end_frame", ctypes.c_char_p),
-                ("extra_images_len", ctypes.c_int),
-                ("extra_images", ctypes.POINTER(ctypes.c_char_p)),
-                ("ref_audios_len", ctypes.c_int),
-                ("ref_audios", ctypes.POINTER(ctypes.c_char_p)),
-                ("flip_mask", ctypes.c_bool),
-                ("denoising_strength", ctypes.c_float),
-                ("cfg_scale", ctypes.c_float),
-                ("distilled_guidance", ctypes.c_float),
-                ("shifted_timestep", ctypes.c_int),
-                ("flow_shift", ctypes.c_float),
-                ("sample_steps", ctypes.c_int),
-                ("width", ctypes.c_int),
-                ("height", ctypes.c_int),
-                ("seed", ctypes.c_int),
-                ("sample_method", ctypes.c_char_p),
-                ("scheduler", ctypes.c_char_p),
-                ("eta", ctypes.c_float),
-                ("extra_sample_args", ctypes.c_char_p),
-                ("ref_image_args", ctypes.c_char_p),
-                ("clip_skip", ctypes.c_int),
-                ("vid_req_frames", ctypes.c_int),
-                ("vid_fps", ctypes.c_int),
-                ("video_output_type", ctypes.c_int),
-                ("remove_limits", ctypes.c_bool),
-                ("circular_x", ctypes.c_bool),
-                ("circular_y", ctypes.c_bool),
-                ("cache_mode", ctypes.c_char_p),
-                ("cache_options", ctypes.c_char_p),
-                ("upscale", ctypes.c_bool),
-                ("lora_len", ctypes.c_int),
-                ("lora_filenames", ctypes.POINTER(ctypes.c_char_p)),
-                ("lora_multipliers", ctypes.POINTER(ctypes.c_float)),
-                ("custom_sigmas", ctypes.POINTER(ctypes.c_float)),
-                ("custom_sigmas_count", ctypes.c_int)]
+    _fields_ = [("params_json", ctypes.c_char_p)]
 
 class sd_generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -603,8 +537,7 @@ class sd_generation_outputs(ctypes.Structure):
                 ("info", ctypes.c_char_p)]
 
 class sd_upscale_inputs(ctypes.Structure):
-    _fields_ = [("init_images", ctypes.c_char_p),
-                ("upscaling_resize", ctypes.c_int)]
+    _fields_ = [("params_json", ctypes.c_char_p)]
 
 class sd_info_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -1194,8 +1127,8 @@ def init_library():
     handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
     handle.sd_generate.restype = sd_generation_outputs
-    handle.sd_upscale.argtypes = [sd_upscale_inputs]
-    handle.sd_upscale.restype = sd_generation_outputs
+    handle.sd_upscale_image.argtypes = [sd_upscale_inputs]
+    handle.sd_upscale_image.restype = sd_generation_outputs
     handle.sd_get_info.argtypes = []
     handle.sd_get_info.restype = sd_info_outputs
     handle.sd_abort_generation.argtypes = []
@@ -2946,13 +2879,8 @@ def sd_get_device_override(deviceid, module=''):
         result = device_name
     return result
 
-def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename):
-    global args, cached_sd_info, cached_sd_custom_sigmas
-    inputs = sd_load_model_inputs()
-    inputs = set_backend_props(inputs)
-    cached_sd_info = sd_get_info()
-    cached_sd_custom_sigmas = sd_build_custom_sigmas()
-    inputs.model_filename = model_filename.encode("UTF-8")
+def sd_build_load_payload(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename):
+    '''builds the sd_load_model JSON payload'''
     thds = args.threads
 
     if args.sdthreads and args.sdthreads > 0:
@@ -2960,44 +2888,60 @@ def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_
         if sdt > 0:
             thds = sdt
 
-    inputs.threads = thds
-    inputs.quant = args.sdquant
-    inputs.flash_attention = args.sdflashattention
-    inputs.params_backend = b'CPU' if args.sdoffloadcpu else b''
-    inputs.use_mmap = args.usemmap
     backends = [
         sd_get_device_override(sd_resolve_device(args.sdmaingpu, 'main')),
         sd_get_device_override(sd_resolve_device(args.sdclipdevice, default_sdclipdevice), 'CLIP'),
         sd_get_device_override(sd_resolve_device(args.sdvaedevice, default_sdvaedevice), 'VAE'),
     ]
-    inputs.backend = ','.join([b for b in backends if b]).encode("UTF-8")
-    inputs.conv_direct_mode = sd_convdirect_mode(args.sdconvdirect).encode('UTF-8')
-    inputs.taesd = True if args.sdvaeauto else False
-    inputs.tiled_vae_threshold = args.sdtiledvae
-    inputs.vae_filename = vae_filename.encode("UTF-8")
-    inputs.audio_vae_filename = audio_vae_filename.encode("UTF-8")
-    inputs.llm_filename = llm_filename.encode("UTF-8")
-    inputs.clip1_filename = clip1_filename.encode("UTF-8")
-    inputs.clip2_filename = clip2_filename.encode("UTF-8")
-    inputs.photomaker_filename = photomaker_filename.encode("UTF-8")
-    inputs.upscaler_filename = upscaler_filename.encode("UTF-8")
-    inputs.max_vram = str((args.sdvramlimit/1024.0) if args.sdvramlimit > 0 else '').encode('UTF-8')
-    inputs.auto_fit = False
 
     lora_filenames, lora_multipliers = prepare_initial_lora_multipliers()
-    inputs.lora_len = len(lora_filenames)
-    inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
-    inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
+    loras = [
+        {"path": path.decode("UTF-8"), "multiplier": multiplier}
+        for path, multiplier in zip(lora_filenames, lora_multipliers)
+    ]
+
     # auto if no zero-weight lora, dynamic otherwise
     lora_apply_mode = 0 # auto
     if imglora_bypath:
         lora_dynamic = 1 << 3 # accept changes at runtime
         lora_cache   = 1 << 4 if imglora_cached else 0 # cache the preloaded LoRAs
         lora_apply_mode = lora_dynamic | lora_cache
-    inputs.lora_apply_mode = lora_apply_mode
 
-    inputs.img_hard_limit = args.sdclamped
-    inputs.img_soft_limit = args.sdclampedsoft
+    # None/"" means default value
+    return {
+        "model_filename": model_filename,
+        "executable_path": getdirpath()+"/",
+        "threads": thds,
+        "quant": args.sdquant,
+        "flash_attention": bool(args.sdflashattention),
+        "params_backend": 'CPU' if args.sdoffloadcpu else '',
+        "use_mmap": bool(args.usemmap),
+        "backend": ','.join([b for b in backends if b]),
+        "conv_direct_mode": sd_convdirect_mode(args.sdconvdirect),
+        "taesd": bool(args.sdvaeauto),
+        "tiled_vae_threshold": args.sdtiledvae,
+        "vae_filename": vae_filename,
+        "audio_vae_filename": audio_vae_filename,
+        "llm_filename": llm_filename,
+        "clip1_filename": clip1_filename,
+        "clip2_filename": clip2_filename,
+        "photomaker_filename": photomaker_filename,
+        "upscaler_filename": upscaler_filename,
+        "max_vram": str((args.sdvramlimit/1024.0) if args.sdvramlimit > 0 else ''),
+        "auto_fit": False,
+        "img_hard_limit": args.sdclamped,
+        "img_soft_limit": args.sdclampedsoft,
+        "lora_apply_mode": lora_apply_mode,
+        "loras": loras,
+    }
+
+def sd_load_model(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename):
+    global cached_sd_info, cached_sd_custom_sigmas
+    inputs = sd_load_model_inputs()
+    inputs = set_backend_props(inputs)
+    cached_sd_info = sd_get_info()
+    cached_sd_custom_sigmas = sd_build_custom_sigmas()
+    inputs.params_json = json.dumps(sd_build_load_payload(model_filename,vae_filename,llm_filename,clip1_filename,clip2_filename,photomaker_filename,upscaler_filename,audio_vae_filename)).encode("UTF-8")
     ret = handle.sd_load_model(inputs)
     return ret
 
@@ -3151,11 +3095,14 @@ def gendefaults_parse_meta_field(value):
     return result
 
 def sd_upscale(genparams):
-    init_images = genparams.get("image", "")
+    payload = {}
+    image = genparams.get("image", "")
+    if isinstance(image, str) and image:
+        payload["init_images"] = image
+    payload["upscaling_resize"] = tryparseint(genparams.get("upscaling_resize", 2),2) # how many times to upscale
     inputs = sd_upscale_inputs()
-    inputs.init_images = init_images.encode("UTF-8")
-    inputs.upscaling_resize = tryparseint(genparams.get("upscaling_resize", 2),2) # how many times to upscale
-    ret = handle.sd_upscale(inputs)
+    inputs.params_json = json.dumps(payload).encode("UTF-8")
+    ret = handle.sd_upscale_image(inputs)
     data_main = ""
     if ret.status==1:
         data_main = ret.data.decode("UTF-8","ignore")
@@ -3355,16 +3302,13 @@ def sdcpp_model_status():
         'load_elapsed_seconds': 0 if loaded else None,
     }
 
-def sd_generate(genparams):
-    global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
-
-    job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-
+def sd_build_gen_payload(genparams):
+    '''builds the sd_generate JSON payload'''
     forced_negprompt = genparams.get("add_sd_negative_prompt", "")
     forced_posprompt = genparams.get("add_sd_prompt", "")
     forced_steplimit = tryparseint(genparams.get("add_sd_step_limit",80),80)
     forced_maxcfg = tryparsefloat(genparams.get("add_sd_cfg_limit",25),25)
-    allow_remove_limits = tryparseint(genparams.get("remove_limits",0),0)
+    remove_limits = tryparseint(genparams.get("remove_limits",0),0)
 
     prompt = genparams.get("prompt", "high quality")
     negative_prompt = genparams.get("negative_prompt", "")
@@ -3380,7 +3324,7 @@ def sd_generate(genparams):
     mask = strip_base64_prefix(genparams.get("mask", ""))
     video_start_frame = strip_base64_prefix(genparams.get("video_start_frame", ""))
     video_end_frame = strip_base64_prefix(genparams.get("video_end_frame", ""))
-    flip_mask = genparams.get("inpainting_mask_invert", 0)
+    flip_mask = tryparseint(genparams.get("inpainting_mask_invert", 0), 0)
     denoising_strength = tryparsefloat(genparams.get("denoising_strength", 0.6),0.6)
     cfg_scale = tryparsefloat(genparams.get("cfg_scale", 5),5)
     distilled_guidance = tryparsefloat(genparams.get("distilled_guidance", None), None)
@@ -3395,17 +3339,20 @@ def sd_generate(genparams):
     seed = tryparseint(genparams.get("seed", -1),-1)
     if seed < 0:
         seed = random.randint(100000, 999999)
+    seed = ((seed + 2**31) % 2**32) - 2**31
     sample_method = (genparams.get("sampler_name") or "default")
     scheduler = (genparams.get("scheduler") or "default").lower()
     custom_sigmas = genparams.get("custom_sigmas") or cached_sd_custom_sigmas.get(scheduler)
     extra_sample_args = str(genparams.get("extra_sample_args") or "")
     ref_image_args = str(genparams.get("ref_image_args") or "").strip()
-    clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
+    clip_skip = tryparseint(genparams.get("clip_skip", None), None)
+    if clip_skip is not None and clip_skip <= 0:
+        clip_skip = None # 0/-1 mean "not set": omit the key
     eta = tryparsefloat(genparams.get("eta", None), None)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
     vid_req_frames = 1 if (not vid_req_frames or vid_req_frames < 1) else vid_req_frames
     vid_fps = tryparseint(genparams.get("fps", 16),16)
-    video_output_type = genparams.get("video_output_type", 0)
+    video_output_type = tryparseint(genparams.get("video_output_type", 0), 0)
     cache_mode = str(genparams.get("cache_mode", ""))
     cache_options = str(genparams.get("cache_options", ""))
     extra_images_arr = genparams.get("extra_images", [])
@@ -3417,6 +3364,7 @@ def sd_generate(genparams):
     audio_refs_arr = [strip_base64_prefix(aud) for aud in audio_refs_arr]
 
     extra_images_arr = extra_images_arr[:extra_images_max]
+    extra_images_arr = [strip_base64_prefix(img) for img in extra_images_arr]
     lora_filenames, lora_multipliers = prepare_lora_multipliers(genparams.get("lora", []))
 
     #clean vars
@@ -3428,7 +3376,7 @@ def sd_generate(genparams):
     if flow_shift is not None and flow_shift < 0:
         flow_shift = None # fall back to the default
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
-    if custom_sigmas is not None:
+    if custom_sigmas:
         # custom sigmas fully determine the schedule; ignore the requested step count
         sample_steps = len(custom_sigmas) - 1
     vid_req_frames = (1 if vid_req_frames < 1 else (480 if vid_req_frames > 480 else vid_req_frames))
@@ -3441,56 +3389,61 @@ def sd_generate(genparams):
         extra_images_arr = [init_images] + extra_images_arr
         init_images = ""
 
+    sampler_cname = sd_sampler_canonical_name(sample_method)
+
+    # absent or None keys mean "use the default" in C++
+    payload = {
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "init_images": init_images,
+        "mask": mask,
+        "video_start_frame": video_start_frame,
+        "video_end_frame": video_end_frame,
+        "extra_images": extra_images_arr,
+        "ref_audios": audio_refs_arr,
+        "flip_mask": bool(flip_mask),
+        "denoising_strength": (0 if denoising_strength < 0 else (1 if denoising_strength > 1 else denoising_strength)),
+        "cfg_scale": cfg_scale,
+        "distilled_guidance": distilled_guidance,
+        "shifted_timestep": shifted_timestep,
+        "flow_shift": flow_shift,
+        "sample_steps": sample_steps,
+        "width": width,
+        "height": height,
+        "seed": seed,
+        "sample_method": sampler_cname if sampler_cname != "default" else None,
+        "scheduler": scheduler if scheduler != "default" else None,
+        "eta": eta,
+        "extra_sample_args": extra_sample_args,
+        "ref_image_args": ref_image_args,
+        "clip_skip": clip_skip,
+        "vid_req_frames": vid_req_frames,
+        "vid_fps": vid_fps,
+        "video_output_type": video_output_type,
+        "remove_limits": bool(remove_limits),
+        "circular_x": bool(tryparseint(genparams.get("circular_x",0),0)) or None,
+        "circular_y": bool(tryparseint(genparams.get("circular_y",0),0)) or None,
+        "cache_mode": cache_mode,
+        "cache_options": cache_options,
+        "upscale": bool(tryparseint(genparams.get("enable_hr", 0),0)),
+        "loras": [
+            {"path": path.decode("UTF-8"), "multiplier": multiplier}
+            for path, multiplier in zip(lora_filenames, lora_multipliers)
+        ],
+        "custom_sigmas": None if not custom_sigmas else list(custom_sigmas),
+    }
+
+    return payload
+
+def sd_generate(genparams):
+    global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
+
+    job_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    payload = sd_build_gen_payload(genparams)
+
     inputs = sd_generation_inputs()
-    inputs.prompt = prompt.encode("UTF-8")
-    inputs.negative_prompt = negative_prompt.encode("UTF-8")
-    inputs.init_images = init_images.encode("UTF-8")
-    inputs.mask = "".encode("UTF-8") if not mask else mask.encode("UTF-8")
-    inputs.video_start_frame = "".encode("UTF-8") if not video_start_frame else video_start_frame.encode("UTF-8")
-    inputs.video_end_frame = "".encode("UTF-8") if not video_end_frame else video_end_frame.encode("UTF-8")
-    inputs.extra_images_len = len(extra_images_arr)
-    inputs.extra_images = (ctypes.c_char_p * inputs.extra_images_len)()
-    for n, estr in enumerate(extra_images_arr):
-        extra_image = strip_base64_prefix(estr)
-        inputs.extra_images[n] = extra_image.encode("UTF-8")
-    inputs.ref_audios_len = len(audio_refs_arr)
-    inputs.ref_audios = (ctypes.c_char_p * inputs.ref_audios_len)()
-    for n, aud in enumerate(audio_refs_arr):
-        inputs.ref_audios[n] = aud.encode("UTF-8")
-    inputs.flip_mask = flip_mask
-    inputs.cfg_scale = cfg_scale
-    if distilled_guidance is not None:
-        inputs.distilled_guidance = distilled_guidance
-    inputs.denoising_strength = (0 if denoising_strength < 0 else (1 if denoising_strength > 1 else denoising_strength))
-    if shifted_timestep is not None:
-        inputs.shifted_timestep = shifted_timestep
-    if flow_shift is not None:
-        inputs.flow_shift = flow_shift
-    inputs.sample_steps = sample_steps
-    inputs.width = width
-    inputs.height = height
-    inputs.seed = ((seed + 2**31) % 2**32) - 2**31
-    inputs.sample_method = sd_sampler_canonical_name(sample_method).encode("UTF-8")
-    inputs.scheduler = scheduler.encode("UTF-8")
-    inputs.custom_sigmas_count = len(custom_sigmas) if custom_sigmas is not None else 0
-    if custom_sigmas is not None:
-        inputs.custom_sigmas = (ctypes.c_float * len(custom_sigmas))(*custom_sigmas)
-    inputs.eta = -1.0 if eta is None else eta
-    inputs.extra_sample_args = extra_sample_args.encode("UTF-8")
-    inputs.clip_skip = clip_skip
-    inputs.vid_req_frames = vid_req_frames
-    inputs.vid_fps = vid_fps
-    inputs.video_output_type = video_output_type
-    inputs.remove_limits = allow_remove_limits
-    inputs.ref_image_args = ref_image_args.encode("UTF-8")
-    inputs.circular_x = tryparseint(genparams.get("circular_x",0),0)
-    inputs.circular_y = tryparseint(genparams.get("circular_y",0),0)
-    inputs.cache_mode = cache_mode.encode("UTF-8")
-    inputs.cache_options = cache_options.encode("UTF-8")
-    inputs.upscale = (True if tryparseint(genparams.get("enable_hr", 0),0) else False)
-    inputs.lora_len = len(lora_filenames)
-    inputs.lora_filenames = (ctypes.c_char_p * inputs.lora_len)(*lora_filenames)
-    inputs.lora_multipliers = (ctypes.c_float * inputs.lora_len)(*lora_multipliers)
+    inputs.params_json = json.dumps(payload).encode("UTF-8")
 
     ret = handle.sd_generate(inputs)
     data_main = ""

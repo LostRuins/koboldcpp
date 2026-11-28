@@ -193,79 +193,13 @@ struct last_logprobs_outputs {
 
 struct sd_load_model_inputs
 {
-    const char * model_filename = nullptr;
-    const char * executable_path = nullptr;
-    const char * backend = nullptr;
-    const int threads = 0;
-    const int quant = 0;
-    const bool flash_attention = false;
-    const char * params_backend = nullptr;
-    const bool use_mmap = false;
-    const char * conv_direct_mode = nullptr;
-    const bool taesd = false;
-    const int tiled_vae_threshold = 0;
-    const char * llm_filename = nullptr;
-    const char * clip1_filename = nullptr;
-    const char * clip2_filename = nullptr;
-    const char * vae_filename = nullptr;
-    const char * audio_vae_filename = nullptr;
-    const int lora_len = 0;
-    const char ** lora_filenames = nullptr;
-    const float * lora_multipliers = nullptr;
-    const int lora_apply_mode = 0;
-    const char * photomaker_filename = nullptr;
-    const char * upscaler_filename = nullptr;
-    const int img_hard_limit = 0;
-    const int img_soft_limit = 0;
-    const char * max_vram = nullptr;
-    const char * split_mode = nullptr;
-    const bool auto_fit = false;
-    const char * devices_override = nullptr;
     const bool quiet = false;
     const int debugmode = 0;
+    const char * params_json = nullptr;
 };
 struct sd_generation_inputs
 {
-    const char * prompt = nullptr;
-    const char * negative_prompt = nullptr;
-    const char * init_images = "";
-    const char * mask = "";
-    const char * video_start_frame = "";
-    const char * video_end_frame = "";
-    const int extra_images_len = 0;
-    const char ** extra_images = nullptr;
-    const int ref_audios_len = 0;
-    const char ** ref_audios = nullptr;
-    const bool flip_mask = false;
-    const float denoising_strength = 0.0f;
-    const float cfg_scale = 0.0f;
-    const float distilled_guidance = -1.0f;
-    const int shifted_timestep = 0;
-    const float flow_shift = 0.0f;
-    const int sample_steps = 0;
-    const int width = 0;
-    const int height = 0;
-    const int seed = 0;
-    const char * sample_method = nullptr;
-    const char * scheduler = nullptr;
-    const float eta = -1.0f;
-    const char * extra_sample_args = nullptr;
-    const char * ref_image_args = nullptr;
-    const int clip_skip = -1;
-    const int vid_req_frames = 1;
-    const int vid_fps = 16;
-    const int video_output_type = 0; // 0=GIF, 1=AVI, 2=GIF+AVI, 3=animated WebP, 4=animated WebP+AVI
-    const bool remove_limits = false;
-    const bool circular_x = false;
-    const bool circular_y = false;
-    const char * cache_mode = nullptr;
-    const char * cache_options = nullptr;
-    const bool upscale = false;
-    const int lora_len = 0;
-    const char ** lora_filenames = nullptr;
-    const float * lora_multipliers = nullptr;
-    const float * custom_sigmas = nullptr;
-    const int custom_sigmas_count = 0;
+    const char * params_json = nullptr;
 };
 struct sd_generation_outputs
 {
@@ -278,8 +212,7 @@ struct sd_generation_outputs
 };
 struct sd_upscale_inputs
 {
-    const char * init_images = "";
-    const int upscaling_resize = 0;
+    const char * params_json = nullptr;
 };
 struct sd_info_outputs
 {
