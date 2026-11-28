@@ -1,4 +1,6 @@
 #include "upscaler.h"
+#include "api/options.h"
+#include "api/result.h"
 #include "core/ggml_extend_backend.h"
 #include "core/util.h"
 #include "generation_info.h"
@@ -60,13 +62,12 @@ sd::Tensor<float> UpscalerGGML::upscale_tensor(const sd::Tensor<float>& input_te
     return sd::pipeline::upscale_image_tensor(*model, input_tensor, n_threads, tile_size);
 }
 
-sd_image_t UpscalerGGML::upscale(sd_image_t input_image, uint32_t upscale_factor) {
+sd::Image UpscalerGGML::upscale(sd::Image input_image) {
     sd::ParallelScope tensor_scope(&tensor_executor);
-    // upscale_factor, unused for RealESRGAN_x4plus_anime_6B.pth
-    sd_image_t upscaled_image = {0, 0, 0, nullptr};
-    const int scale           = get_scale();
-    int output_width          = (int)input_image.width * scale;
-    int output_height         = (int)input_image.height * scale;
+    sd::Image upscaled_image = {0, 0, 0, nullptr};
+    const int scale          = get_scale();
+    int output_width         = (int)input_image.width * scale;
+    int output_height        = (int)input_image.height * scale;
     LOG_INFO("upscaling from (%i x %i) to (%i x %i)",
              input_image.width, input_image.height, output_width, output_height);
 
@@ -77,81 +78,83 @@ sd_image_t UpscalerGGML::upscale(sd_image_t input_image, uint32_t upscale_factor
     if (upscaled.empty()) {
         return upscaled_image;
     }
-    sd_image_t upscaled_data = tensor_to_sd_image(upscaled);
-    int64_t t3               = ggml_time_ms();
+    sd::Image upscaled_data = tensor_to_sd_image(upscaled);
+    int64_t t3              = ggml_time_ms();
     LOG_INFO("input_image_tensor upscaled, taking %.2fs", (t3 - t0) / 1000.0f);
     upscaled_image = upscaled_data;
     return upscaled_image;
 }
 
-struct upscaler_ctx_t {
-    UpscalerGGML* upscaler = nullptr;
+struct sd_upscaler {
+    std::unique_ptr<UpscalerGGML> upscaler;
 };
 
-upscaler_ctx_t* new_upscaler_ctx(const char* esrgan_path_c_str,
-                                 bool direct,
-                                 int n_threads,
-                                 int tile_size,
-                                 const char* backend,
-                                 const char* params_backend) {
-    upscaler_ctx_t* upscaler_ctx = (upscaler_ctx_t*)malloc(sizeof(upscaler_ctx_t));
-    if (upscaler_ctx == nullptr) {
-        return nullptr;
-    }
-    std::string esrgan_path(esrgan_path_c_str);
-
-    upscaler_ctx->upscaler = new UpscalerGGML(n_threads, direct, tile_size, SAFE_STR(backend), SAFE_STR(params_backend));
-    if (upscaler_ctx->upscaler == nullptr) {
-        return nullptr;
-    }
-
-    if (!upscaler_ctx->upscaler->load_from_file(esrgan_path, n_threads)) {
-        delete upscaler_ctx->upscaler;
-        upscaler_ctx->upscaler = nullptr;
-        free(upscaler_ctx);
-        return nullptr;
-    }
-    return upscaler_ctx;
+sd_status_t sd_upscaler_create(const sd_upscaler_opt_t* opt, sd_upscaler_t** out) {
+    if (out)
+        *out = nullptr;
+    return sd::api::call([&] {
+        if (!out)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "out is required");
+        sd::OptConfig config;
+        auto status = sd::api::resolve(opt, sd::api::Upscaler, config);
+        if (status != SD_STATUS_OK)
+            return status;
+        auto result      = std::make_unique<sd_upscaler_t>();
+        const auto& ctx  = config.context;
+        result->upscaler = std::make_unique<UpscalerGGML>(ctx.n_threads, config.post.conv_direct, config.post.tile_size,
+                                                          SAFE_STR(ctx.backend), SAFE_STR(ctx.params_backend));
+        if (!result->upscaler->load_from_file(ctx.model_path, ctx.n_threads))
+            return sd::api::error(SD_STATUS_LOAD_FAILED, "model_path", "could not load upscaler");
+        *out = result.release();
+        return SD_STATUS_OK;
+    },
+                         SD_STATUS_LOAD_FAILED);
 }
 
-bool upscale(upscaler_ctx_t* upscaler_ctx,
-             sd_image_t input_image,
-             uint32_t upscale_factor,
-             sd_image_generation_result_t** result_out) try {
-    if (result_out)
-        *result_out = nullptr;
-    if (!result_out)
-        return false;
-    if (upscaler_ctx == nullptr || upscaler_ctx->upscaler == nullptr) {
-        return false;
-    }
-
-    sd_image_t* result_images = (sd_image_t*)calloc(1, sizeof(sd_image_t));
-    if (result_images == nullptr) {
-        return false;
-    }
-
-    auto release_images = [](sd_image_t* images) { free_sd_images(images, 1); };
-    std::unique_ptr<sd_image_t, decltype(release_images)> image_owner(result_images, release_images);
-    const std::vector<nlohmann::json> infos{sd::upscale_generation_info(upscale_factor)};
-    result_images[0] = upscaler_ctx->upscaler->upscale(input_image, upscale_factor);
-    if (!result_images[0].data)
-        return false;
-
-    return sd::make_image_generation_result(image_owner.release(), 1, infos, result_out);
-} catch (const std::exception& e) {
-    LOG_ERROR("upscale failed: %s", e.what());
-    return false;
+void sd_upscaler_free(sd_upscaler_t* upscaler) {
+    delete upscaler;
 }
 
-int get_upscale_factor(upscaler_ctx_t* upscaler_ctx) {
-    if (upscaler_ctx == nullptr || upscaler_ctx->upscaler == nullptr) {
-        return 1;
-    }
-    return upscaler_ctx->upscaler->get_scale();
+sd_status_t sd_upscale(sd_upscaler_t* upscaler, const sd_upscale_opt_t* opt, sd_result_t** out) {
+    if (out)
+        *out = nullptr;
+    return sd::api::call([&] {
+        if (!out)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "out is required");
+        sd::OptConfig config;
+        auto status = sd::api::resolve(opt, sd::api::Upscale, config);
+        if (status != SD_STATUS_OK)
+            return status;
+        if (!upscaler || !upscaler->upscaler)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "upscaler is required");
+        const auto& image = config.post.image;
+        const auto scale  = upscaler->upscaler->get_scale();
+        if (scale <= 0 || image.width > uint32_t(INT32_MAX / scale) || image.height > uint32_t(INT32_MAX / scale))
+            return sd::api::error(SD_STATUS_OUT_OF_RANGE, "image", "upscaled dimensions exceed the supported range");
+        auto release = [](sd::Image* images) { sd::free_images(images, 1); };
+        std::unique_ptr<sd::Image, decltype(release)> images(static_cast<sd::Image*>(calloc(1, sizeof(sd::Image))), release);
+        if (!images)
+            return sd::api::error(SD_STATUS_OUT_OF_MEMORY, nullptr, "could not allocate result");
+        images.get()[0] = upscaler->upscaler->upscale(image);
+        if (!images->data)
+            return sd::api::error(SD_STATUS_GENERATION_FAILED, nullptr, "upscale failed");
+        const std::vector<nlohmann::json> infos{sd::upscale_generation_info(scale)};
+        return sd::make_image_result(images.release(), 1, infos, out) ? SD_STATUS_OK
+                                                                      : sd::api::error(SD_STATUS_OUT_OF_MEMORY, nullptr, "could not allocate result metadata");
+    },
+                         SD_STATUS_GENERATION_FAILED);
 }
 
-int get_upscaler_model_scale(const char* model_path) {
+int sd_upscaler_get_scale(const sd_upscaler_t* upscaler) {
+    sd::api::clear_error();
+    if (!upscaler || !upscaler->upscaler) {
+        sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "upscaler is required");
+        return 0;
+    }
+    return upscaler->upscaler->get_scale();
+}
+
+int sd_upscaler_probe_scale(const char* model_path) {
     if (model_path == nullptr || model_path[0] == '\0') {
         return 0;
     }
@@ -177,14 +180,4 @@ int get_upscaler_model_scale(const char* model_path) {
     } catch (const std::exception&) {
         return 0;
     }
-}
-
-void free_upscaler_ctx(upscaler_ctx_t* upscaler_ctx) {
-    if (!upscaler_ctx)
-        return;
-    if (upscaler_ctx->upscaler != nullptr) {
-        delete upscaler_ctx->upscaler;
-        upscaler_ctx->upscaler = nullptr;
-    }
-    free(upscaler_ctx);
 }

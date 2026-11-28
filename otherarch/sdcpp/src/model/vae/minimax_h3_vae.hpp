@@ -1,6 +1,8 @@
 #ifndef __SD_MODEL_VAE_MINIMAX_H3_VAE_HPP__
 #define __SD_MODEL_VAE_MINIMAX_H3_VAE_HPP__
 
+#include "config.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -719,11 +721,11 @@ namespace MiniMaxH3VAE {
                                    tensor.shape()[3]});
         }
 
-        sd_tiling_params_t resolve_tiling_params(sd_tiling_params_t params) const override {
+        sd::TilingConfig resolve_tiling_params(sd::TilingConfig params) const override {
             return config.sol ? params : resolve_original_tiling_params(params);
         }
 
-        static sd_tiling_params_t resolve_original_tiling_params(sd_tiling_params_t params) {
+        static sd::TilingConfig resolve_original_tiling_params(sd::TilingConfig params) {
             if (!params.enabled) {
                 params.target_overlap = 0.25f;
             }
@@ -774,7 +776,7 @@ namespace MiniMaxH3VAE {
 
         sd::Tensor<float> encode(int n_threads,
                                  const sd::Tensor<float>& x,
-                                 sd_tiling_params_t tiling_params,
+                                 sd::TilingConfig tiling_params,
                                  bool circular_x = false,
                                  bool circular_y = false) override {
             auto input  = ensure_video_shape(x);
@@ -860,7 +862,7 @@ namespace MiniMaxH3VAE {
 
         sd::Tensor<float> decode(int n_threads,
                                  const sd::Tensor<float>& x,
-                                 sd_tiling_params_t tiling_params,
+                                 sd::TilingConfig tiling_params,
                                  bool decode_video = false,
                                  bool circular_x   = false,
                                  bool circular_y   = false,

@@ -1,3 +1,4 @@
+#include "api/result.h"
 #include "pipeline/video_upscale.h"
 
 #include <climits>
@@ -54,7 +55,7 @@ namespace sd {
                     vae_->runner_end();
             }
 
-            bool upscale(const sd_video_upscale_params_t& params, sd_video_generation_result_t* result) override {
+            bool upscale(const sd::VideoUpscaleConfig& params, sd::VideoGenerationResult* result) override {
                 const int chunk = params.temporal_chunk_size;
                 if (chunk < 1 || chunk > INT_MAX - 3 || (chunk - 1) % 4) {
                     LOG_ERROR("SeedVR2 temporal chunk size must be 1 or 4n+1 input frames");

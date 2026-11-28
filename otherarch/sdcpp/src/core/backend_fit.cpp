@@ -1,4 +1,5 @@
 #include "backend_fit.h"
+#include "config.h"
 
 #include <algorithm>
 #include <cctype>
@@ -489,7 +490,7 @@ namespace sd::backend_fit {
         return true;
     }
 
-    bool prepare_vae_decode_retry_tiling(sd_tiling_params_t& tiling_params,
+    bool prepare_vae_decode_retry_tiling(sd::TilingConfig& tiling_params,
                                          bool prefer_temporal_tiling,
                                          ggml_status status,
                                          int latent_tile_size_w,

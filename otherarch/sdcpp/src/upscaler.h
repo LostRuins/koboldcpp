@@ -1,6 +1,8 @@
 #ifndef __SD_UPSCALER_H__
 #define __SD_UPSCALER_H__
 
+#include "core/media.h"
+
 #include "core/ggml_extend_backend.h"
 #include "core/tensor.hpp"
 #include "model_manager.h"
@@ -35,7 +37,7 @@ struct UpscalerGGML {
     void set_max_graph_vram_bytes(size_t max_vram_bytes);
     int get_scale();
     sd::Tensor<float> upscale_tensor(const sd::Tensor<float>& input_tensor);
-    sd_image_t upscale(sd_image_t input_image, uint32_t upscale_factor);
+    sd::Image upscale(sd::Image input_image);
 };
 
 #endif  // __SD_UPSCALER_H__

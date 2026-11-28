@@ -1,5 +1,7 @@
 #include "request.h"
 #include "conditioning/conditioner.hpp"
+#include "config.h"
+#include "core/option_types.h"
 
 #include <algorithm>
 #include <cmath>
@@ -93,9 +95,9 @@ namespace sd::pipeline {
         return scheduler;
     }
 
-    float resolve_eta(StableDiffusionGGML* sd,
-                      float eta,
-                      enum sample_method_t sample_method) {
+    static float resolve_eta(StableDiffusionGGML* sd,
+                             float eta,
+                             enum sample_method_t sample_method) {
         if (eta == INFINITY) {
             if (sd->version == VERSION_HIDREAM_O1) {
                 return 8.f;
@@ -120,7 +122,7 @@ namespace sd::pipeline {
         return eta;
     }
 
-    GenerationRequest::GenerationRequest(StableDiffusionGGML* sd, const sd_img_gen_params_t* sd_img_gen_params) {
+    GenerationRequest::GenerationRequest(StableDiffusionGGML* sd, const sd::ImageConfig* sd_img_gen_params) {
         prompt                      = SAFE_STR(sd_img_gen_params->prompt);
         negative_prompt             = SAFE_STR(sd_img_gen_params->negative_prompt);
         width                       = sd_img_gen_params->width;
@@ -136,7 +138,6 @@ namespace sd::pipeline {
         strength                    = sd_img_gen_params->strength;
         control_strength            = sd_img_gen_params->control_strength;
         control_type                = sd_img_gen_params->control_type;
-        eta                         = sd_img_gen_params->sample_params.eta;
         has_ref_images              = sd_img_gen_params->ref_images_count > 0;
         guidance                    = sd_img_gen_params->sample_params.guidance;
         pm_params                   = sd_img_gen_params->pm_params;
@@ -156,7 +157,7 @@ namespace sd::pipeline {
             models.erase("pulid_weights");
     }
 
-    GenerationRequest::GenerationRequest(StableDiffusionGGML* sd, const sd_vid_gen_params_t* sd_vid_gen_params) {
+    GenerationRequest::GenerationRequest(StableDiffusionGGML* sd, const sd::VideoConfig* sd_vid_gen_params) {
         prompt           = SAFE_STR(sd_vid_gen_params->prompt);
         negative_prompt  = SAFE_STR(sd_vid_gen_params->negative_prompt);
         width            = sd_vid_gen_params->width;
@@ -293,7 +294,7 @@ namespace sd::pipeline {
     }
 
     void GenerationRequest::resolve_guidance(StableDiffusionGGML* sd,
-                                             sd_guidance_params_t* guidance,
+                                             sd::GuidanceConfig* guidance,
                                              bool* use_uncond,
                                              bool* use_img_uncond,
                                              bool has_ref_images,
@@ -388,16 +389,21 @@ namespace sd::pipeline {
         sample_params.sample_method    = resolve_sample_method(sd, sample_params.sample_method);
         sample_params.scheduler        = resolve_scheduler(sd, sample_params.scheduler, sample_params.sample_method);
         sample_params.eta              = resolve_eta(sd, sample_params.eta, sample_params.sample_method);
+        sd->set_flow_shift(sample_params.flow_shift);
+        if (sd->is_flow_denoiser())
+            sample_params.flow_shift = sd->active_flow_shift;
         if (frames > 0) {
-            high_noise_sample_params.guidance      = high_noise_guidance;
-            high_noise_sample_params.sample_method = resolve_sample_method(sd, high_noise_sample_params.sample_method);
-            high_noise_sample_params.scheduler     = resolve_scheduler(sd, high_noise_sample_params.scheduler, high_noise_sample_params.sample_method);
-            high_noise_sample_params.eta           = resolve_eta(sd, high_noise_sample_params.eta, high_noise_sample_params.sample_method);
+            high_noise_sample_params.guidance         = high_noise_guidance;
+            high_noise_sample_params.sample_method    = resolve_sample_method(sd, high_noise_sample_params.sample_method);
+            high_noise_sample_params.scheduler        = sample_params.scheduler;
+            high_noise_sample_params.flow_shift       = sample_params.flow_shift;
+            high_noise_sample_params.shifted_timestep = sample_params.shifted_timestep;
+            high_noise_sample_params.eta              = resolve_eta(sd, high_noise_sample_params.eta, high_noise_sample_params.sample_method);
         }
     }
 
     SamplePlan::SamplePlan(StableDiffusionGGML* sd,
-                           const sd_img_gen_params_t* sd_img_gen_params,
+                           const sd::ImageConfig* sd_img_gen_params,
                            const GenerationRequest& request) {
         sample_method     = request.sample_params.sample_method;
         extra_sample_args = request.sample_params.extra_sample_args;
@@ -407,7 +413,7 @@ namespace sd::pipeline {
     }
 
     SamplePlan::SamplePlan(StableDiffusionGGML* sd,
-                           const sd_vid_gen_params_t* sd_vid_gen_params,
+                           const sd::VideoConfig* sd_vid_gen_params,
                            const GenerationRequest& request) {
         sample_method     = request.sample_params.sample_method;
         extra_sample_args = request.sample_params.extra_sample_args;
@@ -425,9 +431,8 @@ namespace sd::pipeline {
 
     void SamplePlan::resolve(StableDiffusionGGML* sd,
                              const GenerationRequest* request,
-                             const sd_sample_params_t* sample_params) {
-        sample_method = resolve_sample_method(sd, sample_method);
-
+                             const sd::SampleConfig* sample_params) {
+        scheduler   = sample_params->scheduler;
         total_steps = sample_steps + std::max(0, high_noise_sample_steps);
 
         if (sample_params->custom_sigmas_count > 0) {
@@ -446,9 +451,6 @@ namespace sd::pipeline {
                 }
             }
         } else {
-            scheduler          = resolve_scheduler(sd,
-                                                   sample_params->scheduler,
-                                                   sample_method);
             int sample_seq_len = sd->get_image_seq_len(request->height, request->width);
             if (sd_version_is_ltxav(sd->version) && request->frames > 0) {
                 int latent_frames = ((request->frames - 1) / 8) + 1;
@@ -463,8 +465,6 @@ namespace sd::pipeline {
                                               sample_params->extra_sample_args);
         }
 
-        eta = resolve_eta(sd, eta, sample_method);
-
         if (high_noise_sample_steps < 0) {
             for (size_t i = 0; i < sigmas.size(); ++i) {
                 if (sigmas[i] < moe_boundary) {
@@ -477,17 +477,13 @@ namespace sd::pipeline {
 
         LOG_INFO("sampling using %s method", sampling_methods_str[sample_method]);
         if (high_noise_sample_steps > 0) {
-            high_noise_sample_method = resolve_sample_method(sd,
-                                                             high_noise_sample_method);
-            high_noise_eta           = resolve_eta(sd, high_noise_eta, high_noise_sample_method);
             LOG_INFO("sampling(high noise) using %s method", sampling_methods_str[high_noise_sample_method]);
         }
     }
 
     std::vector<float> make_hires_sigma_schedule(StableDiffusionGGML* sd,
-                                                 const sd_hires_params_t& hires,
-                                                 const sd_sample_params_t& sample_params,
-                                                 sample_method_t sample_method,
+                                                 const sd::HiresConfig& hires,
+                                                 const sd::SampleConfig& sample_params,
                                                  int default_steps,
                                                  int sample_seq_len,
                                                  int* scheduler_steps_out) {
@@ -512,9 +508,7 @@ namespace sd::pipeline {
         int scheduler_steps = static_cast<int>(effective_steps / hires.denoising_strength);
         scheduler_steps     = std::max(1, scheduler_steps);
 
-        scheduler_t scheduler     = resolve_scheduler(sd,
-                                                      sample_params.scheduler,
-                                                      sample_method);
+        scheduler_t scheduler     = sample_params.scheduler;
         std::vector<float> sigmas = sd->denoiser->get_sigmas(scheduler_steps,
                                                              sample_seq_len,
                                                              scheduler,

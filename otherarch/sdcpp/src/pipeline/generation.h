@@ -1,11 +1,21 @@
 #ifndef __SD_PIPELINE_GENERATION_H__
 #define __SD_PIPELINE_GENERATION_H__
 
+#include "core/media.h"
+
 #include "conditioning/conditioner.hpp"
+#include "config.h"
 #include "json.hpp"
 #include "stable-diffusion.h"
 
 class StableDiffusionGGML;
+
+namespace sd {
+    struct ImageGenerationResult;
+    struct VideoGenerationResult;
+    sd_status_t generate_image(sd_ctx_t* ctx, const ImageConfig& config, ImageGenerationResult** result_out, const sd_opt_t* source = nullptr) noexcept;
+    sd_status_t generate_video(sd_ctx_t* ctx, const VideoConfig& config, VideoGenerationResult** result_out, const sd_opt_t* source = nullptr) noexcept;
+}
 
 static inline bool sd_version_supports_animatediff(SDVersion version) {
     return version == VERSION_SD1 || version == VERSION_SD1_INPAINT || version == VERSION_SD1_PIX2PIX;
@@ -53,16 +63,16 @@ namespace sd::pipeline {
 
     // Callers hold ExecutionScope; AnimateDiff reuses the image path within the same scope.
     bool generate_image(StableDiffusionGGML* sd,
-                        const sd_img_gen_params_t* sd_img_gen_params,
-                        sd_image_t** images_out,
+                        const sd::ImageConfig* sd_img_gen_params,
+                        sd::Image** images_out,
                         int* num_images_out,
                         std::vector<nlohmann::json>* infos_out = nullptr);
 
     bool generate_video(StableDiffusionGGML* sd,
-                        const sd_vid_gen_params_t* sd_vid_gen_params,
-                        sd_image_t** frames_out,
+                        const sd::VideoConfig* sd_vid_gen_params,
+                        sd::Image** frames_out,
                         int* num_frames_out,
-                        sd_audio_t** audio_out,
+                        sd::Audio** audio_out,
                         int* fps_out,
                         nlohmann::json* info_out = nullptr);
 

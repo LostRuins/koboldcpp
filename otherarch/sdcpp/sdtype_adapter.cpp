@@ -19,6 +19,11 @@
 #include <filesystem>
 #include <set>
 #include <tuple>
+#include <type_traits>
+#include <limits>
+#include <cmath>
+#include <cstdlib>
+#include <optional>
 
 #include "otherarch/utils.h"
 #include "otherarch/webp_image.h"
@@ -26,10 +31,12 @@
 #include "model_file_probe.h"
 
 #include "stable-diffusion.h"
+#include "kcpp_media.h"
 #include "src/kcpp_sd_extensions.h"
 #include "src/conditioning/prompt_input.h"
 #include "sdcpp_gguf_tokenizer.h"
 #include "src/core/util.h"
+#include "src/core/option_types.h"
 #include "src/model.h"
 #include "src/model_definition.h"
 #include "src/model_loader.h"
@@ -56,26 +63,25 @@ using namespace kcpp_sd;
 // Encodes an array of RGB, RGBA or grayscale frames into an animated WebP.
 // The returned buffer uses malloc so callers can continue to release it with
 // free(), matching the old GIF helper's ownership contract.
-static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
-                                                    int num_images,
-                                                    int fps,
-                                                    uint8_t** out_data,
-                                                    size_t* out_len) {
+static int create_animated_webp_buf(const KcppImages& images,
+                                     int fps,
+                                     uint8_t** out_data,
+                                     size_t* out_len) {
     if (out_data == nullptr || out_len == nullptr) {
         return -1;
     }
     *out_data = nullptr;
     *out_len  = 0;
 
-    if (images == nullptr || num_images <= 0 || fps <= 0 ||
-        images[0].data == nullptr || images[0].width == 0 || images[0].height == 0 ||
-        images[0].width > WEBP_MAX_DIMENSION || images[0].height > WEBP_MAX_DIMENSION) {
+    if (images.empty() || fps <= 0 ||
+        !images.at(0).valid() ||
+        images.at(0).w > WEBP_MAX_DIMENSION || images.at(0).h > WEBP_MAX_DIMENSION) {
         fprintf(stderr, "Invalid animated WebP input.\n");
         return -1;
     }
 
-    const int width  = static_cast<int>(images[0].width);
-    const int height = static_cast<int>(images[0].height);
+    const int width  = static_cast<int>(images.at(0).w);
+    const int height = static_cast<int>(images.at(0).h);
 
     WebPAnimEncoderOptions anim_options;
     WebPConfig config;
@@ -103,11 +109,11 @@ static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
     }
 
     int last_timestamp_ms = -1;
-    for (int i = 0; i < num_images; ++i) {
-        const sd_image_t& image = images[i];
-        if (image.data == nullptr || static_cast<int>(image.width) != width ||
-            static_cast<int>(image.height) != height ||
-            (image.channel != 1 && image.channel != 3 && image.channel != 4)) {
+    for (int i = 0; i < (int)images.size(); ++i) {
+        const KcppImage& image = images.at(i);
+        if (!image.valid() || static_cast<int>(image.w) != width ||
+            static_cast<int>(image.h) != height ||
+            (image.c != 1 && image.c != 3 && image.c != 4)) {
             fprintf(stderr, "Animated WebP frame %d has invalid dimensions or channels.\n", i);
             WebPAnimEncoderDelete(encoder);
             return -1;
@@ -125,19 +131,19 @@ static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
 
         int imported = 0;
         std::vector<uint8_t> rgb_buffer;
-        if (image.channel == 1) {
+        if (image.c == 1) {
             const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
             rgb_buffer.resize(pixel_count * 3);
             for (size_t p = 0; p < pixel_count; ++p) {
-                rgb_buffer[p * 3 + 0] = image.data[p];
-                rgb_buffer[p * 3 + 1] = image.data[p];
-                rgb_buffer[p * 3 + 2] = image.data[p];
+                rgb_buffer[p * 3 + 0] = image.px->data()[p];
+                rgb_buffer[p * 3 + 1] = image.px->data()[p];
+                rgb_buffer[p * 3 + 2] = image.px->data()[p];
             }
             imported = WebPPictureImportRGB(&picture, rgb_buffer.data(), width * 3);
-        } else if (image.channel == 4) {
-            imported = WebPPictureImportRGBA(&picture, image.data, width * 4);
+        } else if (image.c == 4) {
+            imported = WebPPictureImportRGBA(&picture, image.px->data(), width * 4);
         } else {
-            imported = WebPPictureImportRGB(&picture, image.data, width * 3);
+            imported = WebPPictureImportRGB(&picture, image.px->data(), width * 3);
         }
 
         if (!imported) {
@@ -165,7 +171,7 @@ static int create_animated_webp_buf_from_sd_images(sd_image_t* images,
     }
 
     int final_timestamp_ms = static_cast<int>(
-        (static_cast<int64_t>(num_images) * 1000 + fps / 2) / fps);
+        (static_cast<int64_t>(images.size()) * 1000 + fps / 2) / fps);
     if (final_timestamp_ms <= last_timestamp_ms) {
         final_timestamp_ms = last_timestamp_ms + 1;
     }
@@ -256,20 +262,286 @@ struct LoraMap {
         return lora_specs;
     }
 
-    std::string get_lora_meta() {
-        std::stringstream lora_meta;
-        lora_meta << std::setprecision(6);
-        for (const auto & lora: items) {
-            float multiplier = check_small_mult(lora.second);
-            if (multiplier != 0.f) {
-                std::string lora_name = std::filesystem::path(lora.first).stem().string();
-                lora_meta << "<lora:" << lora_name << ":" << multiplier << ">";
-            }
-        }
-        return lora_meta.str();
-    }
-
 };
+
+// tracks type errors and unknown keys in the json APIs
+struct SdErrors {
+    std::vector<std::string> problems;
+    std::set<std::string> accepted_keys;
+
+    bool empty() const { return problems.empty(); }
+
+    void add(const std::string& problem) { problems.push_back(problem); }
+
+    std::string message() const {
+        std::string msg;
+        for (size_t i = 0; i < problems.size(); i++) {
+            if (i != 0) msg += "; ";
+            msg += problems[i];
+        }
+        return msg;
+    }
+};
+
+// extract a JSON integer into a signed or unsigned target with a range check
+template <typename T>
+static bool sdjson_int_value(const nlohmann::json& value, T& out)
+{
+    // nlohmann::json stores integers that fit in int64 as int64_t and larger
+    // values as double: a float is a type mismatch for signed targets, and for
+    // unsigned targets only an exactly integral value in range is accepted.
+    static_assert(std::is_integral_v<T>, "sdjson_int_value: integral type required");
+    if (value.is_number_integer()) {
+        const uint64_t u = value.is_number_unsigned() ? value.get<uint64_t>()
+                                                       : static_cast<uint64_t>(value.get<int64_t>());
+        if constexpr (std::is_signed_v<T>) {
+            // values above INT64_MAX cast to a negative int64 and are
+            // rejected by the range check
+            if (static_cast<int64_t>(u) < std::numeric_limits<T>::min()
+                || static_cast<int64_t>(u) > std::numeric_limits<T>::max()) {
+                return false;
+            }
+            out = static_cast<T>(static_cast<int64_t>(u));
+        } else {
+            if (u > static_cast<uint64_t>(std::numeric_limits<T>::max())) return false;
+            out = static_cast<T>(u);
+        }
+        return true;
+    }
+    if constexpr (std::is_unsigned_v<T>) {
+        if (value.is_number_float()) {
+            const double d = value.get<double>();
+            if (d < 0.0 || d >= 18446744073709551616.0) return false; // 2^64
+            if (d != std::floor(d)) return false;
+            if (d > static_cast<double>(std::numeric_limits<T>::max())) return false;
+            out = static_cast<T>(static_cast<uint64_t>(d));
+            return true;
+        }
+    }
+    return false;
+}
+
+// strict typed getter for one payload key:
+//  - absent key or null value: `out` keeps its default, returns false
+//  - present with the exact JSON type: copied into `out`, the key is recorded
+//    as accepted, returns true
+//  - present with a different type, or an integer out of range: a problem is
+//    recorded and false is returned
+//  - a present empty string decodes as absent
+template <typename T>
+static bool sdjson_get(T& out, const char* key, const nlohmann::json& payload, SdErrors& errors)
+{
+    if (key == nullptr) return false;
+    // copy the key to a non-dependent type so payload.find() resolves to a
+    // concrete overload (GCC rejects member access through the dependent
+    // iterator of the const char* overload)
+    const std::string k(key);
+    const auto it = payload.find(k);
+    if (it == payload.end()) {
+        return false;
+    }
+    // a present key is recorded as accepted even when its value decodes as
+    // absent (null or empty), so the unknown-key warning stays a drift
+    // detector for keys the interface does not decode
+    errors.accepted_keys.insert(k);
+    if (it->is_null()) {
+        return false;
+    }
+    const nlohmann::json& v = *it;
+    if constexpr (std::is_same_v<T, bool>) {
+        if (!v.is_boolean()) {
+            errors.add("key '" + k + "': expected a boolean");
+            return false;
+        }
+        out = v.get<bool>();
+    } else if constexpr (std::is_integral_v<T>) {
+        if (!sdjson_int_value(v, out)) {
+            errors.add("key '" + k + "': expected an integer in the range of the target type");
+            return false;
+        }
+    } else if constexpr (std::is_floating_point_v<T>) {
+        if (!v.is_number()) {
+            errors.add("key '" + k + "': expected a number");
+            return false;
+        }
+        out = static_cast<T>(v.get<double>());
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        if (!v.is_string()) {
+            errors.add("key '" + k + "': expected a string");
+            return false;
+        }
+        const std::string s = v.get<std::string>();
+        if (s.empty()) {
+            return false; // empty string decodes as absent
+        }
+        out = std::move(s);
+    } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+        if (!v.is_array()) {
+            errors.add("key '" + k + "': expected an array of strings");
+            return false;
+        }
+        for (size_t i = 0; i < v.size(); ++i) {
+            const auto& entry = v[i];
+            if (!entry.is_string()) {
+                errors.add("key '" + k + "[" + std::to_string(i) + "]: expected a string");
+                continue;
+            }
+            out.push_back(entry.get<std::string>());
+        }
+    } else if constexpr (std::is_same_v<T, std::vector<float>>) {
+        if (!v.is_array()) {
+            errors.add("key '" + k + "': expected an array of numbers");
+            return false;
+        }
+        for (size_t i = 0; i < v.size(); ++i) {
+            const auto& entry = v[i];
+            if (!entry.is_number()) {
+                errors.add("key '" + k + "[" + std::to_string(i) + "]: expected a number");
+                continue;
+            }
+            out.push_back(entry.get<float>());
+        }
+    } else {
+        static_assert(sizeof(T) == 0, "sdjson_get: unsupported type");
+    }
+    return true;
+}
+
+// decode a "loras" payload key: an array of {path, multiplier, is_high_noise?}
+// objects, ignoring a null or empty key
+static void sdjson_get_loras(const char* key, const nlohmann::json& payload,
+                             SdErrors& errors, LoraMap & lora_map)
+{
+    const std::string k(key);
+    const auto it = payload.find(k);
+    if (it == payload.end()) return;
+    errors.accepted_keys.insert(k);
+    if (it->is_null()) return; // null decodes as absent
+    if (!it->is_array()) {
+        errors.add("key '" + k + "': expected an array of {path, multiplier} objects");
+        return;
+    }
+    const auto& arr = *it;
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& entry = arr[i];
+        if (!entry.is_object()
+            || !entry.contains("path") || !entry["path"].is_string()
+            || entry["path"].get<std::string>().empty()
+            || !entry.contains("multiplier") || !entry["multiplier"].is_number()
+            || (entry.contains("is_high_noise") && !entry["is_high_noise"].is_boolean())) {
+            errors.add("key '" + k + "[" + std::to_string(i) + "]: expected an object with a non-empty string 'path', a numeric 'multiplier' and an optional boolean 'is_high_noise'");
+            continue;
+        }
+        lora_map.add_lora(entry["path"].get<std::string>(), entry["multiplier"].get<float>());
+    }
+}
+
+// parse a frontier payload without exceptions; a failed parse or a
+// non-object top level is recorded as a problem and yields an invalid json
+static nlohmann::json sdjson_parse_payload(const char* data, SdErrors& errors)
+{
+    if (data == nullptr) {
+        errors.add("payload is null");
+        return nlohmann::json();
+    }
+    nlohmann::json payload;
+    try {
+        payload = nlohmann::json::parse(data);
+    } catch (const nlohmann::json::exception& e) {
+        errors.add(std::string("invalid JSON: ") + e.what());
+        return nlohmann::json();
+    }
+    if (!payload.is_object()) {
+        errors.add("payload is not a JSON object");
+        return nlohmann::json();
+    }
+    return payload;
+}
+
+// a key the interface does not decode is a debug-level warning, not an error
+// (both ends ship together; the warning is the drift detector). The "sd"
+// namespace is reserved (schema-valid, decoded in a later phase) and never
+// warns; the "kcpp" scope is recursed.
+static void sdjson_warn_unknown_keys(const nlohmann::json& payload, SdErrors& errors)
+{
+    if (!payload.is_object()) return;
+    for (auto it = payload.cbegin(); it != payload.cend(); ++it) {
+        const std::string& key = it.key();
+        if (key == "sd") continue;
+        if (key == "kcpp") {
+            if (it->is_object()) sdjson_warn_unknown_keys(*it, errors);
+            continue;
+        }
+        if (!errors.accepted_keys.count(key)) {
+            printf("KCPP SD: unknown key '%s' in the params payload\n", key.c_str());
+        }
+    }
+}
+
+// strict decode of one payload image key: a base64 string into a KcppImage
+// (absent/null key or empty string = unset); a type mismatch or a failed
+// image decode is an error
+static bool sdjson_get_image(KcppImage& out, const char* key, const nlohmann::json& payload, SdErrors& errors)
+{
+    const std::string k(key);
+    const auto it = payload.find(k);
+    if (it == payload.end()) {
+        return false;
+    }
+    errors.accepted_keys.insert(k);
+    if (it->is_null()) {
+        return false;
+    }
+    if (!it->is_string()) {
+        errors.add("key '" + k + "': expected a base64 image string");
+        return false;
+    }
+    const std::string s = it->get<std::string>();
+    if (s.empty()) {
+        return false; // empty string decodes as absent
+    }
+    out = KcppImage::from_b64(s);
+    if (!out.valid()) {
+        errors.add("key '" + k + "': failed to decode the image");
+    }
+    return out.valid();
+}
+
+// strict decode of one payload image-array key: a list of base64 strings into
+// a KcppImages (absent/null key or empty array = unset); a malformed element
+// is an error (positions must stay intact for <image:N> tags)
+static bool sdjson_get_images(KcppImages& out, const char* key, const nlohmann::json& payload, SdErrors& errors)
+{
+    const std::string k(key);
+    const auto it = payload.find(k);
+    if (it == payload.end()) {
+        return false;
+    }
+    errors.accepted_keys.insert(k);
+    if (it->is_null()) {
+        return false;
+    }
+    if (!it->is_array()) {
+        errors.add("key '" + k + "': expected an array of base64 image strings");
+        return false;
+    }
+    const auto& arr = *it;
+    out.clear();
+    for (size_t i = 0; i < arr.size(); ++i) {
+        const auto& e = arr[i];
+        if (!e.is_string() || e.get<std::string>().empty()) {
+            errors.add("key '" + k + "[" + std::to_string(i) + "]: expected a non-empty base64 image string");
+            continue;
+        }
+        KcppImage img = KcppImage::from_b64(e.get<std::string>());
+        if (!img.valid()) {
+            errors.add("key '" + k + "[" + std::to_string(i) + "]: failed to decode the image");
+            continue;
+        }
+        out.push_back(img);
+    }
+    return true;
+}
 
 
 // local intermediate representation of the model loading parameters.
@@ -299,7 +571,7 @@ struct SDLoadParams {
     std::string flash_attn_mode;
     std::string max_vram;
     std::string tensor_type_rules;
-    int n_threads = 0;    // if -1 use physical cores
+    int n_threads = -1;
     sd_type_t wtype = SD_TYPE_COUNT;
     bool enable_mmap = false;
     bool auto_fit = false;
@@ -331,7 +603,7 @@ struct model_info: public sd_model_info {
 };
 
 struct KcppLoadParams {
-    // tracks loading state that does not have a direct sd_ctx_params_t mapping
+    // tracks loading state that does not have a direct sd_opt_t mapping
 
     model_info info {};
 
@@ -339,6 +611,7 @@ struct KcppLoadParams {
     LoraMap lora_map;
     bool lora_dynamic = false;
     bool lora_cache = false;
+    int kcpp_lora_apply_mode = 0;
 
     int quant = 0;              // decoded into wtype
     bool flash_attention = false;
@@ -353,7 +626,7 @@ struct KcppLoadParams {
 
 // local intermediate representation of a generation request: decoded from
 // sd_generation_inputs at the top of sdtype_generate, processed in place, then
-// settled into sd_img_gen_params_t / sd_vid_gen_params_t before the call.
+// settled into the sd_img_gen_opt_t / sd_vid_gen_opt_t option set before the call.
 struct SDGenParams {
     // prompts
     std::string prompt;
@@ -391,30 +664,44 @@ struct SDGenParams {
     // loras[i].path points into lora_map, which must outlive loras
     LoraMap lora_map;
     std::vector<sd_lora_t> loras;
-    std::string lora_meta;
 
     bool upscale = false;
+    bool remove_limits = false;
 
     // state tracking
     bool force_image_edit = false;
     int req_width  = 512;
     int req_height = 512;
 
-    struct {
-        std::string init_image;
-        std::string mask;
-        bool flip_mask = false;
-        std::vector<std::string> extra_images;
-    } img;
+    // request kind and routing, settled by kcpp_resolve_generation_parameters
+    // before the upstream sd_*_gen_params structs are built
+    bool is_vidgen      = false; // generated through the video path
+    bool is_img2img     = false; // an input image is present
+    bool is_passthrough = false; // one step at strength 0: return the input as-is
 
-    struct {
-        std::string start_frame;
-        std::string end_frame;
-        std::vector<std::string> ref_audios;
-        int req_frames   = 0;
-        int output_type  = 0;
-        int fps          = 0;
-    } vid;
+    // VAE tiling decision (image area vs. the load-time threshold)
+    bool dotile       = false;
+    int vae_tile_size = -1;
+
+    // media: images decode at natural size (3 channels) and are fitted in
+    // place during processing; a null image means "not provided"
+    KcppImage img_init_image;
+    KcppImage img_mask;
+    bool img_flip_mask = false;
+    KcppImages img_extra_images;
+
+    // video fields
+    KcppImage vid_start_frame;
+    KcppImage vid_end_frame;
+    std::vector<std::string> vid_ref_audios;
+    int vid_req_frames  = 0;
+    int vid_output_type = 0;
+    int vid_fps         = 0;
+
+    // media lists derived during processing
+    KcppImages reference_imgs;
+    KcppImages photomaker_imgs;
+    KcppAudios ref_audios;
 };
 
 struct SDParams {
@@ -423,17 +710,17 @@ struct SDParams {
 
     // owned sd_* resources of the loaded model, released here
     sd_ctx_t* sd_ctx = nullptr;
-    upscaler_ctx_t* upscaler_ctx = nullptr;
+    sd_upscaler_t* upscaler_ctx = nullptr;
 
     ~SDParams() {
         // only runs on model reload: the sd_params global is a raw pointer,
         // so the model is intentionally leaked at process exit
         if (sd_ctx != nullptr) {
-            free_sd_ctx(sd_ctx);
+            sd_ctx_free(sd_ctx);
             sd_ctx = nullptr;
         }
         if (upscaler_ctx != nullptr) {
-            free_upscaler_ctx(upscaler_ctx);
+            sd_upscaler_free(upscaler_ctx);
             upscaler_ctx = nullptr;
         }
     }
@@ -445,7 +732,7 @@ int total_img_gens = 0;
 //global static vars for SD
 static std::mutex g_sd_params_mux;
 // raw pointer on purpose: a static unique_ptr would destroy the model during
-// process exit, when free_sd_ctx()/free_upscaler_ctx() may touch global state
+// process exit, when sd_ctx_free()/sd_upscaler_free() may touch global state
 // that is already gone (crashes, particularly on Windows). Leaking the model
 // at exit is harmless.
 static SDParams* sd_params = nullptr;
@@ -606,14 +893,14 @@ std::string load_umt5_tokenizer_json()
     }
     return load_embd_file(cache, "embd_res/umt5_tokenizer_json.embd");
 }
-static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
+static void step_callback(int step, int frame_count, const sd_tensor_t* const* frames, bool is_noisy, void* data);
 
 // 0 disable, 1 initial, 2 denoised
 // the first noisy call is used to detect the inference phase
 static void set_preview_images(int enable) {
     bool denoised = (enable == 2);
     bool noisy = (enable == 1);
-    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, denoised, noisy, nullptr);
+    sd_set_preview_callback(step_callback, enable == 0 ? "none" : "proj", 1, denoised, noisy, nullptr);
 }
 
 static inline double get_time_delta(const std::chrono::steady_clock::time_point& start) {
@@ -865,16 +1152,116 @@ static std::string strip_image_tags(const std::string& text, bool zero_based)
     }
 }
 
+// --- sdcpp media boundary -------------------------------------------------
+// Kcpp media cross the sdcpp boundary as tensor handles. sd_tensor_create
+// copies the storage, so the planar buffers below can be released as soon as
+// the handle is created; a successful setter retains the tensor storage, so
+// the handle itself may be released right after the setter.
+
+// a KcppImage as a U8 [C,W,H] tensor handle; nullptr for a null image
+static std::shared_ptr<sd_tensor_t> image_to_tensor(const KcppImage& image)
+{
+    auto planar = image.to_planar();
+    if (!planar) {
+        return nullptr;
+    }
+    const int64_t shape[3] = { image.c, image.w, image.h };
+    return std::shared_ptr<sd_tensor_t>(
+        sd_tensor_create(SD_TENSOR_U8, 3, shape, planar->data(), planar->size()),
+        sd_tensor_free);
+}
+
+// a KcppAudio as a planar F32 [C,N] tensor handle; nullptr for a null audio
+static std::shared_ptr<sd_tensor_t> audio_to_tensor(const KcppAudio& audio)
+{
+    auto planar = audio.to_planar();
+    if (!planar) {
+        return nullptr;
+    }
+    const int64_t shape[2] = { audio.channels, (int)(planar->size() / audio.channels) };
+    return std::shared_ptr<sd_tensor_t>(
+        sd_tensor_create(SD_TENSOR_F32, 2, shape, planar->data(), planar->size()),
+        sd_tensor_free);
+}
+
+// set a KcppImage on a tensor option key; the handle is released after the
+// setter (the option set retains the tensor storage)
+static void set_image_opt(sd_opt_t* opt, const char* key, const KcppImage& image)
+{
+    auto t = image_to_tensor(image);
+    if (t) {
+        sd_opt_set_tensor(opt, key, t.get());
+    }
+}
+
+// set a KcppImages list on a tensor option key (null images are skipped)
+static void set_images_opt(sd_opt_t* opt, const char* key, const KcppImages& images)
+{
+    if (images.empty()) {
+        return;
+    }
+    std::vector<std::shared_ptr<sd_tensor_t>> tensors;
+    tensors.reserve(images.size());
+    for (size_t i = 0; i < images.size(); ++i) {
+        tensors.push_back(image_to_tensor(images[i]));
+    }
+    std::vector<sd_tensor_t*> handles;
+    handles.reserve(tensors.size());
+    for (auto& t : tensors) {
+        if (t) {
+            handles.push_back(t.get());
+        }
+    }
+    if (!handles.empty()) {
+        sd_opt_set_tensors(opt, key, handles.data(), handles.size());
+    }
+}
+
+// set a KcppAudios list on an audio option key (null audios are skipped)
+static void set_audios_opt(sd_opt_t* opt, const char* key, const KcppAudios& audios)
+{
+    if (audios.empty()) {
+        return;
+    }
+    std::vector<std::shared_ptr<sd_tensor_t>> tensors;
+    tensors.reserve(audios.size());
+    for (size_t i = 0; i < audios.size(); ++i) {
+        tensors.push_back(audio_to_tensor(audios[i]));
+    }
+    std::vector<sd_audio_t> descriptors;
+    descriptors.reserve(tensors.size());
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        if (tensors[i]) {
+            descriptors.push_back(sd_audio_t{audios[i].sample_rate, tensors[i].get()});
+        }
+    }
+    if (!descriptors.empty()) {
+        sd_opt_set_audios(opt, key, descriptors.data(), descriptors.size());
+    }
+}
+
 struct PromptImageRef {
     // per-request pool of reference images (original request order) served by
     // prompt_image_from_refs for <image:N> prompt tags
-    std::vector<sd_image_t> image_pool;
+    std::vector<KcppImage> image_pool;
+    // lazily created tensor views of the pool: the sdcpp callback copies each
+    // served tensor before the next callback, so a pooled handle stays valid
+    std::vector<std::shared_ptr<sd_tensor_t>> image_views;
     bool zero_based = false;
+
+    void resize(size_t n) {
+        image_pool.resize(n);
+        image_views.assign(n, nullptr);
+    }
+    void set(size_t i, const KcppImage& image) {
+        image_pool[i] = image;
+        image_views[i].reset(); // invalidate the pooled tensor
+    }
 };
 
 // callback registered per-generation: resolves
 // <image:N> / <image:+N> prompt tags to the reference image pool
-static bool prompt_image_from_refs(const char* source, void* data, sd_image_t* image_out)
+static bool prompt_image_from_refs(const char* source, void* data, const sd_tensor_t** image_out)
 {
     PromptImageRef *rdata = reinterpret_cast<PromptImageRef*>(data);
     if (rdata == nullptr)
@@ -888,11 +1275,18 @@ static bool prompt_image_from_refs(const char* source, void* data, sd_image_t* i
     if (idx < 0 || idx >= (int)rdata->image_pool.size()) {
         return false;
     }
-    const sd_image_t& image = rdata->image_pool[idx];
-    if (!image.data) {
+    const KcppImage& image = rdata->image_pool[idx];
+    if (!image.valid()) {
         return false;
     }
-    *image_out = image;
+    if (!rdata->image_views[idx]) {
+        auto t = image_to_tensor(image);
+        if (!t) {
+            return false;
+        }
+        rdata->image_views[idx] = t;
+    }
+    *image_out = rdata->image_views[idx].get();
     return true;
 }
 
@@ -1678,57 +2072,124 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
     // lp.taesd_path);
 }
 
-bool sdtype_load_model(const sd_load_model_inputs inputs) {
+// helper to unify the loading table
+struct LoadParams: public SDLoadParams, public KcppLoadParams {};
 
-    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
-    if (!no_concurrency.owns_lock()) {
-        // shouldn't happen
-        printf("\nError: ImageGen Init - another operation is in progress\n");
-        return false;
+static void sd_track_key(std::set<std::string>& present, const char* key)
+{
+    if (key != nullptr) {
+        present.insert(key);
     }
+}
 
-    // globals
-    sddebugmode = inputs.debugmode;
-    set_sd_log_level(sddebugmode);
-    sd_is_quiet = inputs.quiet;
-    set_sd_quiet(sd_is_quiet);
-    sd_executable_path = sd_get_u8path(SAFE_STR(inputs.executable_path));
+static bool sd_check_key(const std::set<std::string>& present, const char* key)
+{
+    return key != nullptr && present.count(key) != 0;
+}
 
-    auto new_params = std::make_unique<SDParams>();
-    SDLoadParams& lp = new_params->load_params;
-    KcppLoadParams& klp = new_params->kcpp_load_params;
+// field-row binding for the sd_load_model payload: input JSON key, output
+// sd.cpp key, and the IR member. The decode
+// loop walks the rows with one strict sdjson_get each and records the tracking
+// key of the fields present in the request; the settle loop forwards the rows
+// with an sd_opt key to the context options, only for present fields.
+// Converted fields (quant, flash_attention) resolve to their upstream key in
+// the QoL/routing step and are settled there (settle=false). Executable_path
+// and loras stay explicit.
+struct LoadStr  { const char* in; const char* out; std::string LoadParams::*  p; };
+struct LoadI32  { const char* in; const char* out; int         LoadParams::*  p; bool settle = true; };
+struct LoadBool { const char* in; const char* out; bool        LoadParams::*  p; bool settle = true; };
 
-    lp.model_path = SAFE_STR(inputs.model_filename);
-    lp.vae_path = SAFE_STR(inputs.vae_filename);
-    lp.audio_vae_path = SAFE_STR(inputs.audio_vae_filename);
-    lp.t5xxl_path = SAFE_STR(inputs.llm_filename);
-    lp.clip_l_path = SAFE_STR(inputs.clip1_filename);
-    lp.clip_g_path = SAFE_STR(inputs.clip2_filename);
-    lp.photo_maker_path = SAFE_STR(inputs.photomaker_filename);
-    klp.upscaler_filename = SAFE_STR(inputs.upscaler_filename);
-    klp.tiled_vae_threshold = inputs.tiled_vae_threshold;
+static const LoadStr load_str[] = {
+    // in key               out key (sd_opt)     IR member
+    {"model_filename",     "model_path",        &LoadParams::model_path},
+    {"vae_filename",       "vae_path",          &LoadParams::vae_path},
+    {"audio_vae_filename", "audio_vae_path",    &LoadParams::audio_vae_path},
+    {"llm_filename",       "t5xxl_path",        &LoadParams::t5xxl_path},
+    {"clip1_filename",     "clip_l_path",       &LoadParams::clip_l_path},
+    {"clip2_filename",     "clip_g_path",       &LoadParams::clip_g_path},
+    {"photomaker_filename","photo_maker_path",  &LoadParams::photo_maker_path},
+    {"backend",            "backend",           &LoadParams::backend},
+    {"params_backend",     "params_backend",    &LoadParams::params_backend},
+    {"split_mode",         "split_mode",        &LoadParams::split_mode},
+    {"conv_direct_mode",   "conv_direct_mode",  &LoadParams::conv_direct_mode},
+    {"max_vram",           "max_vram",          &LoadParams::max_vram},
+
+    {"upscaler_filename",  nullptr,             &LoadParams::upscaler_filename},
+
+    {nullptr,              "diffusion_model_path",        &LoadParams::diffusion_model_path},
+    {nullptr,              "clip_vision_path",            &LoadParams::clip_vision_path},
+    {nullptr,              "llm_path",                    &LoadParams::llm_path},
+    {nullptr,              "llm_vision_path",             &LoadParams::llm_vision_path},
+    {nullptr,              "tokenizer",                   &LoadParams::tokenizer},
+    {nullptr,              "embeddings_connectors_path",  &LoadParams::embeddings_connectors_path},
+    {nullptr,              "uncond_diffusion_model_path", &LoadParams::uncond_diffusion_model_path},
+    {nullptr,              "tensor_type_rules",           &LoadParams::tensor_type_rules},
+};
+static const LoadI32 load_i32[] = {
+    {"threads",            "n_threads",         &LoadParams::n_threads},
+    {"lora_apply_mode",    nullptr,             &LoadParams::kcpp_lora_apply_mode},
+    {"quant",              "wtype",             &LoadParams::quant, false},
+    {"tiled_vae_threshold",nullptr,             &LoadParams::tiled_vae_threshold},
+    {"img_hard_limit",     nullptr,             &LoadParams::img_hard_limit},
+    {"img_soft_limit",     nullptr,             &LoadParams::img_soft_limit},
+};
+static const LoadBool load_bool[] = {
+    {"use_mmap",           "enable_mmap",       &LoadParams::enable_mmap},
+    {"auto_fit",           "auto_fit",          &LoadParams::auto_fit},
+    {"flash_attention",    "flash_attn_mode",   &LoadParams::flash_attention, false},
+    {"taesd",              nullptr,             &LoadParams::taesd},
+};
+
+// settle the load parameters into a context option set and create the
+// context; only members present in the request are set (absent = library
+// default). The kcpp policy (rng, eager load, model args, lora apply mode,
+// flash attention) is always set.
+static sd_ctx_t* create_sd_context(const LoadParams& lp, const std::set<std::string>& present)
+{
+    auto* opt = sd_ctx_opt_create();
+    if (opt == nullptr) {
+        return nullptr;
+    }
+    sd_opt_set_string(opt, "rng_type", sd_rng_type_name(CUDA_RNG));
+    sd_opt_set_string(opt, "model_args", "chroma_use_dit_mask=true");
+    sd_opt_set_bool(opt, "eager_load", true);
+    sd_opt_set_string(opt, "lora_apply_mode", sd_lora_apply_mode_name(lp.lora_apply_mode));
+    sd_opt_set_string(opt, "flash_attn_mode", lp.flash_attn_mode.c_str());
+    for (const auto& f : load_str) {
+        if (f.out != nullptr && !(lp.*f.p).empty()) {
+            sd_opt_set_string(opt, f.out, (lp.*f.p).c_str());
+        }
+    }
+    // set by the QoL/routing step, not by the payload decode
+    if (!lp.taesd_path.empty()) {
+        sd_opt_set_string(opt, "taesd_path", lp.taesd_path.c_str());
+    }
+    for (const auto& f : load_i32) {
+        if (f.settle && sd_check_key(present, f.out)) {
+            sd_opt_set_int(opt, f.out, lp.*f.p);
+        }
+    }
+    for (const auto& f : load_bool) {
+        if (f.settle && sd_check_key(present, f.out)) {
+            sd_opt_set_bool(opt, f.out, lp.*f.p);
+        }
+    }
+    // resolved from quant in the QoL/routing step
+    if (lp.wtype != SD_TYPE_COUNT) {
+        sd_opt_set_string(opt, "wtype", sd_type_name(lp.wtype));
+    }
+    sd_ctx_t* ctx = nullptr;
+    sd_ctx_create(opt, &ctx);
+    sd_opt_free(opt); // the context retains its own configuration
+    return ctx;
+}
+
+static void kcpp_resolve_load_parameters(SDLoadParams& lp, KcppLoadParams& klp)
+{
     klp.tiled_vae_threshold = (klp.tiled_vae_threshold > 8192 ? 8192 : klp.tiled_vae_threshold);
     klp.tiled_vae_threshold = (klp.tiled_vae_threshold <= 0 ? 8192 : klp.tiled_vae_threshold); //if negative dont tile
-    klp.img_hard_limit = inputs.img_hard_limit;
-    klp.img_soft_limit = inputs.img_soft_limit;
-
-    lp.backend = SAFE_STR(inputs.backend);
-    lp.params_backend = SAFE_STR(inputs.params_backend);
-    lp.split_mode = SAFE_STR(inputs.split_mode);
-    lp.conv_direct_mode = SAFE_STR(inputs.conv_direct_mode);
-    lp.n_threads = inputs.threads; //if -1 use physical cores
-    lp.enable_mmap = inputs.use_mmap;
-    lp.auto_fit = inputs.auto_fit;
-    klp.quant = inputs.quant;
     if (klp.quant > 0) {
         lp.wtype = (klp.quant==1?SD_TYPE_Q8_0:SD_TYPE_Q4_0);
-    }
-    klp.flash_attention = inputs.flash_attention;
-    klp.taesd = inputs.taesd;
-    lp.max_vram = SAFE_STR(inputs.max_vram);
-
-    for(int i=0;i<inputs.lora_len;++i) {
-        klp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
     }
 
     printf("\nImageGen Init - Load Model: %s\n", lp.model_path.c_str());
@@ -1737,15 +2198,14 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         lp.lora_apply_mode = LORA_APPLY_AT_RUNTIME;
         klp.lora_dynamic = false;
 
-        int lora_apply_mode = inputs.lora_apply_mode;
-        if(lora_apply_mode >= 1 && lora_apply_mode <= 2) {
-            lp.lora_apply_mode = (lora_apply_mode_t)lora_apply_mode;
+        if(klp.kcpp_lora_apply_mode >= 1 && klp.kcpp_lora_apply_mode <= 2) {
+            lp.lora_apply_mode = (lora_apply_mode_t)klp.kcpp_lora_apply_mode;
         }
         else {
             // bit 3: LoRAs can be changed dynamically
             // bit 4: cache the initial LoRA list in VRAM
-            klp.lora_dynamic = !!(lora_apply_mode & (1<<3));
-            klp.lora_cache   = klp.lora_dynamic && !!(lora_apply_mode & (1<<4));
+            klp.lora_dynamic = !!(klp.kcpp_lora_apply_mode & (1<<3));
+            klp.lora_cache   = klp.lora_dynamic && !!(klp.kcpp_lora_apply_mode & (1<<4));
         }
         // TODO: LoRA caching produces errors after a preloaded LoRA is later removed on a request
         klp.lora_cache = false;
@@ -1845,58 +2305,64 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         printf("Note: Loading a pre-quantized model is always faster than using compress weights!\n");
     }
 
-
     kcpp_set_model_paths(lp, klp);
+}
 
-    sd_ctx_params_t params = {};
-    sd_ctx_params_init(&params);
+bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
-    params.rng_type = CUDA_RNG;
-    params.model_args = "chroma_use_dit_mask=true";
-    params.eager_load = true; //klp should preload everything
-
-    params.n_threads = lp.n_threads;
-    params.wtype = lp.wtype;
-    params.conv_direct_mode = lp.conv_direct_mode.c_str();
-    params.max_vram = lp.max_vram.c_str();
-    params.enable_mmap = lp.enable_mmap;
-    params.backend = lp.backend.c_str();
-    params.params_backend = lp.params_backend.c_str();
-    params.split_mode = lp.split_mode.c_str();
-    params.auto_fit = lp.auto_fit;
-    params.lora_apply_mode = lp.lora_apply_mode;
-    params.model_path = lp.model_path.c_str();
-    params.clip_l_path = lp.clip_l_path.c_str();
-    params.clip_g_path = lp.clip_g_path.c_str();
-    params.t5xxl_path = lp.t5xxl_path.c_str();
-    params.diffusion_model_path = lp.diffusion_model_path.c_str();
-    params.vae_path = lp.vae_path.c_str();
-    params.audio_vae_path = lp.audio_vae_path.c_str();
-    params.taesd_path = lp.taesd_path.c_str();
-    params.photo_maker_path = lp.photo_maker_path.c_str();
-    params.tokenizer = lp.tokenizer.c_str();
-    params.clip_vision_path = lp.clip_vision_path.c_str();
-    params.llm_path = lp.llm_path.c_str();
-    params.llm_vision_path = lp.llm_vision_path.c_str();
-    params.embeddings_connectors_path = lp.embeddings_connectors_path.c_str();
-    params.uncond_diffusion_model_path = lp.uncond_diffusion_model_path.c_str();
-    params.tensor_type_rules = lp.tensor_type_rules.c_str();
-    params.flash_attn_mode = lp.flash_attn_mode.c_str();
-
-    if(sddebugmode==1)
-    {
-        const char* tokenizer = params.tokenizer;
-        if (tokenizer != nullptr && *tokenizer == '{') {
-            params.tokenizer = "<in-memory tokenizer JSON>";
-        }
-        char* buf = sd_ctx_params_to_str(&params);
-        params.tokenizer = tokenizer;
-        if(buf)
-        {
-            printf("\n%s\n", buf);
-            free(buf);
-        }
+    TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
+    if (!no_concurrency.owns_lock()) {
+        // shouldn't happen
+        printf("\nError: ImageGen Init - another operation is in progress\n");
+        return false;
     }
+
+    // globals
+    sddebugmode = inputs.debugmode;
+    set_sd_log_level(sddebugmode);
+    sd_is_quiet = inputs.quiet;
+    set_sd_quiet(sd_is_quiet);
+
+    auto new_params = std::make_unique<SDParams>();
+    SDLoadParams& lp = new_params->load_params;
+    KcppLoadParams& klp = new_params->kcpp_load_params;
+
+    // tracking keys of the fields present in the request payload: the settle
+    // forwards only these (absent = library default)
+    std::set<std::string> present;
+    {
+        // assigned to the global before any QoL probe
+        std::string executable_path;
+        SdErrors errors;
+        LoadParams lptmp;
+        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
+        if (payload.is_object()) {
+            sdjson_get(executable_path, "executable_path", payload, errors);
+
+            // one strict getter per field row
+            for (const auto& f : load_str)
+                if (sdjson_get(lptmp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : load_i32)
+                if (sdjson_get(lptmp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : load_bool)
+                if (sdjson_get(lptmp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+
+            sdjson_get_loras("loras", payload, errors, lptmp.lora_map);
+
+            if (sddebugmode) {
+                sdjson_warn_unknown_keys(payload, errors);
+            }
+        }
+        if (!errors.empty()) {
+            printf("\nError: KCPP SD load: %s\n", errors.message().c_str());
+            return false;
+        }
+        sd_executable_path = sd_get_u8path(executable_path);
+        lp = static_cast<SDLoadParams&>(lptmp);
+        klp = static_cast<KcppLoadParams&>(lptmp);
+    }
+
+    kcpp_resolve_load_parameters(lp, klp);
 
     {
         // release the previous model (if any) to free resources, before building
@@ -1911,9 +2377,13 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         }
     }
 
-    new_params->sd_ctx = new_sd_ctx(&params);
+    {
+        // the full load aggregate, from the two stored halves
+        LoadParams load_agg{lp, klp};
+        new_params->sd_ctx = create_sd_context(load_agg, present);
+    }
 
-    if (new_params->sd_ctx == NULL) {
+    if (new_params->sd_ctx == nullptr) {
         printf("\nError: Image generation failed to setup!\nMake sure you have ALL files required (e.g. VAE, T5, Clip...) or baked into the model!\n");
         return false;
     }
@@ -1938,12 +2408,23 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     //load upscaler if provided
     if (klp.upscaler_filename!="") {
         const int upscale_tile_size = 128;
-        new_params->upscaler_ctx = new_upscaler_ctx(klp.upscaler_filename.c_str(),
-                                        lp.conv_direct_mode == "on",
-                                        params.n_threads,
-                                        upscale_tile_size,
-                                        params.backend,
-                                        params.params_backend);
+        auto* opt = sd_upscaler_opt_create();
+        sd_opt_set_string(opt, "model_path", klp.upscaler_filename.c_str());
+        sd_opt_set_bool(opt, "conv_direct", lp.conv_direct_mode == "on");
+        if (lp.n_threads > 0) {
+            sd_opt_set_int(opt, "n_threads", lp.n_threads);
+        }
+        sd_opt_set_int(opt, "tile_size", upscale_tile_size);
+        if (!lp.backend.empty()) {
+            sd_opt_set_string(opt, "backend", lp.backend.c_str());
+        }
+        if (!lp.params_backend.empty()) {
+            sd_opt_set_string(opt, "params_backend", lp.params_backend.c_str());
+        }
+        sd_upscaler_t* upscaler = nullptr;
+        sd_upscaler_create(opt, &upscaler);
+        sd_opt_free(opt); // the upscaler retains its own configuration
+        new_params->upscaler_ctx = upscaler;
 
         if (new_params->upscaler_ctx == nullptr) {
              printf("\nError: KCPP failed to load upscaler!\n");
@@ -1966,54 +2447,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     return true;
 }
 
-static std::string friendly_model_name(std::filesystem::path model_path) {
-    return model_path.filename().string();
-}
-
-static std::string get_scheduler_name(scheduler_t scheduler, bool as_sampler_suffix = false)
-{
-    if (scheduler == scheduler_t::SCHEDULER_COUNT) {
-        return as_sampler_suffix ? "" : "default";
-    } else {
-        std::string prefix = as_sampler_suffix ? " " : "";
-        return prefix + sd_scheduler_name(scheduler);
-    }
-}
-
-static std::string get_image_params(const sd_img_gen_params_t & params, const std::string& lora_meta, int seed_offset) {
-    std::string model = sd_params->load_params.model_path;
-    if (model.empty())
-        model = sd_params->load_params.diffusion_model_path;
-    model = friendly_model_name(model);
-    std::stringstream ss;
-    ss << std::setprecision(3)
-        <<    "Prompt: " << params.prompt << lora_meta
-        << " | NegativePrompt: " << params.negative_prompt
-        << " | Steps: " << params.sample_params.sample_steps
-        << " | CFGScale: " << params.sample_params.guidance.txt_cfg
-        << " | Guidance: " << params.sample_params.guidance.distilled_guidance
-        << " | Seed: " << (params.seed + seed_offset)
-        << " | Size: " << params.width << "x" << params.height
-        << " | Sampler: " << sd_sample_method_name(params.sample_params.sample_method)
-        << get_scheduler_name(params.sample_params.scheduler, true);
-    if (params.sample_params.eta != -1.0f)
-        ss << "| Eta: " << params.sample_params.eta;
-    if (params.sample_params.shifted_timestep != 0)
-        ss << "| Timestep Shift: " << params.sample_params.shifted_timestep;
-    if (params.sample_params.flow_shift > 0.f && params.sample_params.flow_shift != INFINITY)
-        ss << "| Flow Shift: " << params.sample_params.flow_shift;
-    ss  << " | Clip skip: " << params.clip_skip
-        << " | Model: " << model;
-    std::string vae = sd_params->load_params.vae_path;
-    if (!vae.empty())
-        ss << " | VAE: " << friendly_model_name(vae);
-    std::string tae = sd_params->load_params.taesd_path;
-    if (!tae.empty())
-        ss << " | TAE: " << friendly_model_name(tae);
-    ss << " | Version: KoboldCpp";
-    return ss.str();
-}
-
 static inline int rounddown_to(int n, int fac) {
     return n - n % fac;
 }
@@ -2028,6 +2461,203 @@ static inline double round_for_info(double v) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%.6f", v);
     return strtod(buf, nullptr);
+}
+
+// the library's generation-info string, parsed without exceptions; a failed
+// parse is a library bug, not a request problem, so it degrades to a null
+// entry (which the info builders below skip) rather than an SdErrors problem
+static nlohmann::json parse_generation_info(const char* data) {
+    if (data == nullptr)
+        return nullptr;
+    try {
+        return nlohmann::json::parse(data);
+    } catch (const nlohmann::json::exception& e) {
+        printf("KCPP SD: invalid generation info from sdcpp: %s\n", e.what());
+        return nullptr;
+    }
+}
+
+// accessors for the library's generation-info JSON (the resolved effective
+// parameters; key presence replaces the old sentinel/range gates)
+// keys are dotted paths (the same convention the input requests use); a
+// missing key or a type mismatch yields nullopt, so unavailable items can be
+// omitted
+static const nlohmann::json* info_path(const nlohmann::json& info, const std::string& path) {
+    const nlohmann::json* cur = &info;
+    size_t start = 0;
+    while (true) {
+        const size_t dot = path.find('.', start);
+        const std::string key = path.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+        if (!cur->is_object())
+            return nullptr;
+        auto it = cur->find(key);
+        if (it == cur->end())
+            return nullptr;
+        cur = &*it;
+        if (dot == std::string::npos)
+            return cur;
+        start = dot + 1;
+    }
+}
+
+static std::optional<std::string> info_str(const nlohmann::json& info, const std::string& key) {
+    if (const auto* v = info_path(info, key); v != nullptr && v->is_string())
+        return v->get<std::string>();
+    return std::nullopt;
+}
+
+static std::optional<int> info_int(const nlohmann::json& info, const std::string& key) {
+    if (const auto* v = info_path(info, key); v != nullptr && v->is_number_integer())
+        return v->get<int>();
+    return std::nullopt;
+}
+
+static std::optional<double> info_double(const nlohmann::json& info, const std::string& key, bool round = true) {
+    if (const auto* v = info_path(info, key); v != nullptr && v->is_number()) {
+        auto res = v->get<double>();
+        return round ? round_for_info(res) : res;
+    }
+    return std::nullopt;
+}
+
+// for an int64 (e.g. seed), accept a numeric string, too
+static std::optional<int64_t> info_int64(const nlohmann::json& info, const std::string& key) {
+    if (const auto* v = info_path(info, key); v != nullptr) {
+        if (v->is_number_integer())
+            return v->get<int64_t>();
+        if (v->is_string())
+            return std::strtoll(v->get<std::string>().c_str(), nullptr, 10);
+    }
+    return std::nullopt;
+}
+
+// the loaded model filenames are reported under "models", keyed by role
+static std::string info_model_name(const nlohmann::json& info, const char* key) {
+    auto models = info.find("models");
+    if (models == info.end() || !models->is_object())
+        return "";
+    auto it = models->find(key);
+    if (it == models->end() || !it->is_string() || it->get_ref<const std::string&>().empty())
+        return "";
+    return it->get<std::string>();
+}
+
+// the <lora:name:multiplier> line, reconstructed from the resolved loras list
+static std::string get_lora_meta_from_info(const nlohmann::json& info) {
+    std::stringstream lora_meta;
+    lora_meta << std::setprecision(6);
+    auto loras = info.find("loras");
+    if (loras != info.end() && loras->is_array()) {
+        for (const auto& lora : *loras) {
+            auto path = lora.find("path");
+            auto mult = lora.find("multiplier");
+            if (path == lora.end() || !path->is_string() || mult == lora.end() || !mult->is_number())
+                continue;
+            const float multiplier = mult->get<float>();
+            if (multiplier == 0.f)
+                continue;
+            lora_meta << "<lora:" << std::filesystem::path(path->get<std::string>()).stem().string()
+                      << ":" << multiplier << ">";
+        }
+    }
+    return lora_meta.str();
+}
+
+static std::string get_image_info_text(const nlohmann::json& info, int seed_offset) {
+    std::stringstream ss;
+    ss << std::setprecision(3)
+        << "Prompt: " << info_str(info, "prompt").value_or("") + get_lora_meta_from_info(info);
+    if (auto v = info_str(info, "negative_prompt"); v.has_value())
+        ss << " | NegativePrompt: " << *v;
+    if (auto v = info_int(info, "sample_params.sample_steps"); v.has_value())
+        ss << " | Steps: " << *v;
+    if (auto v = info_double(info, "sample_params.guidance.txt_cfg"); v.has_value())
+        ss << " | CFGScale: " << *v;
+    if (auto v = info_double(info, "sample_params.guidance.distilled_guidance"); v.has_value())
+        ss << " | Guidance: " << *v;
+    if (auto v = info_int64(info, "seed"); v.has_value())
+        ss << " | Seed: " << (*v + seed_offset);
+    if (auto w = info_int(info, "width"); w.has_value()) {
+        if (auto h = info_int(info, "height"); h.has_value()) {
+            ss << " | Size: " << *w << "x" << *h;
+        }
+    }
+    if (auto sampler = info_str(info, "sample_params.sample_method"); sampler.has_value()) {
+        ss << " | Sampler: " << *sampler;
+        if (auto scheduler = info_str(info, "sample_params.scheduler"); scheduler.has_value())
+            ss << " " << *scheduler;
+    }
+    if (auto v = info_double(info, "sample_params.eta"); v.has_value())
+        ss << " | Eta: " << *v;
+    if (auto v = info_int(info, "sample_params.shifted_timestep"); v.has_value())
+        ss << " | Timestep Shift: " << *v;
+    if (auto v = info_double(info, "sample_params.flow_shift"); v.has_value())
+        ss << " | Flow Shift: " << *v;
+    if (auto v = info_int(info, "clip_skip"); v.has_value())
+        ss << " | Clip skip: " << *v;
+    std::string model = info_model_name(info, "model");
+    if (model.empty())
+        model = info_model_name(info, "diffusion_model");
+    if (!model.empty())
+        ss << " | Model: " << model;
+    if (auto vae = info_model_name(info, "vae"); !vae.empty())
+        ss << " | VAE: " << vae;
+    if (auto tae = info_model_name(info, "taesd"); !tae.empty())
+        ss << " | TAE: " << tae;
+    ss << " | Version: KoboldCpp";
+    return ss.str();
+}
+
+// the A1111-style "info" object for the generation result, built from the
+// library's per-item generation info (in a batch, the first valid item wins)
+static nlohmann::json build_result_jsoninfo(const std::vector<nlohmann::json>& jsonresults) {
+    nlohmann::json jsoninfo = nlohmann::json::object();
+    for (const auto& geninfo : jsonresults) {
+        if (geninfo.is_null())
+            continue;
+        jsoninfo["prompt"] = info_str(geninfo, "prompt").value_or("") + get_lora_meta_from_info(geninfo);
+        if (auto v = info_str(geninfo, "negative_prompt"); v.has_value() && !v->empty())
+            jsoninfo["negative_prompt"] = *v;
+        if (auto v = info_int64(geninfo, "seed"); v.has_value())
+            jsoninfo["seed"] = *v;
+        if (auto v = info_int(geninfo, "width"); v.has_value())
+            jsoninfo["width"] = *v;
+        if (auto v = info_int(geninfo, "height"); v.has_value())
+            jsoninfo["height"] = *v;
+        if (auto v = info_int(geninfo, "sample_params.sample_steps"); v.has_value())
+            jsoninfo["steps"] = *v;
+        if (auto v = info_double(geninfo, "sample_params.guidance.txt_cfg"); v.has_value())
+            jsoninfo["cfg_scale"] = *v;
+        if (auto v = info_double(geninfo, "sample_params.eta"); v.has_value())
+            jsoninfo["eta"] = *v;
+        if (auto v = info_int(geninfo, "clip_skip"); v.has_value())
+            jsoninfo["clip_skip"] = *v;
+        if (auto v = info_double(geninfo, "strength"); v.has_value())
+            jsoninfo["denoising_strength"] = *v;
+        if (auto v = info_str(geninfo, "sample_params.sample_method"); v.has_value())
+            jsoninfo["sampler_name"] = *v;
+        {
+            nlohmann::json extra = nlohmann::json::object();
+            if (auto v = info_str(geninfo, "sample_params.scheduler"); v.has_value())
+                extra["Schedule type"] = *v;
+            if (!extra.empty())
+                jsoninfo["extra_generation_params"] = extra;
+        }
+        std::string model = info_model_name(geninfo, "model");
+        if (model.empty())
+            model = info_model_name(geninfo, "diffusion_model");
+        if (!model.empty())
+            jsoninfo["sd_model_name"] = model;
+        std::string vae = info_model_name(geninfo, "vae");
+        if (vae.empty())
+            vae = info_model_name(geninfo, "taesd");
+        if (!vae.empty())
+            jsoninfo["sd_vae_name"] = vae;
+        jsoninfo["lora_meta"] = get_lora_meta_from_info(geninfo);
+        jsoninfo["version"] = "KoboldCpp";
+        break;
+    }
+    return jsoninfo;
 }
 
 const int img_side_min = 64;
@@ -2117,248 +2747,128 @@ static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int i
     }
 }
 
-static enum sample_method_t sampler_from_name(const std::string& sampler)
-{
-    // all lowercase
-    enum sample_method_t result = str_to_sample_method(sampler.c_str());
-    if (result != sample_method_t::SAMPLE_METHOD_COUNT) {
-        return result;
-    } else {
-        return sample_method_t::SAMPLE_METHOD_COUNT;
-    }
-}
-
-uint8_t* resize_image(uint8_t * image_buffer, int& width, int& height, int expected_width = 0, int expected_height = 0, int expected_channel = 3)
-{
-    if ((expected_width > 0 && expected_height > 0) && (height != expected_height || width != expected_width)) {
-        float dst_aspect = (float)expected_width / (float)expected_height;
-        float src_aspect = (float)width / (float)height;
-
-        int crop_x = 0, crop_y = 0;
-        int crop_w = width, crop_h = height;
-
-        if (src_aspect > dst_aspect) {
-            crop_w = (int)(height * dst_aspect);
-            crop_x = (width - crop_w) / 2;
-        } else if (src_aspect < dst_aspect) {
-            crop_h = (int)(width / dst_aspect);
-            crop_y = (height - crop_h) / 2;
-        }
-
-        if (crop_x != 0 || crop_y != 0) {
-            if(!sd_is_quiet && sddebugmode==1)
-            {
-                printf("\ncrop input image from %dx%d to %dx%d\n", width, height, crop_w, crop_h);
-            }
-            uint8_t* cropped_image_buffer = (uint8_t*)malloc(crop_w * crop_h * expected_channel);
-            if (cropped_image_buffer == NULL) {
-                fprintf(stderr, "\nerror: allocate memory for crop\n");
-                free(image_buffer);
-                return NULL;
-            }
-            for (int row = 0; row < crop_h; row++) {
-                uint8_t* src = image_buffer + ((crop_y + row) * width + crop_x) * expected_channel;
-                uint8_t* dst = cropped_image_buffer + (row * crop_w) * expected_channel;
-                memcpy(dst, src, crop_w * expected_channel);
-            }
-
-            width  = crop_w;
-            height = crop_h;
-            free(image_buffer);
-            image_buffer = cropped_image_buffer;
-        }
-
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            printf("\nresize input image from %dx%d to %dx%d\n", width, height, expected_width, expected_height);
-        }
-        int resized_height = expected_height;
-        int resized_width  = expected_width;
-
-        uint8_t* resized_image_buffer = (uint8_t*)malloc(resized_height * resized_width * expected_channel);
-        if (resized_image_buffer == NULL) {
-            fprintf(stderr, "\nerror: allocate memory for resize input image\n");
-            free(image_buffer);
-            return NULL;
-        }
-        stbir_resize(image_buffer, width, height, 0,
-                     resized_image_buffer, resized_width, resized_height, 0, STBIR_TYPE_UINT8,
-                     expected_channel, STBIR_ALPHA_CHANNEL_NONE, 0,
-                     STBIR_EDGE_CLAMP, STBIR_EDGE_CLAMP,
-                     STBIR_FILTER_BOX, STBIR_FILTER_BOX,
-                     STBIR_COLORSPACE_SRGB, nullptr);
-        width  = resized_width;
-        height = resized_height;
-        free(image_buffer);
-        image_buffer = resized_image_buffer;
-    }
-    return image_buffer;
-}
-
-uint8_t* load_image_from_b64(const std::string & b64str, int& width, int& height, int expected_width = 0, int expected_height = 0, int expected_channel = 3)
-{
-    std::vector<uint8_t> decoded_buf = kcpp_base64_decode(b64str);
-    int c = 0;
-    uint8_t* image_buffer = (uint8_t*)stbi_load_from_memory(decoded_buf.data(), decoded_buf.size(), &width, &height, &c, expected_channel);
-    if (image_buffer == nullptr) {
-        image_buffer = kcpp_decode_webp_from_memory(
-            decoded_buf.data(), decoded_buf.size(), &width, &height, &c, expected_channel);
-    }
-
-    if (image_buffer == NULL) {
-        fprintf(stderr, "load_image_from_b64 failed\n");
-        return NULL;
-    }
-    if (c < expected_channel) {
-        fprintf(stderr, "load_image_from_b64: the number of channels for the input image must be >= %d, but got %d channels\n", expected_channel, c);
-        free(image_buffer);
-        return NULL;
-    }
-    if (width <= 0) {
-        fprintf(stderr, "load_image_from_b64 error: the width of image must be greater than 0\n");
-        free(image_buffer);
-        return NULL;
-    }
-    if (height <= 0) {
-        fprintf(stderr, "load_image_from_b64 error: the height of image must be greater than 0\n");
-        free(image_buffer);
-        return NULL;
-    }
-
-    // Resize input image ...
-    image_buffer = resize_image(image_buffer,width,height,expected_width,expected_height,expected_channel);
-    return image_buffer;
-}
-
-static enum scheduler_t scheduler_from_name(const char * scheduler)
-{
-    if (scheduler) {
-        enum scheduler_t result = str_to_scheduler(scheduler);
-        if (result != scheduler_t::SCHEDULER_COUNT)
-        {
-            return result;
-        }
-    }
-    return scheduler_t::SCHEDULER_COUNT;
-}
-
-static void parse_cache_options(sd_cache_params_t & params, const std::string& cache_mode,
+// settle the parsed cache options onto the generation option set. The
+// cache_mode value is the sdcpp mode name (the kcpp "cache-dit" spelling is
+// converted on decode); the named-parameter wire format is the sdcpp one.
+// Only options present in the request are set (absent = library default).
+static void parse_cache_options(sd_opt_t* opt, const std::string& cache_mode,
     const std::string& cache_options) {
 
-    sd_cache_params_init(&params);
-    if (cache_mode == "easycache") {
-        params.mode = SD_CACHE_EASYCACHE;
-    } else if (cache_mode == "ucache") {
-        params.mode = SD_CACHE_UCACHE;
-    } else if (cache_mode == "dbcache") {
-        params.mode  = SD_CACHE_DBCACHE;
-    } else if (cache_mode == "taylorseer") {
-        params.mode  = SD_CACHE_TAYLORSEER;
-    } else if (cache_mode == "cache-dit") {
-        params.mode  = SD_CACHE_CACHE_DIT;
-    } else if (cache_mode == "spectrum") {
-        params.mode  = SD_CACHE_SPECTRUM;
-    } else if (cache_mode != "" && cache_mode != "disabled") {
-        printf("warning: unknown cache mode '%s'", cache_mode.c_str());
+    // the sdcpp mode names (cache.mode option values)
+    static const char* cache_modes[] = {
+        "disabled", "easycache", "ucache", "dbcache", "taylorseer", "cache_dit", "spectrum",
+    };
+    bool mode_known = false;
+    for (const char* m : cache_modes) {
+        if (cache_mode == m) {
+            mode_known = true;
+            break;
+        }
     }
-
-    if (params.mode == SD_CACHE_DISABLED)
+    if (!mode_known) {
+        if (!cache_mode.empty()) {
+            printf("warning: unknown cache mode '%s'", cache_mode.c_str());
+        }
         return;
+    }
+    if (cache_mode == "disabled")
+        return;
+
+    sd_opt_set_string(opt, "cache.mode", cache_mode.c_str());
 
     if (cache_options == "")
         return;
 
-    sd_cache_params_t cache_params = params;
-
-    // from examples/common/common.hpp
-    auto parse_named_params = [&](const std::string& opt_str) -> bool {
-        std::stringstream ss(opt_str);
-        std::string token;
-        while (std::getline(ss, token, ',')) {
-            size_t eq_pos = token.find('=');
-            if (eq_pos == std::string::npos) {
-                printf("error: cache option '%s' missing '=' separator", token.c_str());
-                return false;
-            }
-            std::string key = token.substr(0, eq_pos);
-            std::string val = token.substr(eq_pos + 1);
-            try {
-                if (key == "threshold") {
-                    if (cache_mode == "easycache" || cache_mode == "ucache") {
-                        cache_params.reuse_threshold = std::stof(val);
-                    } else {
-                        cache_params.residual_diff_threshold = std::stof(val);
-                    }
-                } else if (key == "start") {
-                    cache_params.start_percent = std::stof(val);
-                } else if (key == "end") {
-                    cache_params.end_percent = std::stof(val);
-                } else if (key == "decay") {
-                    cache_params.error_decay_rate = std::stof(val);
-                } else if (key == "relative") {
-                    cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
-                } else if (key == "reset") {
-                    cache_params.reset_error_on_compute = (std::stof(val) != 0.0f);
-                } else if (key == "Fn" || key == "fn") {
-                    cache_params.Fn_compute_blocks = std::stoi(val);
-                } else if (key == "Bn" || key == "bn") {
-                    cache_params.Bn_compute_blocks = std::stoi(val);
-                } else if (key == "warmup") {
-                    if (cache_mode == "spectrum") {
-                        cache_params.spectrum_warmup_steps = std::stoi(val);
-                    } else {
-                        cache_params.max_warmup_steps = std::stoi(val);
-                    }
-                } else if (key == "w") {
-                    cache_params.spectrum_w = std::stof(val);
-                } else if (key == "m") {
-                    cache_params.spectrum_m = std::stoi(val);
-                } else if (key == "lam") {
-                    cache_params.spectrum_lam = std::stof(val);
-                } else if (key == "window") {
-                    cache_params.spectrum_window_size = std::stoi(val);
-                } else if (key == "flex") {
-                    cache_params.spectrum_flex_window = std::stof(val);
-                } else if (key == "stop") {
-                    cache_params.spectrum_stop_percent = std::stof(val);
-                } else {
-                    printf("error: unknown cache parameter '%s'", key.c_str());
-                    return false;
-                }
-            } catch (const std::exception&) {
-                printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key.c_str());
-                return false;
-            }
+    auto set_float = [&](const char* key, const std::string& val) -> bool {
+        try {
+            sd_opt_set_float(opt, key, std::stof(val));
+            return true;
+        } catch (const std::exception&) {
+            printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key);
+            return false;
         }
-
-        switch (cache_params.mode) {
-            case SD_CACHE_EASYCACHE:
-            case SD_CACHE_UCACHE:
-                if (cache_params.reuse_threshold < 0.0f) {
-                    printf("error: cache threshold must be non-negative");
-                    return false;
-                }
-                if (cache_params.start_percent < 0.0f || cache_params.start_percent >= 1.0f ||
-                    cache_params.end_percent <= 0.0f || cache_params.end_percent > 1.0f ||
-                    cache_params.start_percent >= cache_params.end_percent) {
-                    printf("error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0");
-                    return false;
-                }
-                break;
-            default: ;
+    };
+    auto set_int = [&](const char* key, const std::string& val) -> bool {
+        try {
+            sd_opt_set_int(opt, key, std::stoi(val));
+            return true;
+        } catch (const std::exception&) {
+            printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key);
+            return false;
         }
-        return true;
+    };
+    auto set_flag = [&](const char* key, const std::string& val) -> bool {
+        try {
+            sd_opt_set_bool(opt, key, std::stof(val) != 0.0f);
+            return true;
+        } catch (const std::exception&) {
+            printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key);
+            return false;
+        }
     };
 
-    if (parse_named_params(cache_options)) {
-        params = cache_params;
+    std::stringstream ss(cache_options);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        size_t eq_pos = token.find('=');
+        if (eq_pos == std::string::npos) {
+            printf("error: cache option '%s' missing '=' separator", token.c_str());
+            return;
+        }
+        std::string key = token.substr(0, eq_pos);
+        std::string val = token.substr(eq_pos + 1);
+        if (key == "threshold") {
+            if (cache_mode == "easycache" || cache_mode == "ucache") {
+                if (!set_float("cache.reuse_threshold", val)) return;
+            } else {
+                if (!set_float("cache.residual_diff_threshold", val)) return;
+            }
+        } else if (key == "start") {
+            if (!set_float("cache.start_percent", val)) return;
+        } else if (key == "end") {
+            if (!set_float("cache.end_percent", val)) return;
+        } else if (key == "decay") {
+            if (!set_float("cache.error_decay_rate", val)) return;
+        } else if (key == "relative") {
+            if (!set_flag("cache.use_relative_threshold", val)) return;
+        } else if (key == "reset") {
+            if (!set_flag("cache.reset_error_on_compute", val)) return;
+        } else if (key == "Fn" || key == "fn") {
+            if (!set_int("cache.fn_compute_blocks", val)) return;
+        } else if (key == "Bn" || key == "bn") {
+            if (!set_int("cache.bn_compute_blocks", val)) return;
+        } else if (key == "warmup") {
+            if (cache_mode == "spectrum") {
+                if (!set_int("cache.spectrum_warmup_steps", val)) return;
+            } else {
+                if (!set_int("cache.max_warmup_steps", val)) return;
+            }
+        } else if (key == "w") {
+            if (!set_float("cache.spectrum_w", val)) return;
+        } else if (key == "m") {
+            if (!set_int("cache.spectrum_m", val)) return;
+        } else if (key == "lam") {
+            if (!set_float("cache.spectrum_lam", val)) return;
+        } else if (key == "window") {
+            if (!set_int("cache.spectrum_window_size", val)) return;
+        } else if (key == "flex") {
+            if (!set_float("cache.spectrum_flex_window", val)) return;
+        } else if (key == "stop") {
+            if (!set_float("cache.spectrum_stop_percent", val)) return;
+        } else {
+            printf("error: unknown cache parameter '%s'", key.c_str());
+            return;
+        }
     }
 }
 
-static std::string raw_image_to_png_base64(const sd_image_t& img, std::string parameters = "") {
+static std::string raw_image_to_png_base64(const KcppImage& img, std::string parameters = "") {
     std::string result;
+    if (!img.valid()) {
+        return result;
+    }
     int out_data_len = 0;
-    unsigned char * png = stbi_write_png_to_mem(img.data, 0, img.width, img.height, img.channel, &out_data_len, parameters != "" ? parameters.c_str() : nullptr);
+    unsigned char * png = stbi_write_png_to_mem(img.px->data(), 0, img.w, img.h, img.c, &out_data_len, parameters != "" ? parameters.c_str() : nullptr);
     if (png != NULL) {
         result = kcpp_base64_encode(png,out_data_len);
         free(png);
@@ -2366,44 +2876,26 @@ static std::string raw_image_to_png_base64(const sd_image_t& img, std::string pa
     return result;
 }
 
-static sd_audio_t load_audio_from_b64(const std::string& b64audio) {
-    sd_audio_t audio = {0, 0, 0, nullptr};
-    if (b64audio.empty()) {
-        return audio;
-    }
-
-    std::vector<uint8_t> audio_data = kcpp_base64_decode(b64audio);
-    std::vector<float> decoded_samples;
-    int sample_rate = 0;
-    int channels = 0;
-    if (!kcpp_decode_audio_file_from_buf(audio_data.data(), audio_data.size(), sample_rate, channels, decoded_samples)) {
-        printf("KCPP SD: failed to decode input audio\n");
-        return audio;
-    }
-
-    uint64_t sample_count = static_cast<uint64_t>(decoded_samples.size() / static_cast<size_t>(channels));
-    size_t float_count = decoded_samples.size();
-    float* samples = (float*)malloc(float_count * sizeof(float));
-    if (samples == nullptr || sample_count == 0) {
-        free(samples);
-        return audio;
-    }
-
-    std::memcpy(samples, decoded_samples.data(), float_count * sizeof(float));
-    audio.sample_rate = static_cast<uint32_t>(sample_rate);
-    audio.channels = static_cast<uint32_t>(channels);
-    audio.sample_count = sample_count;
-    audio.data = samples;
-    return audio;
-}
-
-static std::string upscale_image_to_png_base64(upscaler_ctx_t* upscaler_ctx, const sd_image_t& input_image, int upscale_factor = 2, const std::string& meta_image_info = "")
+static std::string upscale_image_to_png_base64(sd_upscaler_t* upscaler_ctx, const KcppImage& input_image, const std::string& meta_image_info = "")
 {
     std::string gen_data;
-    sd_image_generation_result_t* upscaled = nullptr;
-    if (upscale(upscaler_ctx, input_image, upscale_factor, &upscaled)) {
-        gen_data = raw_image_to_png_base64(upscaled->items[0].image, meta_image_info);
-        free_sd_image_generation_result(upscaled);
+    sd_result_t* result = nullptr;
+    bool ok = false;
+    {
+        auto* opt = sd_upscale_opt_create();
+        auto t = image_to_tensor(input_image);
+        if (opt && t) {
+            ok = (sd_opt_set_tensor(opt, "image", t.get()) == SD_STATUS_OK);
+            if (ok) {
+                ok = (sd_upscale(upscaler_ctx, opt, &result) == SD_STATUS_OK) && (result != nullptr);
+            }
+        }
+        sd_opt_free(opt); // the option set retained the tensor storage
+        // t is released here
+    }
+    if (ok) {
+        gen_data = raw_image_to_png_base64(KcppImage::from_tensor(sd_result_get_image(result, 0)), meta_image_info);
+        sd_result_free(result);
     } else {
         printf("Upscaling failed!\n");
         gen_data = raw_image_to_png_base64(input_image, meta_image_info);
@@ -2425,6 +2917,483 @@ void sdtype_abort_generation() {
         // safe to call while holding the mutex: it's a signal-safe flag store
         sd_cancel_generation(sd_params ? sd_params->sd_ctx : nullptr, SD_CANCEL_ALL);
     }
+}
+
+// field-row binding for the sd_generate payload: one row per wire
+// parameter, binding the JSON key (in), the upstream sd_opt key (out;
+// nullptr = kcpp-only, never forwarded) and the IR member. The
+// decode loop walks the rows with one strict sdjson_get each. Explicit:
+// sample_method/scheduler (string -> enum), images (base64 decode), loras
+// the kcpp wire format spells the DIT cache mode "cache-dit"; the sdcpp
+// option value is "cache_dit"
+static std::string dec_cache_mode(const std::string& s) {
+    return (s == "cache-dit") ? "cache_dit" : s;
+}
+
+// and custom_sigmas.
+struct GenStr   { const char* in; const char* out; std::string              SDGenParams::* p; std::string (*dec)(const std::string&) = nullptr; };
+struct GenF32   { const char* in; const char* out; float                    SDGenParams::* p; };
+struct GenI32   { const char* in; const char* out; int                      SDGenParams::* p; };
+struct GenI64   { const char* in; const char* out; int64_t                  SDGenParams::* p; };
+struct GenBool  { const char* in; const char* out; bool                     SDGenParams::* p; };
+struct GenVecStr{ const char* in; const char* out; std::vector<std::string> SDGenParams::* p; };
+struct GenImage { const char* in; const char* out; KcppImage                SDGenParams::* p; };
+struct GenImages{ const char* in; const char* out; KcppImages               SDGenParams::* p; };
+
+static const GenStr gen_str[] = {
+    // in key             out key (sd_opt)                      IR member
+    {"prompt",           "prompt",                              &SDGenParams::prompt},
+    {"negative_prompt",  "negative_prompt",                     &SDGenParams::negative_prompt},
+    {"ref_image_args",   "ref_image_args",                      &SDGenParams::ref_image_args},
+    {"extra_sample_args","sample.args",                         &SDGenParams::extra_sample_args},
+    {"cache_mode",       "cache.mode",                          &SDGenParams::cache_mode, dec_cache_mode},
+    {"cache_options",    nullptr,                               &SDGenParams::cache_options},
+};
+static const GenF32 gen_f32[] = {
+    {"cfg_scale",         "sample.guidance.txt_cfg",             &SDGenParams::cfg_scale},
+    {"distilled_guidance","sample.guidance.distilled_guidance",  &SDGenParams::distilled_guidance},
+    {"flow_shift",        "sample.flow_shift",                   &SDGenParams::flow_shift},
+    {"eta",               "sample.eta",                          &SDGenParams::eta},
+    {"denoising_strength","strength",                            &SDGenParams::strength},
+};
+static const GenI32 gen_i32[] = {
+    {"sample_steps",      "sample.steps",                        &SDGenParams::sample_steps},
+    {"width",             "width",                               &SDGenParams::width},
+    {"height",            "height",                              &SDGenParams::height},
+    {"shifted_timestep",  "sample.shifted_timestep",             &SDGenParams::shifted_timestep},
+    {"clip_skip",         "clip_skip",                           &SDGenParams::clip_skip},
+    {"vid_req_frames",    nullptr,                               &SDGenParams::vid_req_frames},
+    {"video_output_type",nullptr,                               &SDGenParams::vid_output_type},
+    {"vid_fps",           nullptr,                               &SDGenParams::vid_fps},
+};
+static const GenI64 gen_i64[] = {
+    {"seed",              "seed",                                &SDGenParams::seed},
+};
+static const GenBool gen_bool[] = {
+    {"circular_x",        "circular_x",                          &SDGenParams::circular_x},
+    {"circular_y",        "circular_y",                          &SDGenParams::circular_y},
+    {"flip_mask",         nullptr,                               &SDGenParams::img_flip_mask},
+    {"upscale",           nullptr,                               &SDGenParams::upscale},
+    {"remove_limits",     nullptr,                               &SDGenParams::remove_limits},
+};
+static const GenVecStr gen_vec_str[] = {
+    {"ref_audios",        nullptr,                               &SDGenParams::vid_ref_audios},
+};
+static const GenImage gen_image[] = {
+    {"init_images",      nullptr,                               &SDGenParams::img_init_image},
+    {"mask",             nullptr,                               &SDGenParams::img_mask},
+    {"video_start_frame",nullptr,                               &SDGenParams::vid_start_frame},
+    {"video_end_frame",  nullptr,                               &SDGenParams::vid_end_frame},
+};
+static const GenImages gen_images[] = {
+    {"extra_images",     nullptr,                               &SDGenParams::img_extra_images},
+};
+
+// tracking keys of the rows rewritten/settled outside the table loops
+// (must match the `out` key of the row)
+static constexpr char TRACK_REF_IMAGE_ARGS[] = "ref_image_args";
+static constexpr char TRACK_CFG_SCALE[]      = "sample.guidance.txt_cfg";
+static constexpr char TRACK_SAMPLE_STEPS[]   = "sample.steps";
+static constexpr char TRACK_WIDTH[]          = "width";
+static constexpr char TRACK_HEIGHT[]         = "height";
+
+// settle the shared table fields onto a generation option set: only members
+// present in the request are set (absent = library default); rows without an
+// sd_opt key (kcpp-only) are skipped
+static void settle_gen_tables(sd_opt_t* opt, const SDGenParams& gp, const std::set<std::string>& present)
+{
+    for (const auto& f : gen_str) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_string(opt, f.out, (gp.*f.p).c_str());
+        }
+    }
+    for (const auto& f : gen_f32) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_float(opt, f.out, gp.*f.p);
+        }
+    }
+    for (const auto& f : gen_i32) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_int(opt, f.out, gp.*f.p);
+        }
+    }
+    for (const auto& f : gen_i64) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_int(opt, f.out, gp.*f.p);
+        }
+    }
+    for (const auto& f : gen_bool) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_bool(opt, f.out, gp.*f.p);
+        }
+    }
+}
+
+// resolve the decoded generation parameters in place: apply the model-aware
+// clamps, fix the resolution and tiling, decode/route/fit the media, and settle
+// the request kind (image vs video, img2img, passthrough). This is the generate
+// counterpart of kcpp_resolve_load_parameters. The sd_*_gen_params defaults are
+// deliberately not resolved here: they stay in the settle step, next to the
+// upstream structs (the API transition tracks them as a set of defined keys).
+// Returns an empty string on success, otherwise the user-visible error.
+static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const KcppLoadParams& klp,
+                                                      PromptImageRef& prompt_image_ref,
+                                                      std::set<std::string>& present)
+{
+    // ref_image_args: auto-resize prefix, forced edit mode when a preset is given
+    if (gp.ref_image_args.find("preset") != std::string::npos) {
+        gp.force_image_edit = true;
+        if(!sd_is_quiet && sddebugmode==1) {
+            printf("ref_image_args=\"%s\", forcing edit mode", gp.ref_image_args.c_str());
+        }
+    }
+    gp.ref_image_args = "resize_before_vae=on" + ((gp.ref_image_args.empty() ? "" : ",") + gp.ref_image_args);
+    // always rewritten: settle it even when the request gave no value
+    present.insert(TRACK_REF_IMAGE_ARGS);
+
+    gp.loras = gp.lora_map.get_lora_specs();
+
+    gp.req_width = gp.width;
+    gp.req_height = gp.height;
+
+    const auto& info = klp.info;
+    gp.is_vidgen = info.is_video_model;
+    const bool supports_reference_images = (gp.is_vidgen || info.supports_ref_image || info.is_kontext || klp.photomaker_enabled);
+    const bool remove_limits = gp.remove_limits;
+
+    // <image:N>/<image:+N> prompt tags reference gp.img_extra_images by position
+    // and route the images to the VLM conditioner; images will be removed from
+    // the ref_images parameter unless a reference has a '+' tag
+    image_tag_refs image_tags;
+    bool vision_tags_active = false;
+    {
+        size_t ref_count = std::min(gp.img_extra_images.size(), (size_t)max_extra_images);
+        std::string tag_err;
+        if (!collect_image_tags(gp.prompt, gp.negative_prompt, ref_count, image_tags, tag_err)) {
+            return "KCPP SD: " + tag_err;
+        }
+        prompt_image_ref.zero_based = image_tags.zero_based;
+        if (image_tags.has_tags) {
+            if (klp.has_llm_vision) {
+                vision_tags_active = true;
+            } else {
+                // the conditioner can't see images: replace the tags with plain
+                // references (upstream would abort the generation)
+                if (!sd_is_quiet && sddebugmode == 1) {
+                    printf("\nKCPP SD: replacing <image:...> tags with plain references, the model has no vision encoder\n");
+                }
+                gp.prompt = strip_image_tags(gp.prompt, image_tags.zero_based);
+                gp.negative_prompt = strip_image_tags(gp.negative_prompt, image_tags.zero_based);
+            }
+        }
+    }
+
+    gp.is_img2img = gp.img_init_image.valid();
+
+    if (!remove_limits && info.is_flux1)
+    {
+        if (gp.cfg_scale != 1.0f) {
+            // clamp cfg scale
+            if (!sd_is_quiet && sddebugmode) {
+                printf("Flux: clamping CFG Scale to 1\n");
+            }
+            gp.cfg_scale = 1.0f;
+            present.insert(TRACK_CFG_SCALE);
+        }
+    }
+
+    if(!remove_limits && info.is_zimage)
+    {
+        if(gp.cfg_scale > 4.0f)
+        {
+            if (!sd_is_quiet && sddebugmode) {
+                printf("Z-Image: clamping CFG Scale to 4.0 to preserve quality\n");
+            }
+            gp.cfg_scale = 4.0f;
+            present.insert(TRACK_CFG_SCALE);
+        }
+    }
+
+    if(info.is_sdxs)
+    {
+        if(gp.cfg_scale > 1.0f || gp.sample_steps > 1)
+        {
+            if (!sd_is_quiet && sddebugmode) {
+                printf("SDXS: clamping steps and cfg to 1\n");
+            }
+            gp.cfg_scale = 1.0f;
+            gp.sample_steps = 1;
+            present.insert(TRACK_CFG_SCALE);
+            present.insert(TRACK_SAMPLE_STEPS);
+        }
+        // A custom sigma list determines the real sampler iteration count and
+        // would otherwise bypass the SDXS one-step restriction above. A
+        // two-value list already represents one step and remains valid.
+        if (gp.custom_sigmas.size() > 2) {
+            if (!sd_is_quiet && sddebugmode) {
+                printf("SDXS: ignoring custom sigma schedule with more than 1 step\n");
+            }
+            gp.custom_sigmas.clear();
+        }
+    }
+
+    bool redirect_single_reference_to_img2img = (
+            // we are not doing img2img already
+            !gp.is_img2img
+            // a single extra image is provided, and mask is NOT provided
+            && gp.img_extra_images.size()==1 && !gp.img_mask.valid()
+            // the model does not support references natively, or through an edit mode/LoRa
+            && !supports_reference_images && !gp.force_image_edit
+            // the model can't handle image tags, or the user didn't ask for them
+            && !vision_tags_active);
+
+    if(redirect_single_reference_to_img2img)
+    {
+        gp.is_img2img = true;
+        gp.img_init_image = gp.img_extra_images[0];
+        gp.img_extra_images.clear();
+        if (!sd_is_quiet && sddebugmode == 1) {
+            printf("Switching reference image to img2img\n");
+        }
+    }
+
+    if (gp.is_vidgen && !gp.vid_start_frame.valid() && gp.is_img2img && !gp.img_mask.valid())
+    {
+        // no explicit video start frame: the img2img input becomes the video start frame
+        std::swap(gp.vid_start_frame, gp.img_init_image);
+    }
+
+    // limit by image side
+    int img_hard_limit = 8192; // "large enough", just to simplify the code
+    if (klp.img_hard_limit > 0) {
+        img_hard_limit = std::max(std::min(klp.img_hard_limit, img_hard_limit), img_side_min);
+    }
+
+    // limit by image area: avoid crashes due to bugs/limitations on certain models
+    // a single side can be larger, but width*height are limited by img_soft_limit²
+    int img_soft_limit;
+    int hard_megapixel_res_limit = 2048; // hard area limit, no matter the config
+    if (klp.img_soft_limit <= 0) {
+        // default limit is model dependent: ~0.66 megapixel for SD1.5/SD2, 1 megapixel for most models
+        img_soft_limit = (info.is_sd1 || info.is_sd2)?832:1024;
+    } else {
+        // force img_side_min <= limit <= hard_megapixel_res_limit
+        img_soft_limit = std::max(std::min(klp.img_soft_limit, hard_megapixel_res_limit), img_side_min);
+    }
+
+    // unet is limited to multiples of 64; dit models vary
+    int spatial_multiple = info.spatial_multiple;
+
+    sd_fix_resolution(gp.width, gp.height, img_hard_limit, img_soft_limit, spatial_multiple);
+    if (gp.req_width != gp.width || gp.req_height != gp.height) {
+        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
+            gp.req_width, gp.req_height, gp.width, gp.height);
+        present.insert(TRACK_WIDTH);
+        present.insert(TRACK_HEIGHT);
+    }
+
+    // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
+    gp.dotile = (gp.width*gp.height > klp.tiled_vae_threshold*klp.tiled_vae_threshold);
+
+    gp.vae_tile_size = -1;
+    if (gp.dotile) {
+        // bump tile size to 1/4 of the configured maximum non-tiled image size
+        // (so 1/4 of the memory that would be used for that image)
+        const int minimum_tile_size = 256; // from mainline sdcpp
+        int new_vae_tile_size = klp.tiled_vae_threshold;
+        new_vae_tile_size = new_vae_tile_size / 2;
+        new_vae_tile_size = roundup_to(new_vae_tile_size, 64);
+        if (new_vae_tile_size > minimum_tile_size) {
+            gp.vae_tile_size = new_vae_tile_size;
+        }
+    }
+
+    //for img2img
+    std::vector<KcppImage> legacy_video_imgs;
+    int img2imgW = gp.width; //for img2img input
+    int img2imgH = gp.height;
+
+    // fit the img2img input (and mask) to the generation size; the mask is
+    // completed to a full 255 ("keep everything") mask when not provided
+    if (gp.is_img2img)
+    {
+        // the init image may have been swapped into the video start frame
+        if (gp.img_init_image.valid()) {
+            gp.img_init_image = gp.img_init_image.resize(img2imgW, img2imgH, 3);
+            if (!gp.img_init_image.valid()) {
+                return "KCPP SD: load image from memory failed!";
+            }
+        }
+        if (gp.img_mask.valid()) {
+            gp.img_mask = gp.img_mask.resize(img2imgW, img2imgH, 1);
+            if (!gp.img_mask.valid()) {
+                return "KCPP SD: load mask from memory failed!";
+            }
+            if (gp.img_flip_mask) {
+                gp.img_mask = gp.img_mask.flipped_mask();
+            }
+        } else {
+            gp.img_mask = KcppImage::solid(img2imgW, img2imgH, 1, 255);
+        }
+    }
+
+    if(!gp.img_extra_images.empty())
+    {
+        if (vision_tags_active) {
+            prompt_image_ref.resize(std::min(gp.img_extra_images.size(), (size_t)max_extra_images));
+        }
+        for(size_t i=0;i<gp.img_extra_images.size() && i<(size_t)max_extra_images;++i)
+        {
+            const KcppImage& src = gp.img_extra_images.at(i);
+            const bool duplicates_video_frame = gp.is_vidgen && info.is_minimaxh3
+                && (src.same_as(gp.vid_start_frame) || src.same_as(gp.vid_end_frame));
+            KcppImage image;
+            if(supports_reference_images||gp.force_image_edit||vision_tags_active)
+            {
+                if(gp.is_vidgen)
+                {
+                    if (!duplicates_video_frame || (vision_tags_active && image_tags.mentioned.count(i)))
+                    {
+                        // the minimax H3 keeps its references at natural size
+                        image = info.is_minimaxh3 ? src : src.resize(img2imgW, img2imgH, 3);
+                    }
+                }
+                else if(info.supports_ref_image||gp.force_image_edit)
+                {
+                    image = src;
+                    //kcpp fix: qwen image can stack overflow and crash when ref images exceed
+                    // a total res of 512x512 = 262144, so we downscale if that's the case
+                    // kcpp edit 2mar2026: this seems to be better now, so limit to 1024x1024 instead
+                    int res_lim_crash = 1024 * 1024;
+                    if ((int)src.w * (int)src.h > res_lim_crash)
+                    {
+                        float factor = sqrtf((float)res_lim_crash / ((float)src.w * (float)src.h));
+                        uint32_t tgtx = (uint32_t)(src.w * factor);
+                        uint32_t tgty = (uint32_t)(src.h * factor);
+                        if (!sd_is_quiet && sddebugmode == 1)
+                        {
+                            printf("\nResized RefImg %ux%u to %ux%u", src.w, src.h, tgtx, tgty);
+                        }
+                        image = src.resize(tgtx, tgty, 3);
+                    }
+                }
+                else if (info.is_kontext || klp.photomaker_enabled || vision_tags_active)
+                {
+                    image = src;
+                }
+            }
+            if(!image.valid())
+            {
+                continue;
+            }
+            if (vision_tags_active) {
+                prompt_image_ref.set(i, image);
+                if (image_tags.hidden.count(i)) {
+                    continue; // used only as VLM context, kept out of the ref list
+                }
+            }
+            if (duplicates_video_frame || !(supports_reference_images||gp.force_image_edit)) {
+                continue; // Keep frame deduplication in the diffusion reference list.
+            }
+            // version selection for video references happens here, once: only the
+            // minimax H3 (Ref2VA) takes them as references, every other video model
+            // takes its extra images as start/end frames (legacy_video_imgs). The
+            // video settle forwards the IR as-is, without repeating the version
+            // check, so this branch must stay exclusive.
+            if (gp.is_vidgen) {
+                if (info.is_minimaxh3) {
+                    gp.reference_imgs.push_back(image);
+                } else {
+                    legacy_video_imgs.push_back(image);
+                }
+            }
+            else if (info.is_kontext) {
+                gp.reference_imgs.push_back(image);
+            }
+            else if (klp.photomaker_enabled) {
+                gp.photomaker_imgs.push_back(image);
+            }
+            else {
+                gp.reference_imgs.push_back(image);
+            }
+        }
+
+        //ensure prompt has img keyword, otherwise append it
+        if(klp.photomaker_enabled)
+        {
+            if (gp.prompt.find("img") == std::string::npos) {
+                gp.prompt += " img";
+            } else if (gp.prompt.rfind("img", 0) == 0) {
+                // "img" found at the start of the string (position 0), which is not allowed. Add some text before it
+                gp.prompt = "person " + gp.prompt;
+            }
+        }
+
+        if(!sd_is_quiet && sddebugmode==1)
+        {
+            printf("\nImageGen References: RefImg=%zu Wan=%zu Photomaker=%zu\n",gp.reference_imgs.size(),legacy_video_imgs.size(),gp.photomaker_imgs.size());
+        }
+    }
+
+    if (gp.is_vidgen)
+    {
+        // video start/end frames are fitted to the generation size
+        if (gp.vid_start_frame.valid()) {
+            gp.vid_start_frame = gp.vid_start_frame.resize(img2imgW, img2imgH, 3);
+        }
+        if (gp.vid_end_frame.valid()) {
+            gp.vid_end_frame = gp.vid_end_frame.resize(img2imgW, img2imgH, 3);
+        }
+    }
+
+    // reference audio is a video-model feature; the H3 image variant ignores it
+    if(info.is_minimaxh3 && gp.is_vidgen && gp.vid_ref_audios.size()>0)
+    {
+        for(size_t i=0;i<gp.vid_ref_audios.size();++i)
+        {
+            KcppAudio ref_audio = KcppAudio::from_b64(gp.vid_ref_audios[i]);
+            if (!ref_audio.valid()) {
+                return "KCPP SD: load reference audio from base64 failed!";
+            }
+            gp.ref_audios.push_back(ref_audio);
+        }
+    }
+
+    const bool has_minimax_keyframes = info.is_minimaxh3 && (gp.vid_start_frame.valid() || gp.vid_end_frame.valid() || legacy_video_imgs.size() > 0);
+    const bool has_minimax_references = info.is_minimaxh3 && (gp.reference_imgs.size() > 0 || gp.ref_audios.size() > 0);
+    if(has_minimax_keyframes && has_minimax_references)
+    {
+        if(!sd_is_quiet && sddebugmode==1)
+        {
+            printf("\nMiniMax-H3: keyframes and Ref2VA references cannot be mixed; using reference media and ignoring keyframes.\n");
+        }
+        gp.vid_start_frame = KcppImage{};
+        gp.vid_end_frame = KcppImage{};
+        legacy_video_imgs.clear();
+    }
+
+    // the non-minimax video references become the start/end frames when no
+    // explicit frame was given
+    if (legacy_video_imgs.size() >= 2) {
+        if(!gp.vid_start_frame.valid()) {
+            gp.vid_start_frame = legacy_video_imgs[0];
+        }
+        if(!gp.vid_end_frame.valid()) {
+            gp.vid_end_frame = legacy_video_imgs[1];
+        }
+    } else if (legacy_video_imgs.size() == 1) {
+        if(!gp.vid_start_frame.valid() && !gp.vid_end_frame.valid()) {
+            gp.vid_start_frame = legacy_video_imgs[0];
+        }
+    }
+
+    // a passthrough request returns the input image instead of generating
+    gp.is_passthrough = (gp.sample_steps<=1 && gp.strength<=0 && gp.is_img2img && gp.vid_req_frames<=1 && gp.img_extra_images.size()==0);
+    if (gp.is_passthrough && !gp.vid_start_frame.valid() && !gp.img_init_image.valid()) {
+        return "KCPP SD: load image from memory failed!";
+    }
+
+    return {};
 }
 
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
@@ -2457,72 +3426,64 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
     // decode the request into a local parameter representation
     SDGenParams gp;
-    gp.prompt = SAFE_STR(inputs.prompt);
-    gp.negative_prompt = SAFE_STR(inputs.negative_prompt);
-    gp.cfg_scale = inputs.cfg_scale;
-    gp.distilled_guidance = inputs.distilled_guidance;
-    gp.sample_steps = inputs.sample_steps;
-    gp.shifted_timestep = inputs.shifted_timestep;
-    gp.flow_shift = inputs.flow_shift;
-    gp.extra_sample_args = SAFE_STR(inputs.extra_sample_args);
-    gp.eta = inputs.eta;
-    gp.seed = inputs.seed;
-    gp.width = gp.req_width = inputs.width;
-    gp.height = gp.req_height = inputs.height;
-    gp.strength = inputs.denoising_strength;
-    gp.clip_skip = inputs.clip_skip;
-    gp.sample_method = sampler_from_name(inputs.sample_method);
-    gp.scheduler = scheduler_from_name(inputs.scheduler);
-    gp.cache_mode = SAFE_STR(inputs.cache_mode);
-    gp.cache_options = SAFE_STR(inputs.cache_options);
-    gp.circular_x = inputs.circular_x;
-    gp.circular_y = inputs.circular_y;
-    if (inputs.custom_sigmas && inputs.custom_sigmas_count > 0) {
-        gp.custom_sigmas.assign(inputs.custom_sigmas, inputs.custom_sigmas + inputs.custom_sigmas_count);
-    }
     gp.lora_map = klp.lora_map;
-    if (klp.lora_dynamic) {
-        for (int i = 0; i < inputs.lora_len; i++) {
-            gp.lora_map.add_lora(inputs.lora_filenames[i], inputs.lora_multipliers[i]);
-        }
-    }
-    gp.loras = gp.lora_map.get_lora_specs();
-    gp.lora_meta = gp.lora_map.get_lora_meta();
-    gp.upscale = inputs.upscale;
 
-    gp.ref_image_args = "resize_before_vae=on"; // auto resize ref image
-    if (inputs.ref_image_args && *inputs.ref_image_args) {
-        gp.ref_image_args += ",";
-        gp.ref_image_args += inputs.ref_image_args;
-        if (gp.ref_image_args.find("preset") != std::string::npos) {
-            gp.force_image_edit = true;
-            if(!sd_is_quiet && sddebugmode==1) {
-                printf("ref_image_args=\"%s\", forcing edit mode", inputs.ref_image_args);
+    // tracking keys of the fields present in the request payload: the settle
+    // forwards only these (absent = library default)
+    std::set<std::string> present;
+    {
+        SdErrors errors;
+        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
+        if (payload.is_object()) {
+            // one strict getter per field row
+            for (const auto& f : gen_str) {
+                std::string s;
+                if (sdjson_get(s, f.in, payload, errors)) {
+                    gp.*f.p = f.dec ? f.dec(s) : s;
+                    sd_track_key(present, f.out);
+                }
+            }
+            for (const auto& f : gen_f32)
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : gen_i32)
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : gen_i64)
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : gen_bool)
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : gen_vec_str)
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : gen_image)
+                if (sdjson_get_image(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+            for (const auto& f : gen_images)
+                if (sdjson_get_images(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
+
+            // sample_method / scheduler: JSON string -> enum on decode
+            std::string sample_method, scheduler;
+            sdjson_get(sample_method, "sample_method", payload, errors);
+            sdjson_get(scheduler, "scheduler", payload, errors);
+            gp.sample_method = str_to_sample_method(sample_method.c_str());
+            gp.scheduler = str_to_scheduler(scheduler.c_str());
+
+            if (klp.lora_dynamic) {
+                sdjson_get_loras("loras", payload, errors, gp.lora_map);
+            } else {
+                errors.accepted_keys.insert("loras");
+            }
+
+            sdjson_get(gp.custom_sigmas, "custom_sigmas", payload, errors);
+
+            if (sddebugmode) {
+                sdjson_warn_unknown_keys(payload, errors);
             }
         }
-    }
-
-    gp.img.init_image = SAFE_STR(inputs.init_images);
-    gp.img.mask = SAFE_STR(inputs.mask);
-    gp.img.flip_mask = inputs.flip_mask;
-    for(int i=0;i<inputs.extra_images_len;++i)
-    {
-        gp.img.extra_images.push_back(std::string(inputs.extra_images[i]));
-    }
-
-    gp.vid.req_frames = inputs.vid_req_frames;
-    gp.vid.output_type = inputs.video_output_type;
-    gp.vid.fps = inputs.vid_fps;
-    gp.vid.start_frame = SAFE_STR(inputs.video_start_frame);
-    gp.vid.end_frame = SAFE_STR(inputs.video_end_frame);
-    for(int i=0;i<inputs.ref_audios_len;++i)
-    {
-        gp.vid.ref_audios.push_back(std::string(inputs.ref_audios[i]));
+        if (!errors.empty()) {
+            printf("\nError: KCPP SD generate: %s\n", errors.message().c_str());
+            return sd_generation.error(errors.message().c_str());
+        }
     }
 
     const auto& info = klp.info;
-    const bool supports_reference_images = (info.is_video_model || info.supports_ref_image || info.is_kontext || klp.photomaker_enabled);
-    const bool remove_limits = inputs.remove_limits;
 
     {
         std::lock_guard<std::mutex> lock(geninfo.mux);
@@ -2536,35 +3497,18 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         set_preview_images(1);
     }
 
-    // <image:N>/<image:+N> prompt tags reference gp.img.extra_images by position
-    // and route the images to the VLM conditioner; images will be removed from
-    // the ref_images parameter unless a reference has a '+' tag
-    image_tag_refs image_tags;
-    bool vision_tags_active = false;
-    {
-        size_t ref_count = std::min(gp.img.extra_images.size(), (size_t)max_extra_images);
-        std::string tag_err;
-        if (!collect_image_tags(gp.prompt, gp.negative_prompt, ref_count, image_tags, tag_err)) {
-            return sd_generation.error(("KCPP SD: " + tag_err).c_str());
-        }
-        if (image_tags.has_tags) {
-            if (klp.has_llm_vision) {
-                vision_tags_active = true;
-            } else {
-                // the conditioner can't see images: replace the tags with plain
-                // references (upstream would abort the generation)
-                if (!sd_is_quiet && sddebugmode == 1) {
-                    printf("\nKCPP SD: replacing <image:...> tags with plain references, the model has no vision encoder\n");
-                }
-                gp.prompt = strip_image_tags(gp.prompt, image_tags.zero_based);
-                gp.negative_prompt = strip_image_tags(gp.negative_prompt, image_tags.zero_based);
-            }
-        }
-    }
-
     sd_ctx_t* sd_ctx = sd_params->sd_ctx; // protected by no_concurrency mutex
 
     PromptImageRef prompt_image_ref;
+    std::string resolve_error = kcpp_resolve_generation_parameters(gp, klp, prompt_image_ref, present);
+    if (!resolve_error.empty()) {
+        return sd_generation.error(resolve_error.c_str());
+    }
+    // strength applies to image-to-image and to every video request; a txt2img
+    // request leaves it at the library default (as the per-kind settle gates did)
+    if (!gp.is_img2img && !gp.is_vidgen)
+        present.erase("strength");
+
     struct CleanupImageCallbackOnExit {
         sd_ctx_t* sd_ctx;
         ~CleanupImageCallbackOnExit() {
@@ -2572,386 +3516,8 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     } cleanup_image_callback_onexit{sd_ctx};
     sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, &prompt_image_ref);
-    prompt_image_ref.zero_based = image_tags.zero_based;
 
-    if (gp.sample_method == sample_method_t::SAMPLE_METHOD_COUNT) {
-        gp.sample_method = sd_get_default_sample_method(sd_ctx);
-    }
-
-    bool is_img2img = gp.img.init_image != "";
-
-    if (!remove_limits && info.is_flux1)
-    {
-        if (gp.cfg_scale != 1.0f) {
-            // clamp cfg scale
-            if (!sd_is_quiet && sddebugmode) {
-                printf("Flux: clamping CFG Scale to 1\n");
-            }
-            gp.cfg_scale = 1.0f;
-        }
-    }
-
-    if(!remove_limits && info.is_zimage)
-    {
-        if(gp.cfg_scale > 4.0f)
-        {
-            if (!sd_is_quiet && sddebugmode) {
-                printf("Z-Image: clamping CFG Scale to 4.0 to preserve quality\n");
-            }
-            gp.cfg_scale = 4.0f;
-        }
-    }
-
-    if(info.is_sdxs)
-    {
-        if(gp.cfg_scale > 1.0f || gp.sample_steps > 1)
-        {
-            if (!sd_is_quiet && sddebugmode) {
-                printf("SDXS: clamping steps and cfg to 1\n");
-            }
-            gp.cfg_scale = 1.0f;
-            gp.sample_steps = 1;
-        }
-        // A custom sigma list determines the real sampler iteration count and
-        // would otherwise bypass the SDXS one-step restriction above. A
-        // two-value list already represents one step and remains valid.
-        if (gp.custom_sigmas.size() > 2) {
-            if (!sd_is_quiet && sddebugmode) {
-                printf("SDXS: ignoring custom sigma schedule with more than 1 step\n");
-            }
-            gp.custom_sigmas.clear();
-        }
-    }
-
-    bool redirect_single_reference_to_img2img = (
-            // we are not doing img2img already
-            !is_img2img
-            // a single extra image is provided, and mask is NOT provided
-            && gp.img.extra_images.size()==1 && gp.img.mask==""
-            // the model does not support references natively, or through an edit mode/LoRa
-            && !supports_reference_images && !gp.force_image_edit
-            // the model can't handle image tags, or the user didn't ask for them
-            && !vision_tags_active);
-
-    if(redirect_single_reference_to_img2img)
-    {
-        is_img2img = true;
-        gp.img.init_image = gp.img.extra_images[0];
-        gp.img.extra_images.clear();
-        if (!sd_is_quiet && sddebugmode == 1) {
-            printf("Switching reference image to img2img\n");
-        }
-    }
-
-    if (info.is_video_model && gp.vid.start_frame.empty() && is_img2img && gp.img.mask=="")
-    {
-        // no explicit video start frame: the img2img input becomes the video start frame
-        std::swap(gp.vid.start_frame, gp.img.init_image);
-    }
-
-    // limit by image side
-    int img_hard_limit = 8192; // "large enough", just to simplify the code
-    if (klp.img_hard_limit > 0) {
-        img_hard_limit = std::max(std::min(klp.img_hard_limit, img_hard_limit), img_side_min);
-    }
-
-    // limit by image area: avoid crashes due to bugs/limitations on certain models
-    // a single side can be larger, but width*height are limited by img_soft_limit²
-    int img_soft_limit;
-    int hard_megapixel_res_limit = 2048; // hard area limit, no matter the config
-    if (klp.img_soft_limit <= 0) {
-        // default limit is model dependent: ~0.66 megapixel for SD1.5/SD2, 1 megapixel for most models
-        img_soft_limit = (info.is_sd1 || info.is_sd2)?832:1024;
-    } else {
-        // force img_side_min <= limit <= hard_megapixel_res_limit
-        img_soft_limit = std::max(std::min(klp.img_soft_limit, hard_megapixel_res_limit), img_side_min);
-    }
-
-    // unet is limited to multiples of 64; dit models vary
-    int spatial_multiple = info.spatial_multiple;
-
-    sd_fix_resolution(gp.width, gp.height, img_hard_limit, img_soft_limit, spatial_multiple);
-    if (gp.req_width != gp.width || gp.req_height != gp.height) {
-        printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
-            gp.req_width, gp.req_height, gp.width, gp.height);
-    }
-
-    // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
-    bool dotile = (gp.width*gp.height > klp.tiled_vae_threshold*klp.tiled_vae_threshold);
-
-    int vae_tile_size = -1;
-    if (dotile) {
-        // bump tile size to 1/4 of the configured maximum non-tiled image size
-        // (so 1/4 of the memory that would be used for that image)
-        const int minimum_tile_size = 256; // from mainline sdcpp
-        int new_vae_tile_size = klp.tiled_vae_threshold;
-        new_vae_tile_size = new_vae_tile_size / 2;
-        new_vae_tile_size = roundup_to(new_vae_tile_size, 64);
-        if (new_vae_tile_size > minimum_tile_size) {
-            vae_tile_size = new_vae_tile_size;
-        }
-    }
-
-    //for img2img
-    sd_image_t input_image = {0,0,0,nullptr};
-    sd_image_t video_start_image = {0,0,0,nullptr};
-    sd_image_t video_end_image = {0,0,0,nullptr};
-    std::vector<sd_image_t> reference_imgs;
-    std::vector<sd_image_t> legacy_video_imgs;
-    std::vector<sd_image_t> photomaker_imgs;
-    std::vector<sd_audio_t> reference_audios;
-    struct ReferenceAudioCleanup {
-        std::vector<sd_audio_t>& audios;
-        ~ReferenceAudioCleanup() {
-            for (auto& audio : audios) {
-                if (audio.data) {
-                    free(audio.data);
-                    audio.data = nullptr;
-                }
-            }
-        }
-    } reference_audio_cleanup { reference_audios };
-
-    int nx, ny, nc;
-    int img2imgW = gp.width; //for img2img input
-    int img2imgH = gp.height;
-    int img2imgC = 3; // Assuming RGB image
-
-    std::string ts = get_timestamp_str();
-    if(!sd_is_quiet)
-    {
-        printf("\n[%s] Generating Image (%d steps)\n",ts.c_str(),gp.sample_steps);
-    }else{
-        printf("\n[%s] Generating (%d st.)\n",ts.c_str(),gp.sample_steps);
-    }
-
-    fflush(stdout);
-
-    struct ImageBuffer {
-        uint8_t * input = nullptr;
-        uint8_t * mask = nullptr;
-        std::vector<uint8_t *> extra;
-        ~ImageBuffer() {
-            stbi_image_free(input);
-            stbi_image_free(mask);
-            for(auto buf : extra) {
-                stbi_image_free(buf);
-            }
-        }
-    } image_buffer;
-
-    auto load_extra_image = [&](const std::string& b64, bool resize_to_generation) -> sd_image_t {
-        sd_image_t image = {0,0,0,nullptr};
-        if (b64.empty()) {
-            return image;
-        }
-        int nx2, ny2, nc2;
-        uint8_t * loaded = resize_to_generation
-            ? load_image_from_b64(b64,nx2,ny2,img2imgW,img2imgH,3)
-            : load_image_from_b64(b64,nx2,ny2);
-        if(loaded)
-        {
-            image_buffer.extra.push_back(loaded);
-            image.width = nx2;
-            image.height = ny2;
-            image.channel = 3;
-            image.data = loaded;
-        }
-        return image;
-    };
-
-    if (info.is_video_model)
-    {
-        video_start_image = load_extra_image(gp.vid.start_frame, true);
-        video_end_image = load_extra_image(gp.vid.end_frame, true);
-    }
-
-    if(gp.img.extra_images.size()>0)
-    {
-        if (vision_tags_active) {
-            prompt_image_ref.image_pool.resize(std::min(gp.img.extra_images.size(), (size_t)max_extra_images));
-        }
-        for(int i=0;i<gp.img.extra_images.size() && i<max_extra_images;++i)
-        {
-            const bool duplicates_video_frame = info.is_video_model && info.is_minimaxh3
-                && (gp.img.extra_images[i] == gp.vid.start_frame || gp.img.extra_images[i] == gp.vid.end_frame);
-            sd_image_t image = {0,0,0,nullptr};
-            if(supports_reference_images||gp.force_image_edit||vision_tags_active)
-            {
-                int nx2, ny2, nc2;
-                int desiredchannels = 3;
-                if(info.is_video_model)
-                {
-                    if (!duplicates_video_frame || (vision_tags_active && image_tags.mentioned.count(i)))
-                    {
-                        image = load_extra_image(gp.img.extra_images[i], !info.is_minimaxh3);
-                    }
-                }
-                else if(info.supports_ref_image||gp.force_image_edit)
-                {
-                    uint8_t * loaded = load_image_from_b64(gp.img.extra_images[i],nx2,ny2);
-                    if(loaded)
-                    {
-                        //kcpp fix: qwen image can stack overflow and crash when ref images exceed
-                        // a total res of 512x512 = 262144, so we downscale if that's the case
-                        // kcpp edit 2mar2026: this seems to be better now, so limit to 1024x1024 instead
-                        int tgtx = nx2;
-                        int tgty = ny2;
-                        int res_lim_crash = 1024 * 1024;
-                        if (nx2 * ny2 > res_lim_crash)
-                        {
-                            float factor = sqrtf((float)res_lim_crash / ((float)nx2 * (float)ny2));
-                            tgtx = (int)(nx2 * factor);
-                            tgty = (int)(ny2 * factor);
-                            if (!sd_is_quiet && sddebugmode == 1)
-                            {
-                                printf("\nResized RefImg %dx%d to %dx%d", nx2, ny2, tgtx, tgty);
-                            }
-                            loaded = resize_image(loaded, nx2, ny2, tgtx, tgty);
-                        }
-                        if(loaded)
-                        {
-                            image_buffer.extra.push_back(loaded);
-                            image.width = nx2;
-                            image.height = ny2;
-                            image.channel = desiredchannels;
-                            image.data = loaded;
-                        }
-                    }
-                }
-                else if (info.is_kontext || klp.photomaker_enabled || vision_tags_active)
-                {
-                    uint8_t * loaded = load_image_from_b64(gp.img.extra_images[i],nx2,ny2);
-                    if(loaded)
-                    {
-                        image_buffer.extra.push_back(loaded);
-                        image.width = nx2;
-                        image.height = ny2;
-                        image.channel = desiredchannels;
-                        image.data = loaded;
-                    }
-                }
-            }
-            if(!image.data)
-            {
-                continue;
-            }
-            if (vision_tags_active) {
-                prompt_image_ref.image_pool[i] = image;
-                if (image_tags.hidden.count(i)) {
-                    continue; // used only as VLM context, kept out of the ref list
-                }
-            }
-            if (duplicates_video_frame || !(supports_reference_images||gp.force_image_edit)) {
-                continue; // Keep frame deduplication in the diffusion reference list.
-            }
-            if (info.is_video_model) {
-                if (info.is_minimaxh3) {
-                    reference_imgs.push_back(image);
-                } else {
-                    legacy_video_imgs.push_back(image);
-                }
-            }
-            else if (info.is_kontext) {
-                reference_imgs.push_back(image);
-            }
-            else if (klp.photomaker_enabled) {
-                photomaker_imgs.push_back(image);
-            }
-            else {
-                reference_imgs.push_back(image);
-            }
-        }
-
-        //ensure prompt has img keyword, otherwise append it
-        if(klp.photomaker_enabled)
-        {
-            if (gp.prompt.find("img") == std::string::npos) {
-                gp.prompt += " img";
-            } else if (gp.prompt.rfind("img", 0) == 0) {
-                // "img" found at the start of the string (position 0), which is not allowed. Add some text before it
-                gp.prompt = "person " + gp.prompt;
-            }
-        }
-
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            printf("\nImageGen References: RefImg=%zu Wan=%zu Photomaker=%zu\n",reference_imgs.size(),legacy_video_imgs.size(),photomaker_imgs.size());
-        }
-    }
-
-    // reference audio is a video-model feature; the H3 image variant ignores it
-    if(info.is_minimaxh3 && info.is_video_model && gp.vid.ref_audios.size()>0)
-    {
-        for(int i=0;i<gp.vid.ref_audios.size();++i)
-        {
-            sd_audio_t ref_audio = load_audio_from_b64(gp.vid.ref_audios[i]);
-            if (ref_audio.data == nullptr) {
-                return sd_generation.error("KCPP SD: load reference audio from base64 failed!");
-            }
-            reference_audios.push_back(ref_audio);
-        }
-    }
-
-    const bool has_minimax_keyframes = info.is_minimaxh3 && (video_start_image.data || video_end_image.data || legacy_video_imgs.size() > 0);
-    const bool has_minimax_references = info.is_minimaxh3 && (reference_imgs.size() > 0 || reference_audios.size() > 0);
-    if(has_minimax_keyframes && has_minimax_references)
-    {
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            printf("\nMiniMax-H3: keyframes and Ref2VA references cannot be mixed; using reference media and ignoring keyframes.\n");
-        }
-        video_start_image = {0,0,0,nullptr};
-        video_end_image = {0,0,0,nullptr};
-        legacy_video_imgs.clear();
-    }
-
-    // settle the local parameters into the upstream image generation params
-    sd_img_gen_params_t params = {};
-    sd_img_gen_params_init (&params);
-    params.batch_count = 1;
-    params.ref_image_args = gp.ref_image_args.c_str();
-    params.prompt = gp.prompt.c_str();
-    params.negative_prompt = gp.negative_prompt.c_str();
-    params.clip_skip = gp.clip_skip;
-    params.sample_params.guidance.txt_cfg = gp.cfg_scale;
-    // params.sample_params.guidance.img_cfg = gp.cfg_scale; //removed, breaks qwen img edit and more
-    if (gp.distilled_guidance >= 0.f) {
-        params.sample_params.guidance.distilled_guidance = gp.distilled_guidance;
-    }
-    params.width = gp.width;
-    params.height = gp.height;
-    params.sample_params.sample_method = gp.sample_method;
-    params.sample_params.scheduler = gp.scheduler;
-    params.sample_params.sample_steps = gp.sample_steps;
-    if (!gp.custom_sigmas.empty()) {
-        params.sample_params.custom_sigmas = gp.custom_sigmas.data();
-        params.sample_params.custom_sigmas_count = (int)gp.custom_sigmas.size();
-    }
-    params.sample_params.shifted_timestep = gp.shifted_timestep;
-    if (gp.eta >= 0.f && gp.eta <= 1.f) {
-        params.sample_params.eta = gp.eta;
-    }
-    if (gp.flow_shift > 0.f && gp.flow_shift != INFINITY) {
-        params.sample_params.flow_shift = gp.flow_shift;
-    }
-    params.sample_params.extra_sample_args = gp.extra_sample_args.c_str();
-    params.seed = gp.seed;
-    params.strength = gp.strength;
-    params.vae_tiling_params.enabled = dotile;
-    if (vae_tile_size > 0) {
-        params.vae_tiling_params.tile_size_w = vae_tile_size;
-        params.vae_tiling_params.tile_size_h = vae_tile_size;
-    }
-    if(dotile)
-    {
-        params.vae_tiling_params.temporal_tiling = true;
-    }
-    parse_cache_options(params.cache, gp.cache_mode, gp.cache_options);
-    params.circular_x = gp.circular_x;
-    params.circular_y = gp.circular_y;
-
-    if(!sd_is_quiet && sddebugmode==1) {
+    if(!gp.is_passthrough && !sd_is_quiet && sddebugmode==1) {
         if (gp.loras.size() > 0) {
             printf("Applying LoRAs:\n");
             for(size_t i=0;i<gp.loras.size();++i)
@@ -2961,285 +3527,237 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         }
     }
 
-    // note sdcpp tracks previously applied LoRAs and weights,
-    // and apply/unapply the differences at each gen
-    params.loras = gp.loras.data();
-    params.lora_count = gp.loras.size();
+    KcppAudio generated_audio;
+    KcppImages result_images;
+    int generated_num_results = -1; // -1 failure, 0 passthrough
+    std::vector<nlohmann::json> jsonresults; // the library's per-result generation info
 
-    params.ref_images = reference_imgs.data();
-    params.ref_images_count = reference_imgs.size();
-    params.pm_params.id_images = photomaker_imgs.data();
-    params.pm_params.id_images_count = photomaker_imgs.size();
-
-     //special case, is img2img and denoise strength is 0 and steps is 1, do a passthru
-    bool is_passthrough = (gp.sample_steps<=1 && gp.strength<=0 && is_img2img && gp.vid.req_frames<=1 && gp.img.extra_images.size()==0);
-    sd_audio_t* generated_audio = nullptr;
-
-    sd_image_generation_result_t* img_result = nullptr;
-    sd_video_generation_result_t* vid_result = nullptr;
-    int generated_num_results = 0;
-
-    if(info.is_video_model)
+    // the timestamped start line lives in each branch: it names what is about to
+    // run, and passthrough gets one too, since the upscaler may still run
+    if (gp.is_passthrough)
     {
-        std::vector<sd_image_t> control_frames; //empty for now
-        sd_vid_gen_params_t vid_gen_params = {};
-        sd_vid_gen_params_init (&vid_gen_params);
-        vid_gen_params.prompt = params.prompt;
-        vid_gen_params.negative_prompt = params.negative_prompt;
-        vid_gen_params.clip_skip = params.clip_skip;
-        vid_gen_params.control_frames = control_frames.data();
-        vid_gen_params.control_frames_size = (int)control_frames.size();
-        vid_gen_params.width = params.width;
-        vid_gen_params.height = params.height;
-        vid_gen_params.sample_params = params.sample_params;
-        vid_gen_params.strength = params.strength;
-        vid_gen_params.seed = params.seed;
-        vid_gen_params.video_frames = gp.vid.req_frames;
-        vid_gen_params.fps = gp.vid.fps;
-        vid_gen_params.vae_tiling_params = params.vae_tiling_params;
-        vid_gen_params.loras = params.loras;
-        vid_gen_params.lora_count = params.lora_count;
-        if (info.is_minimaxh3 && reference_imgs.size() > 0) {
-            vid_gen_params.ref_images = reference_imgs.data();
-            vid_gen_params.ref_images_count = (int)reference_imgs.size();
+        // no generation at all: the output block below returns the input image
+        // (upscaled when requested) as-is
+        generated_num_results = 0;
+        printf("\n[%s] No generation triggered, passthrough mode.\n", get_timestamp_str().c_str());
+        fflush(stdout);
+    }
+    else if(gp.is_vidgen)
+    {
+        std::string ts = get_timestamp_str();
+        if(!sd_is_quiet)
+        {
+            printf("\n[%s] Generating Video (%d steps)\n",ts.c_str(),gp.sample_steps);
+        }else{
+            printf("\n[%s] Generating (%d st.)\n",ts.c_str(),gp.sample_steps);
         }
-        if (info.is_minimaxh3 && info.is_video_model && reference_audios.size() > 0) {
-            vid_gen_params.ref_audios = reference_audios.data();
-            vid_gen_params.ref_audios_count = (int)reference_audios.size();
-        }
-        if (legacy_video_imgs.size() >= 2) {
-            if(!video_start_image.data) {
-                video_start_image = legacy_video_imgs[0];
+
+        fflush(stdout);
+
+        // settle the resolved parameters into the video generation options;
+        // only request-present fields are set (absent = library default)
+        sd_result_t* vid_result = nullptr;
+        {
+            auto* opt = sd_vid_gen_opt_create();
+            settle_gen_tables(opt, gp, present);
+            if (gp.vid_req_frames > 0) {
+                sd_opt_set_int(opt, "video_frames", gp.vid_req_frames);
             }
-            if(!video_end_image.data) {
-                video_end_image = legacy_video_imgs[1];
+            if (gp.vid_fps > 0) {
+                sd_opt_set_int(opt, "fps", gp.vid_fps);
             }
-        } else if (legacy_video_imgs.size() == 1) {
-            if(!video_start_image.data && !video_end_image.data) {
-                video_start_image = legacy_video_imgs[0];
+            if (!gp.custom_sigmas.empty()) {
+                sd_opt_set_floats(opt, "sample.sigmas", gp.custom_sigmas.data(), gp.custom_sigmas.size());
+            }
+            if (gp.sample_method != sample_method_t::SAMPLE_METHOD_COUNT) {
+                sd_opt_set_string(opt, "sample.method", sd_sample_method_name(gp.sample_method));
+            }
+            if (gp.scheduler != scheduler_t::SCHEDULER_COUNT) {
+                sd_opt_set_string(opt, "sample.scheduler", sd_scheduler_name(gp.scheduler));
+            }
+            sd_opt_set_bool(opt, "vae_tiling.enabled", gp.dotile);
+            if (gp.vae_tile_size > 0) {
+                sd_opt_set_int(opt, "vae_tiling.tile_size_w", gp.vae_tile_size);
+                sd_opt_set_int(opt, "vae_tiling.tile_size_h", gp.vae_tile_size);
+            }
+            if (gp.dotile) {
+                sd_opt_set_bool(opt, "vae_tiling.temporal_tiling", true);
+            }
+            parse_cache_options(opt, gp.cache_mode, gp.cache_options);
+            // the library tracks previously applied LoRAs and applies the
+            // difference at each gen: an empty list unapplies all
+            sd_opt_set_loras(opt, "loras", gp.loras.data(), gp.loras.size());
+            set_images_opt(opt, "ref_images", gp.reference_imgs);
+            set_audios_opt(opt, "ref_audios", gp.ref_audios);
+            set_image_opt(opt, "init_image", gp.vid_start_frame);
+            set_image_opt(opt, "end_image", gp.vid_end_frame);
+
+            sd_status_t status = sd_generate_video(sd_ctx, opt, &vid_result);
+            sd_opt_free(opt); // the option set is consumed (or rejected) by now
+            if (status != SD_STATUS_OK || vid_result == nullptr) {
+                if (vid_result != nullptr) {
+                    sd_result_free(vid_result);
+                    vid_result = nullptr;
+                }
             }
         }
-        if (video_start_image.data) {
-            vid_gen_params.init_image = video_start_image;
-        }
-        if (video_end_image.data) {
-            vid_gen_params.end_image = video_end_image;
-        }
+
         if(!sd_is_quiet && sddebugmode==1)
         {
             std::stringstream ss;
-            ss  << "\nVID PROMPT:" << vid_gen_params.prompt
-            << "\nNPROMPT:"   << vid_gen_params.negative_prompt
-            << "\nCLPSKP:"   << vid_gen_params.clip_skip
-            << "\nSIZE:"     << vid_gen_params.width << "x" << vid_gen_params.height
-            << "\nSTEP:"     << vid_gen_params.sample_params.sample_steps
-            << "\nSEED:"     << vid_gen_params.seed
-            << "\nSTRENGTH:" << vid_gen_params.strength
-            << "\nFRAMES:"   << vid_gen_params.video_frames
-            << "\nCTRL_FRM:" << vid_gen_params.control_frames_size
-            << "\nINIT_IMGS:" << ((vid_gen_params.init_image.data ? 1 : 0) + (vid_gen_params.end_image.data ? 1 : 0))
-            << "\nREF_IMGS:" << vid_gen_params.ref_images_count
-            << "\nREF_AUDIOS:" << vid_gen_params.ref_audios_count
-            << "\n\n";
+            ss  << "\nVID PROMPT:" << gp.prompt
+                << "\nNPROMPT:"   << gp.negative_prompt
+                << "\nCLPSKP:"   << gp.clip_skip
+                << "\nSIZE:"     << gp.width << "x" << gp.height
+                << "\nSTEP:"     << gp.sample_steps
+                << "\nSEED:"     << gp.seed
+                << "\nSTRENGTH:" << gp.strength
+                << "\nFRAMES:"   << gp.vid_req_frames
+                << "\nINIT_IMGS:" << ((gp.vid_start_frame.valid() ? 1 : 0) + (gp.vid_end_frame.valid() ? 1 : 0))
+                << "\nREF_IMGS:" << gp.reference_imgs.size()
+                << "\nREF_AUDIOS:" << gp.ref_audios.size()
+                << "\n\n";
             printf("%s", ss.str().c_str());
         }
 
         fflush(stdout);
 
-        vid_result = nullptr;
-        generated_audio = nullptr;
-        int output_fps = gp.vid.fps;
-        if (is_passthrough) {
-            // passthrough: skip generation and return the start frame (the img2img
-            // input, swapped in above) as-is. input_image feeds the passthrough block
-            // below; generated_num_results stays 0 so the result loop is skipped.
-            if (video_start_image.data) {
-                input_image = video_start_image;
-            } else if (gp.img.init_image != "") {
-                // a mask prevented the init->start-frame swap; load the input directly
-                image_buffer.input = load_image_from_b64(gp.img.init_image, nx, ny, img2imgW, img2imgH, 3);
-                input_image.width = img2imgW;
-                input_image.height = img2imgH;
-                input_image.channel = 3;
-                input_image.data = image_buffer.input;
+        generated_audio = KcppAudio{};
+        int output_fps = gp.vid_fps;
+        if (vid_result != nullptr) {
+            const sd_video_t* vid = sd_result_get_video(vid_result);
+            if (vid != nullptr && vid->data != nullptr) {
+                generated_num_results = (int) sd_tensor_dim(vid->data, 3);
+                for (int i = 0; i < generated_num_results; ++i) {
+                    result_images.push_back(KcppImage::from_tensor(vid->data, i));
+                }
+                output_fps = vid->fps;
+                generated_audio = (vid->audio.data != nullptr) ? KcppAudio::from_audio(&vid->audio) : KcppAudio{};
             }
-            if (!input_image.data) {
-                return sd_generation.error("KCPP SD: load image from memory failed!");
+            jsonresults.push_back(parse_generation_info(sd_result_get_generation_info(vid_result, 0)));
+            sd_result_free(vid_result);
+            if(!sd_is_quiet && sddebugmode==1)
+            {
+                printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid_req_frames, generated_num_results);
+                if (output_fps != gp.vid_fps) {
+                    printf("\nRequested FPS: %d, Generated FPS: %d\n", gp.vid_fps, output_fps);
+                }
             }
-        } else if (!generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
-            vid_result = nullptr;
+            gp.vid_fps = output_fps;
         }
-        if (vid_result) {
-            generated_num_results = vid_result->frame_count;
-            generated_audio = vid_result->audio;
-            output_fps = vid_result->fps;
-        }
-        if(!sd_is_quiet && sddebugmode==1)
-        {
-            printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid.req_frames, generated_num_results);
-            if (output_fps != gp.vid.fps) {
-                printf("\nRequested FPS: %d, Generated FPS: %d\n", gp.vid.fps, output_fps);
-            }
-        }
-        gp.vid.fps = output_fps;
     }
-    else if (!is_img2img)
+    else
     {
-        if(!sd_is_quiet && sddebugmode==1)
+        // settle the resolved parameters into the image generation options;
+        // only request-present fields are set (absent = library default)
+        sd_result_t* img_result = nullptr;
         {
-            char* buf = sd_img_gen_params_to_str(&params);
-            if(buf)
-            {
-                printf("\n%s\n", buf);
-                free(buf);
+            auto* opt = sd_img_gen_opt_create();
+            settle_gen_tables(opt, gp, present);
+            if (gp.is_img2img) {
+                // the input and mask were fitted (and the mask completed/flipped)
+                // while resolving the parameters
+                set_image_opt(opt, "init_image", gp.img_init_image);
+                set_image_opt(opt, "mask_image", gp.img_mask);
             }
-        }
-
-        fflush(stdout);
-
-        img_result = nullptr;
-        if (!generate_image(sd_ctx, &params, &img_result)) {
-            img_result = nullptr;
-        }
-        generated_num_results = img_result ? img_result->count : 0;
-
-    } else {
-
-        image_buffer.input = load_image_from_b64(gp.img.init_image,nx,ny,img2imgW,img2imgH,3);
-
-        if (!image_buffer.input) {
-            return sd_generation.error("KCPP SD: load image from memory failed!");
-        }
-
-        if(gp.img.mask!="")
-        {
-            int nx2, ny2, nc2;
-            image_buffer.mask = load_image_from_b64(gp.img.mask,nx2,ny2,img2imgW,img2imgH,1);
-
-            if (!image_buffer.mask) {
-                return sd_generation.error("KCPP SD: load mask from memory failed!");
+            if (!gp.custom_sigmas.empty()) {
+                sd_opt_set_floats(opt, "sample.sigmas", gp.custom_sigmas.data(), gp.custom_sigmas.size());
             }
+            if (gp.sample_method != sample_method_t::SAMPLE_METHOD_COUNT) {
+                sd_opt_set_string(opt, "sample.method", sd_sample_method_name(gp.sample_method));
+            }
+            if (gp.scheduler != scheduler_t::SCHEDULER_COUNT) {
+                sd_opt_set_string(opt, "sample.scheduler", sd_scheduler_name(gp.scheduler));
+            }
+            sd_opt_set_bool(opt, "vae_tiling.enabled", gp.dotile);
+            if (gp.vae_tile_size > 0) {
+                sd_opt_set_int(opt, "vae_tiling.tile_size_w", gp.vae_tile_size);
+                sd_opt_set_int(opt, "vae_tiling.tile_size_h", gp.vae_tile_size);
+            }
+            if (gp.dotile) {
+                sd_opt_set_bool(opt, "vae_tiling.temporal_tiling", true);
+            }
+            parse_cache_options(opt, gp.cache_mode, gp.cache_options);
+            // the library tracks previously applied LoRAs and applies the
+            // difference at each gen: an empty list unapplies all
+            sd_opt_set_loras(opt, "loras", gp.loras.data(), gp.loras.size());
+            set_images_opt(opt, "ref_images", gp.reference_imgs);
+            set_images_opt(opt, "photomaker.id_images", gp.photomaker_imgs);
 
-            if(gp.img.flip_mask)
-            {
-                int bufsiz = nx2 * ny2 * 1; //1 channel
-                for (int i = 0; i < bufsiz; ++i) {
-                    image_buffer.mask[i] = 255 - image_buffer.mask[i];
+            sd_status_t status = sd_generate_image(sd_ctx, opt, &img_result);
+            sd_opt_free(opt); // the option set is consumed (or rejected) by now
+            if (status != SD_STATUS_OK || img_result == nullptr) {
+                if (img_result != nullptr) {
+                    sd_result_free(img_result);
+                    img_result = nullptr;
                 }
             }
         }
 
-        input_image.width = img2imgW;
-        input_image.height = img2imgH;
-        input_image.channel = img2imgC;
-        input_image.data = image_buffer.input;
-
-        uint8_t* mask_image_buffer    = NULL;
-        std::vector<uint8_t> default_mask_image_vec(img2imgW * img2imgH, 255);
-        if (image_buffer.mask) {
-            mask_image_buffer = image_buffer.mask;
-        } else {
-            mask_image_buffer = default_mask_image_vec.data();
-        }
-        sd_image_t mask_image = { (uint32_t) img2imgW, (uint32_t) img2imgH, 1, mask_image_buffer };
-
-        params.init_image = input_image;
-        params.mask_image = mask_image;
-
-        if(!sd_is_quiet && sddebugmode==1)
+        std::string ts = get_timestamp_str();
+        if(!sd_is_quiet)
         {
-            char* buf = sd_img_gen_params_to_str(&params);
-            if(buf)
-            {
-                printf("\n%s\n", buf);
-                free(buf);
-            }
+            printf("\n[%s] Generating Image (%d steps)\n",ts.c_str(),gp.sample_steps);
+        }else{
+            printf("\n[%s] Generating (%d st.)\n",ts.c_str(),gp.sample_steps);
         }
 
         fflush(stdout);
 
-        if (is_passthrough) {
-            printf("No generation triggered, passthrough mode.\n");
-        } else {
-            img_result = nullptr;
-            if (!generate_image(sd_ctx, &params, &img_result)) {
-                img_result = nullptr;
+        // txt2img and img2img differ only by what the settle put in
+        // init_image/mask, so both use the same call
+        if (img_result != nullptr) {
+            generated_num_results = (int) sd_result_get_image_count(img_result);
+            for (int i = 0; i < generated_num_results; ++i) {
+                result_images.push_back(KcppImage::from_tensor(sd_result_get_image(img_result, i)));
+                jsonresults.push_back(parse_generation_info(sd_result_get_generation_info(img_result, i)));
             }
-            generated_num_results = img_result ? img_result->count : 0;
+            sd_result_free(img_result);
         }
     }
 
-    if (!is_passthrough && (info.is_video_model ? vid_result == nullptr : img_result == nullptr)) {
-        if (info.is_qwenimg && params.ref_images_count > 0) {
+    if (generated_num_results < 0) {
+        if (info.is_qwenimg && gp.reference_imgs.size() > 0) {
             printf("\nKCPP SD: If using Qwen Image 2.1, editing requires Qwen3-VL vision mmproj!\n");
         }
         return sd_generation.error("KCPP SD generate failed!");
     }
 
-    bool isanim = (gp.vid.req_frames>1 && generated_num_results>1 && info.is_video_model);
+    bool isanim = (gp.vid_req_frames>1 && generated_num_results>1 && gp.is_vidgen);
     nlohmann::json jsoninfo = nlohmann::json::object();
-    if (!isanim) {
-        jsoninfo["prompt"] = params.prompt + gp.lora_meta;
-        if (*params.negative_prompt)
-            jsoninfo["negative_prompt"] = params.negative_prompt;
-        jsoninfo["seed"] = params.seed;
-        jsoninfo["cfg_scale"] = round_for_info(params.sample_params.guidance.txt_cfg);
-        jsoninfo["width"] = params.width;
-        jsoninfo["height"] = params.height;
-        jsoninfo["steps"] = params.sample_params.sample_steps;
-        jsoninfo["sampler_name"] = sd_sample_method_name(params.sample_params.sample_method);
-        if (params.clip_skip > 0)
-            jsoninfo["clip_skip"] = params.clip_skip;
-        jsoninfo["extra_generation_params"] = nlohmann::json::object();
-        if (params.sample_params.scheduler != scheduler_t::SCHEDULER_COUNT)
-            jsoninfo["extra_generation_params"]["Schedule type"] = get_scheduler_name(params.sample_params.scheduler);
-        if (params.sample_params.eta >= 0 && params.sample_params.eta <= 1)
-            jsoninfo["eta"] = round_for_info(params.sample_params.eta);
-        if (is_img2img)
-            jsoninfo["denoising_strength"] = round_for_info(params.strength);
-        if (sd_params->load_params.model_path.empty())
-            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.diffusion_model_path);
-        else
-            jsoninfo["sd_model_name"] = friendly_model_name(sd_params->load_params.model_path);
-        std::string vae = sd_params->load_params.vae_path;
-        if (vae.empty())
-            // TODO: check if auto1111 uses a specific field for tae
-            vae = sd_params->load_params.taesd_path;
-        if (!vae.empty())
-            jsoninfo["sd_vae_name"] = friendly_model_name(vae);
-        jsoninfo["infotexts"] = nlohmann::json::array();
-        jsoninfo["all_prompts"] = nlohmann::json::array();
-        jsoninfo["all_negative_prompts"] = nlohmann::json::array();
-        jsoninfo["all_seeds"] = nlohmann::json::array();
-        jsoninfo["lora_meta"] = gp.lora_meta;
-        jsoninfo["version"] = "KoboldCpp";
-    }
-    sd_image_t* upscaled_image = nullptr;
     std::string gen_data;
     std::string gen_data2;
     std::string final_frame_data;
 
     auto upscaler_ctx = gp.upscale ? sd_params->upscaler_ctx : nullptr;
 
-    if (is_passthrough)
+    if (gp.is_passthrough)
     {
+        // passthrough ran no generation: don't report the parameters as if it did,
+        // only echo the prompt, which may describe the imported image
+        if (!gp.prompt.empty())
+            jsoninfo["prompt"] = gp.prompt;
+
+        // the start frame (the swapped-in img2img input) if present, else the input
+        const KcppImage& pimg = gp.vid_start_frame.valid() ? gp.vid_start_frame : gp.img_init_image;
         if(upscaler_ctx != nullptr)
         {
             printf("Upscaling original image (passthrough)...\n");
-            gen_data = upscale_image_to_png_base64(upscaler_ctx, input_image, 2);
+            gen_data = upscale_image_to_png_base64(upscaler_ctx, pimg);
         }
         else {
-            gen_data = raw_image_to_png_base64(input_image);
+            gen_data = raw_image_to_png_base64(pimg);
         }
     }
     else if (isanim)
     {
+        jsoninfo = build_result_jsoninfo(jsonresults);
         //if multiframe, make a video
-        if (generated_num_results > 0 && vid_result && vid_result->frames && vid_result->frames[0].data)
+        if (!result_images.empty() && result_images.at(0).valid())
         {
             if(!sd_is_quiet && sddebugmode==1)
             {
-                printf("\nSaving video buffer, VIDEO_OUTPUT_TYPE=%d...",gp.vid.output_type);
+                printf("\nSaving video buffer, VIDEO_OUTPUT_TYPE=%d...",gp.vid_output_type);
             }
             uint8_t * out_data = nullptr;
             uint8_t * out_data2 = nullptr;
@@ -3248,27 +3766,26 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             int status = 0;
             int status2 = 0;
 
-            const bool output_gif  = gp.vid.output_type == 0 || gp.vid.output_type == 2;
-            const bool output_webp = gp.vid.output_type == 3 || gp.vid.output_type == 4;
-            const bool output_avi  = gp.vid.output_type == 1 || gp.vid.output_type == 2 || gp.vid.output_type == 4;
+            const bool output_gif  = gp.vid_output_type == 0 || gp.vid_output_type == 2;
+            const bool output_webp = gp.vid_output_type == 3 || gp.vid_output_type == 4;
+            const bool output_avi  = gp.vid_output_type == 1 || gp.vid_output_type == 2 || gp.vid_output_type == 4;
 
             if(output_gif)
             {
-                status = create_gif_buf_from_sd_images_msf(vid_result->frames, generated_num_results, gp.vid.fps, &out_data,&out_len);
+                status = create_gif_buf_msf(result_images, gp.vid_fps, &out_data,&out_len);
             }
             else if(output_webp)
             {
-                status = create_animated_webp_buf_from_sd_images(vid_result->frames, generated_num_results, gp.vid.fps, &out_data,&out_len);
+                status = create_animated_webp_buf(result_images, gp.vid_fps, &out_data,&out_len);
             }
             if(output_avi)
             {
-                status2 = create_mjpg_avi_membuf_from_sd_images(vid_result->frames, generated_num_results, gp.vid.fps, 40, &out_data2,&out_len2, generated_audio);
+                status2 = create_mjpg_avi_membuf(result_images, gp.vid_fps, 40, &out_data2,&out_len2, &generated_audio);
             }
 
             if(generated_num_results>1)
             {
-                sd_image_t *final_frame_image = &vid_result->frames[generated_num_results-1];
-                final_frame_data = raw_image_to_png_base64(*final_frame_image);
+                final_frame_data = raw_image_to_png_base64(result_images.at(generated_num_results-1));
             }
 
             if(!sd_is_quiet && sddebugmode==1)
@@ -3298,36 +3815,28 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
                 free(out_data2);
             }
         }
-        free_sd_video_generation_result(vid_result);
-        vid_result = nullptr;
     }
     else
     {
+        jsoninfo = build_result_jsoninfo(jsonresults);
         for (int i = 0; i < generated_num_results; i++)
         {
-            sd_image_t& result_image = info.is_video_model ? vid_result->frames[i] : img_result->items[i].image;
-            if (result_image.data == NULL) {
+            const KcppImage& result_image = result_images.at(i);
+            if (!result_image.valid()) {
                 continue;
             }
-            std::string meta_image_info = get_image_params(params, gp.lora_meta, i);
+            std::string meta_image_info = get_image_info_text(jsonresults[i], i);
             if(upscaler_ctx != nullptr && gp.upscale)
             {
                 printf("Upscaling output image...\n");
-                gen_data = upscale_image_to_png_base64(upscaler_ctx, result_image, 2, meta_image_info);
+                gen_data = upscale_image_to_png_base64(upscaler_ctx, result_image, meta_image_info);
             } else {
                 gen_data = raw_image_to_png_base64(result_image, meta_image_info);
             }
             jsoninfo["infotexts"][i] = meta_image_info;
-            jsoninfo["all_seeds"][i] = params.seed + i;
-            jsoninfo["all_prompts"][i] = params.prompt;
-            jsoninfo["all_negative_prompts"][i] = params.negative_prompt;
-        }
-        if (info.is_video_model) {
-            free_sd_video_generation_result(vid_result);
-            vid_result = nullptr;
-        } else {
-            free_sd_image_generation_result(img_result);
-            img_result = nullptr;
+            jsoninfo["all_seeds"][i] = jsoninfo.value("seed", gp.seed) + i;
+            jsoninfo["all_prompts"][i] = jsoninfo["prompt"];
+            jsoninfo["all_negative_prompts"][i] = jsoninfo.value("negative_prompt", "");
         }
     }
 
@@ -3346,7 +3855,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     return sd_generation.outputs(1);
 }
 
-static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data)
+static void step_callback(int step, int frame_count, const sd_tensor_t* const* frames, bool is_noisy, void* data)
 {
     step = step < 0 ? -step : step;
     std::lock_guard<std::mutex> lock(geninfo.mux);
@@ -3376,56 +3885,60 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
     }
 
     std::string preview;
-    if (image != nullptr && frame_count > 0) {
+    if (frames != nullptr && frame_count > 0) {
         constexpr uint32_t preview_max_dimension = 128;
-        std::vector<sd_image_t> resized_images(image, image + frame_count);
+        KcppImages preview_images;
         std::vector<std::vector<uint8_t>> resized_image_data(static_cast<size_t>(frame_count));
         bool resize_ok = true;
 
         for (int i = 0; i < frame_count; ++i) {
-            const sd_image_t& source = image[i];
-            if (source.width <= preview_max_dimension && source.height <= preview_max_dimension) {
+            // copy the frame out of the borrowed tensor; the preview is
+            // encoded from the copy (the tensor is valid only in this call)
+            KcppImage source = KcppImage::from_tensor(frames[i]);
+            if (!source.valid()) {
+                resize_ok = false;
+                break;
+            }
+            if (source.w <= preview_max_dimension && source.h <= preview_max_dimension) {
+                preview_images.push_back(source);
                 continue;
             }
 
             uint32_t resized_width;
             uint32_t resized_height;
-            if (source.width >= source.height) {
+            if (source.w >= source.h) {
                 resized_width = preview_max_dimension;
                 resized_height = std::max(1u, static_cast<uint32_t>(
-                    static_cast<uint64_t>(source.height) * preview_max_dimension / source.width));
+                    static_cast<uint64_t>(source.h) * preview_max_dimension / source.w));
             } else {
                 resized_height = preview_max_dimension;
                 resized_width = std::max(1u, static_cast<uint32_t>(
-                    static_cast<uint64_t>(source.width) * preview_max_dimension / source.height));
+                    static_cast<uint64_t>(source.w) * preview_max_dimension / source.h));
             }
 
             auto& pixels = resized_image_data[static_cast<size_t>(i)];
-            pixels.resize(static_cast<size_t>(resized_width) * resized_height * source.channel);
-            if (source.data == nullptr || source.channel == 0 ||
-                !stbir_resize_uint8(source.data, source.width, source.height, 0,
-                                    pixels.data(), resized_width, resized_height, 0, source.channel)) {
+            pixels.resize(static_cast<size_t>(resized_width) * resized_height * source.c);
+            if (!stbir_resize_uint8(source.px->data(), source.w, source.h, 0,
+                                    pixels.data(), resized_width, resized_height, 0, source.c)) {
                 resize_ok = false;
                 break;
             }
-            resized_images[static_cast<size_t>(i)] = {
-                resized_width, resized_height, source.channel, pixels.data()
-            };
+            auto v = std::make_shared<std::vector<uint8_t>>(std::move(pixels));
+            preview_images.push_back(KcppImage{resized_width, resized_height, source.c, std::move(v)});
         }
 
-        sd_image_t* preview_images = resize_ok ? resized_images.data() : nullptr;
-        if (frame_count == 1) {
-            if (preview_images != nullptr) {
-                preview = raw_image_to_png_base64(*preview_images);
-            }
-        } else if (preview_images != nullptr) {
-            uint8_t * out_data = nullptr;
-            size_t out_len = 0;
-            if (create_gif_buf_from_sd_images_msf(preview_images, frame_count, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
-                preview = kcpp_base64_encode(out_data, out_len);
-            }
-            if (out_data) {
-                free(out_data);
+        if (resize_ok) {
+            if (frame_count == 1) {
+                preview = raw_image_to_png_base64(preview_images.at(0));
+            } else {
+                uint8_t * out_data = nullptr;
+                size_t out_len = 0;
+                if (create_gif_buf_msf(preview_images, 16, &out_data,&out_len) == 0 && out_data && out_len > 0) {
+                    preview = kcpp_base64_encode(out_data, out_len);
+                }
+                if (out_data) {
+                    free(out_data);
+                }
             }
         }
     }
@@ -3460,21 +3973,31 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
         return sd_generation.error("Warning: KCPP image upscaling not initialized!");
     }
 
-    std::string rawb64 = inputs.init_images;
-    int nx, ny;
-    std::unique_ptr<uint8_t, decltype(&stbi_image_free)> upscale_src_buffer(
-        load_image_from_b64(rawb64,nx,ny), &stbi_image_free);
-    sd_image_t source_img;
-    source_img.data = nullptr;
-    std::string result;
-    if(upscale_src_buffer)
+    struct {
+        std::string rawb64;
+        int upscaling_resize = 2;
+    } params;
     {
-        source_img.width = nx;
-        source_img.height = ny;
-        source_img.channel = 3;
-        source_img.data = upscale_src_buffer.get();
+        SdErrors errors;
+        nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
+        if (payload.is_object()) {
+            sdjson_get(params.rawb64, "init_images", payload, errors);
+            sdjson_get(params.upscaling_resize, "upscaling_resize", payload, errors);
+            if (sddebugmode) {
+                sdjson_warn_unknown_keys(payload, errors);
+            }
+        }
+        if (!errors.empty()) {
+            const std::string msg = "KCPP SD upscale: " + errors.message();
+            return sd_generation.error(msg.c_str());
+        }
+    }
 
-        result = upscale_image_to_png_base64(upscaler_ctx, source_img, inputs.upscaling_resize);
+    KcppImage source_img = KcppImage::from_b64(params.rawb64);
+    std::string result;
+    if(source_img.valid())
+    {
+        result = upscale_image_to_png_base64(upscaler_ctx, source_img);
     }
 
     if (result == "") {

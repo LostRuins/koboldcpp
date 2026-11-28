@@ -1,9 +1,10 @@
 #include "generation_info.h"
+#include "config.h"
+#include "core/option_types.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 
 #include "pipeline/request.h"
 #include "runtime/guidance.h"
@@ -30,7 +31,7 @@ namespace sd {
         return std::strtod(buf, nullptr);
     }
 
-    static json sampling_info(const sd_sample_params_t& p, bool high_noise = false) {
+    static json sampling_info(const sd::SampleConfig& p, bool high_noise = false) {
         const auto& g = p.guidance;
         json info     = {{"sample_steps", p.sample_steps}, {"guidance", {{"txt_cfg", g.txt_cfg}, {"distilled_guidance", g.distilled_guidance}}}};
         if (!high_noise && p.shifted_timestep > 0)
@@ -55,7 +56,7 @@ namespace sd {
         return info;
     }
 
-    static json hires_info(const sd_hires_params_t& p) {
+    static json hires_info(const sd::HiresConfig& p) {
         json info = {{"enabled", p.enabled}};
         if (!p.enabled)
             return info;
@@ -69,7 +70,7 @@ namespace sd {
         return info;
     }
 
-    static json cache_info(const sd_cache_params_t& p) {
+    static json cache_info(const sd::CacheConfig& p) {
         static const char* modes[] = {"disabled", "easycache", "ucache", "dbcache", "taylorseer", "cache_dit", "spectrum"};
         if (p.mode < SD_CACHE_DISABLED || p.mode > SD_CACHE_SPECTRUM)
             return {{"mode", static_cast<int>(p.mode)}};
@@ -144,7 +145,7 @@ namespace sd {
         return info;
     }
 
-    static json image_info(const sd_img_gen_params_t& p) {
+    static json image_info(const sd::ImageConfig& p) {
         auto info = common_info(p, "image");
         if (p.init_image.data)
             info["strength"] = p.strength;
@@ -177,7 +178,7 @@ namespace sd {
         return p;
     }
 
-    json generation_info(const pipeline::GenerationRequest& request, const sd_img_gen_params_t& params) {
+    json generation_info(const pipeline::GenerationRequest& request, const sd::ImageConfig& params) {
         auto p              = resolved_params(request, params);
         p.qwen_image_layers = request.qwen_image_layers;
         auto info           = image_info(p);
@@ -188,7 +189,7 @@ namespace sd {
         return info;
     }
 
-    json generation_info(const pipeline::GenerationRequest& request, const sd_vid_gen_params_t& params) {
+    json generation_info(const pipeline::GenerationRequest& request, const sd::VideoConfig& params) {
         const auto p = resolved_params(request, params);
         auto info    = common_info(p, "video");
         if (!request.models.empty())
@@ -208,14 +209,13 @@ namespace sd {
         return info;
     }
 
-    json adetailer_generation_info(const sd_adetailer_params_t& params, const sd_img_gen_params_t& inpaint_params) {
+    json adetailer_generation_info(const sd::ADetailConfig& params, const sd::ImageConfig& inpaint_params) {
         auto inpaint        = image_info(inpaint_params);
         inpaint["strength"] = inpaint_params.strength;
         // ADetailer clears these inputs before generating each crop.
         for (const auto* key : {"control_strength", "control_type", "pm_params", "pulid_params", "hires", "image_preprocess"})
             inpaint.erase(key);
-        sd_img_gen_params_t defaults;
-        sd_img_gen_params_init(&defaults);
+        sd::ImageConfig defaults;
         if (inpaint_params.qwen_image_layers != defaults.qwen_image_layers)
             inpaint["qwen_image_layers"] = inpaint_params.qwen_image_layers;
         json adetailer = json::object();
@@ -232,69 +232,4 @@ namespace sd {
         return {{"schema", "sdcpp.generation/v1"}, {"kind", "image"}, {"upscale", {{"upscale_factor", upscale_factor}}}};
     }
 
-    char* copy_generation_info(const json& info) {
-        const std::string text = info.dump(-1, ' ', false, json::error_handler_t::replace);
-        char* result           = static_cast<char*>(malloc(text.size() + 1));
-        if (result)
-            memcpy(result, text.c_str(), text.size() + 1);
-        return result;
-    }
-
-    bool make_image_generation_result(sd_image_t* images, int count, const std::vector<json>& infos, sd_image_generation_result_t** result_out) {
-        if (!result_out || !images || count <= 0 || infos.size() != static_cast<size_t>(count)) {
-            free_sd_images(images, count);
-            return false;
-        }
-        auto* result = static_cast<sd_image_generation_result_t*>(calloc(1, sizeof(sd_image_generation_result_t)));
-        if (!result) {
-            free_sd_images(images, count);
-            return false;
-        }
-        result->items = static_cast<sd_image_result_t*>(calloc(count, sizeof(sd_image_result_t)));
-        if (!result->items) {
-            free(result);
-            free_sd_images(images, count);
-            return false;
-        }
-        result->count = count;
-        try {
-            for (int i = 0; i < count; ++i) {
-                result->items[i].image           = images[i];
-                images[i]                        = {};
-                result->items[i].generation_info = copy_generation_info(infos[i]);
-                if (!result->items[i].generation_info) {
-                    free_sd_images(images, count);
-                    free_sd_image_generation_result(result);
-                    return false;
-                }
-            }
-        } catch (...) {
-            free_sd_images(images, count);
-            free_sd_image_generation_result(result);
-            return false;
-        }
-        free(images);
-        *result_out = result;
-        return true;
-    }
-}
-
-void free_sd_image_generation_result(sd_image_generation_result_t* result) {
-    if (!result)
-        return;
-    for (int i = 0; i < result->count; ++i) {
-        free(result->items[i].image.data);
-        free(result->items[i].generation_info);
-    }
-    free(result->items);
-    free(result);
-}
-
-void free_sd_video_generation_result(sd_video_generation_result_t* result) {
-    if (!result)
-        return;
-    free_sd_images(result->frames, result->frame_count);
-    free_sd_audio(result->audio);
-    free(result->generation_info);
-    free(result);
-}
+}  // namespace sd

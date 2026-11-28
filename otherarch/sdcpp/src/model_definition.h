@@ -1,6 +1,8 @@
 #ifndef __SD_MODEL_DEFINITION_H__
 #define __SD_MODEL_DEFINITION_H__
 
+#include "core/option_types.h"
+
 #include <limits>
 #include "model.h"
 #include "stable-diffusion.h"

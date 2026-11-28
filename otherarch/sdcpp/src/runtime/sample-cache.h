@@ -1,6 +1,8 @@
 #ifndef __SD_RUNTIME_SAMPLE_CACHE_H__
 #define __SD_RUNTIME_SAMPLE_CACHE_H__
 
+#include "config.h"
+
 #include <vector>
 
 #include "core/tensor.hpp"
@@ -51,7 +53,7 @@ namespace sd_sample {
     };
 
     SampleCacheRuntime init_sample_cache_runtime(SDVersion version,
-                                                 const sd_cache_params_t* cache_params,
+                                                 const sd::CacheConfig* cache_params,
                                                  Denoiser* denoiser,
                                                  const std::vector<float>& sigmas);
 

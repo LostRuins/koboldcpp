@@ -1,10 +1,13 @@
 #include "diffusion_engine.h"
+#include "api/tensor.h"
+#include "core/option_types.h"
 
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstdlib>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <tuple>
@@ -23,6 +26,7 @@
 #include "model.h"
 #include "model_definition.h"
 
+#include "config.h"
 #include "core/rng.hpp"
 #include "core/rng_mt19937.hpp"
 #include "core/rng_philox.hpp"
@@ -890,7 +894,7 @@ bool StableDiffusionGGML::set_sage_attention_enabled(bool enabled) {
     return true;
 }
 
-bool StableDiffusionGGML::init(const sd_ctx_params_t* sd_ctx_params) {
+bool StableDiffusionGGML::init(const sd::ContextConfig* sd_ctx_params) {
 #ifdef SD_USE_UPSTREAM_GGML
     LOG_WARN(
         "Using upstream GGML: INT8 tensorwise/convrot is disabled and FP8 weights are "
@@ -1908,12 +1912,12 @@ SDCondition StableDiffusionGGML::get_learned_condition(const ConditionerParams& 
             return {};
         }
         if (!sd::resolve_prompt_images(input, [&](const std::string& source) -> sd::Tensor<float> {
-                sd_image_t image{};
-                if (!prompt_image_callback(source.c_str(), prompt_image_callback_data, &image) ||
-                    image.data == nullptr || image.width == 0 || image.height == 0 || image.channel < 1 || image.channel > 4) {
+                const sd_tensor_t* tensor = nullptr;
+                if (!prompt_image_callback(source.c_str(), prompt_image_callback_data, &tensor) || !tensor) {
                     LOG_ERROR("Failed to resolve prompt image: %s", source.c_str());
                     return {};
                 }
+                auto image  = sd::api::image_view(*tensor);
                 auto pixels = sd_image_to_tensor(image);
                 if (image.channel <= 2) {
                     auto gray = sd::ops::slice(pixels, 2, 0, 1);
@@ -1936,8 +1940,8 @@ void StableDiffusionGGML::reset_generation_extensions() {
     }
 }
 
-void StableDiffusionGGML::prepare_generation_extensions(const sd_pm_params_t& pm_params,
-                                                        const sd_pulid_params_t& pulid_params,
+void StableDiffusionGGML::prepare_generation_extensions(const sd::PhotoMakerConfig& pm_params,
+                                                        const sd::PuLIDConfig& pulid_params,
                                                         ConditionerParams& condition_params,
                                                         int total_steps) {
     reset_generation_extensions();
@@ -1979,7 +1983,7 @@ sd::Tensor<float> StableDiffusionGGML::get_clip_vision_output(const sd::Tensor<f
 }
 
 // Returns 50 Hz wav2vec2 states in sd::Tensor layout: [dim, frames, layers].
-sd::Tensor<float> StableDiffusionGGML::get_audio_embedding(const sd_audio_t& audio) {
+sd::Tensor<float> StableDiffusionGGML::get_audio_embedding(const sd::Audio& audio) {
     if (audio_encoder == nullptr) {
         LOG_ERROR("audio encoder model is not loaded");
         return {};
@@ -2001,7 +2005,7 @@ sd::Tensor<float> StableDiffusionGGML::get_audio_embedding(const sd_audio_t& aud
     return audio_encoder->compute(n_threads, mono);
 }
 
-void StableDiffusionGGML::compute_ip_adapter_tokens(const sd_image_t& image, float strength) {
+void StableDiffusionGGML::compute_ip_adapter_tokens(const sd::Image& image, float strength) {
     ip_adapter_tokens        = {};
     ip_adapter_uncond_tokens = {};
     ip_adapter_strength      = strength;
@@ -2101,7 +2105,7 @@ void StableDiffusionGGML::preview_image(int step,
                                         const sd::Tensor<float>& latents,
                                         enum SDVersion version,
                                         preview_t preview_mode,
-                                        std::function<void(int, int, sd_image_t*, bool, void*)> step_callback,
+                                        std::function<void(int, int, const sd_tensor_t* const*, bool, void*)> step_callback,
                                         void* step_callback_data,
                                         bool is_noisy) {
     bool is_video = preview_latent_tensor_is_video(latents);
@@ -2190,17 +2194,14 @@ void StableDiffusionGGML::preview_image(int step,
         uint32_t img_height = static_cast<uint32_t>(_latents.shape()[1]) * patch_sz;
 
         uint32_t img_channels = latent_alpha_proj != nullptr ? 4 : 3;
-        uint8_t* data         = (uint8_t*)malloc(frames * img_width * img_height * img_channels * sizeof(uint8_t));
+        std::unique_ptr<uint8_t, decltype(&free)> data(static_cast<uint8_t*>(malloc(size_t(frames) * img_width * img_height * img_channels)), free);
         GGML_ASSERT(data != nullptr);
-        preview_latent_video(data, _latents, latent_rgb_proj, latent_rgb_bias, patch_sz, latent_alpha_proj, latent_alpha_bias);
-        sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
-        GGML_ASSERT(images != nullptr);
+        preview_latent_video(data.get(), _latents, latent_rgb_proj, latent_rgb_bias, patch_sz, latent_alpha_proj, latent_alpha_bias);
+        std::vector<sd::Image> images(frames);
         for (uint32_t i = 0; i < frames; i++) {
-            images[i] = {img_width, img_height, img_channels, data + i * img_width * img_height * img_channels};
+            images[i] = {img_width, img_height, img_channels, data.get() + size_t(i) * img_width * img_height * img_channels};
         }
-        step_callback(step, frames, images, is_noisy, step_callback_data);
-        free(data);
-        free(images);
+        sd::api::preview_images(step_callback, step, frames, images.data(), is_noisy, step_callback_data);
         return;
     }
 
@@ -2219,19 +2220,20 @@ void StableDiffusionGGML::preview_image(int step,
             return;
         }
 
-        is_video           = preview_latent_tensor_is_video(decoded);
-        uint32_t frames    = is_video ? static_cast<uint32_t>(decoded.shape()[2]) : 1;
-        sd_image_t* images = (sd_image_t*)malloc(frames * sizeof(sd_image_t));
+        is_video            = preview_latent_tensor_is_video(decoded);
+        uint32_t frames     = is_video ? static_cast<uint32_t>(decoded.shape()[2]) : 1;
+        auto release_images = [frames](sd::Image* images) {
+            for (uint32_t i = 0; i < frames; ++i)
+                free(images[i].data);
+            free(images);
+        };
+        std::unique_ptr<sd::Image, decltype(release_images)> images(static_cast<sd::Image*>(calloc(frames, sizeof(sd::Image))), release_images);
         GGML_ASSERT(images != nullptr);
         for (uint32_t i = 0; i < frames; ++i) {
-            images[i] = tensor_to_sd_image(decoded, static_cast<int>(i));
+            images.get()[i] = tensor_to_sd_image(decoded, static_cast<int>(i));
         }
 
-        step_callback(step, frames, images, is_noisy, step_callback_data);
-        for (uint32_t i = 0; i < frames; ++i) {
-            free(images[i].data);
-        }
-        free(images);
+        sd::api::preview_images(step_callback, step, frames, images.get(), is_noisy, step_callback_data);
         return;
     }
 
@@ -2370,7 +2372,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                               const SDCondition& img_uncond,
                                               const sd::Tensor<float>& control_image,
                                               float control_strength,
-                                              const sd_guidance_params_t& guidance,
+                                              const sd::GuidanceConfig& guidance,
                                               float eta,
                                               int shifted_timestep,
                                               sample_method_t method,
@@ -2384,7 +2386,7 @@ sd::Tensor<float> StableDiffusionGGML::sample(const std::shared_ptr<DiffusionMod
                                               float vace_strength,
                                               int audio_length,
                                               float frame_rate,
-                                              const sd_cache_params_t* cache_params,
+                                              const sd::CacheConfig* cache_params,
                                               bool preview_final_step,
                                               const sd::Tensor<float>& video_positions) {
     struct RunnerEndOnExit {

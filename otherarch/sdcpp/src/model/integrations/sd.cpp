@@ -1,4 +1,5 @@
 #include "conditioning/conditioner.hpp"
+#include "core/option_types.h"
 #include "model/diffusion/unet.hpp"
 #include "model/vae/auto_encoder_kl.hpp"
 #include "model_definition.h"

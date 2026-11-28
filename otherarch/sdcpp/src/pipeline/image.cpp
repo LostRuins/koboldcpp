@@ -1,3 +1,5 @@
+#include "api/result.h"
+#include "core/option_types.h"
 #include "generation.h"
 #include "generation_info.h"
 
@@ -22,7 +24,7 @@ namespace sd::pipeline {
     };
 
     static CircularAxesState configure_image_vae_axes(StableDiffusionGGML* sd,
-                                                      const sd_img_gen_params_t* sd_img_gen_params,
+                                                      const sd::ImageConfig* sd_img_gen_params,
                                                       const GenerationRequest& request) {
         CircularAxesState original_axes = {sd->circular_x, sd->circular_y};
 
@@ -77,7 +79,7 @@ namespace sd::pipeline {
 
     public:
         ImageVaeAxesGuard(StableDiffusionGGML* sd,
-                          const sd_img_gen_params_t* sd_img_gen_params,
+                          const sd::ImageConfig* sd_img_gen_params,
                           const GenerationRequest& request)
             : sd(sd),
               original_axes(configure_image_vae_axes(sd, sd_img_gen_params, request)) {}
@@ -184,7 +186,7 @@ namespace sd::pipeline {
     }
 
     static std::optional<ImageGenerationLatents> prepare_image_generation_latents(StableDiffusionGGML* sd,
-                                                                                  const sd_img_gen_params_t* sd_img_gen_params,
+                                                                                  const sd::ImageConfig* sd_img_gen_params,
                                                                                   GenerationRequest* request,
                                                                                   SamplePlan* plan,
                                                                                   const RefImageParams& ref_image_params) {
@@ -541,7 +543,7 @@ namespace sd::pipeline {
     }
 
     static std::optional<ImageGenerationEmbeds> prepare_image_generation_embeds(StableDiffusionGGML* sd,
-                                                                                const sd_img_gen_params_t* sd_img_gen_params,
+                                                                                const sd::ImageConfig* sd_img_gen_params,
                                                                                 GenerationRequest* request,
                                                                                 SamplePlan* plan,
                                                                                 ImageGenerationLatents* latents,
@@ -669,10 +671,10 @@ namespace sd::pipeline {
         return embeds;
     }
 
-    static sd_image_t* decode_image_outputs(StableDiffusionGGML* sd,
-                                            const GenerationRequest& request,
-                                            const std::vector<sd::Tensor<float>>& final_latents,
-                                            int* num_images_out) {
+    static sd::Image* decode_image_outputs(StableDiffusionGGML* sd,
+                                           const GenerationRequest& request,
+                                           const std::vector<sd::Tensor<float>>& final_latents,
+                                           int* num_images_out) {
         if (final_latents.empty()) {
             LOG_ERROR("no latent images to decode");
             return nullptr;
@@ -760,8 +762,8 @@ namespace sd::pipeline {
             return nullptr;
         }
 
-        int image_count           = static_cast<int>(decoded_images.size());
-        sd_image_t* result_images = (sd_image_t*)calloc(image_count, sizeof(sd_image_t));
+        int image_count          = static_cast<int>(decoded_images.size());
+        sd::Image* result_images = (sd::Image*)calloc(image_count, sizeof(sd::Image));
         if (result_images == nullptr) {
             return nullptr;
         }
@@ -915,8 +917,8 @@ namespace sd::pipeline {
     }
 
     bool generate_image(StableDiffusionGGML* sd,
-                        const sd_img_gen_params_t* sd_img_gen_params,
-                        sd_image_t** images_out,
+                        const sd::ImageConfig* sd_img_gen_params,
+                        sd::Image** images_out,
                         int* num_images_out,
                         std::vector<nlohmann::json>* infos_out) {
         if (infos_out)
@@ -944,7 +946,7 @@ namespace sd::pipeline {
         GenerationRequest request(sd, sd_img_gen_params);
         const auto info = sd::generation_info(request, *sd_img_gen_params);
         sd::ImagePreprocessor preprocessing(sd_img_gen_params->image_preprocess.rules);
-        sd_img_gen_params_t processed_params = *sd_img_gen_params;
+        sd::ImageConfig processed_params = *sd_img_gen_params;
         if (!preprocessing.prepare_inputs(processed_params, request.width, request.height))
             return false;
         sd_img_gen_params = &processed_params;
@@ -953,7 +955,6 @@ namespace sd::pipeline {
 
         sd->rng->manual_seed(request.seed);
         sd->sampler_rng->manual_seed(request.seed);
-        sd->set_flow_shift(sd_img_gen_params->sample_params.flow_shift);
         if (!sd->apply_loras(sd_img_gen_params->loras, sd_img_gen_params->lora_count))
             return false;
         sd->apply_circular_axes(sd_img_gen_params->circular_x, sd_img_gen_params->circular_y);
@@ -1084,7 +1085,6 @@ namespace sd::pipeline {
                 make_hires_sigma_schedule(sd,
                                           request.hires,
                                           request.sample_params,
-                                          plan.sample_method,
                                           plan.sample_steps,
                                           sd->get_image_seq_len(request.hires.target_height, request.hires.target_width),
                                           &hires_scheduler_steps);
@@ -1217,7 +1217,7 @@ namespace sd::pipeline {
                     (*infos_out)[i]["seed"] = std::to_string(request.seed_for_batch(i / images_per_latent));
                 }
             } catch (...) {
-                free_sd_images(result, num_images);
+                sd::free_images(result, num_images);
                 throw;
             }
         }
@@ -1231,7 +1231,7 @@ namespace sd::pipeline {
         if (images_out != nullptr) {
             *images_out = result;
         } else {
-            free_sd_images(result, num_images);
+            sd::free_images(result, num_images);
         }
         return true;
     }

@@ -1,6 +1,10 @@
 #ifndef __SD_PIPELINE_DIFFUSION_ENGINE_H__
 #define __SD_PIPELINE_DIFFUSION_ENGINE_H__
 
+#include "core/media.h"
+
+#include "core/option_types.h"
+
 #include <atomic>
 #include <cmath>
 #include <functional>
@@ -14,6 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "config.h"
 #include "core/ggml_extend_backend.h"
 #include "core/ggml_graph_cut.h"
 #include "core/tensor.hpp"
@@ -103,8 +108,8 @@ public:
     // kcpp
 
     std::string taesd_path;
-    sd_tiling_params_t vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
-    bool enable_mmap                     = false;
+    sd::TilingConfig vae_tiling_params = {false, false, 0, 0, 0.5f, 0, 0, nullptr};
+    bool enable_mmap                   = false;
     sd::ggml_graph_cut::MaxVramAssignment max_vram_assignment;
     bool disable_prefetch          = false;
     bool disable_segmented_compute = false;
@@ -128,7 +133,7 @@ public:
     using RunnerGroups = std::set<RunnerGroup>;
 
     struct ModelConfig {
-        sd_ctx_params_t params{};
+        sd::ContextConfig params{};
         std::list<std::string> strings;
         std::vector<sd_embedding_t> embeddings;
         std::map<std::string, std::string> models;
@@ -138,22 +143,22 @@ public:
         bool photomaker_source_available     = false;
         bool animatediff_loaded              = false;
 
-        explicit ModelConfig(const sd_ctx_params_t& initial)
+        explicit ModelConfig(const sd::ContextConfig& initial)
             : params(initial) {
-            for (auto member : {&sd_ctx_params_t::model_path, &sd_ctx_params_t::clip_l_path,
-                                &sd_ctx_params_t::clip_g_path, &sd_ctx_params_t::clip_vision_path,
-                                &sd_ctx_params_t::t5xxl_path, &sd_ctx_params_t::llm_path,
-                                &sd_ctx_params_t::llm_vision_path, &sd_ctx_params_t::diffusion_model_path,
-                                &sd_ctx_params_t::tokenizer, &sd_ctx_params_t::flash_attn_mode, &sd_ctx_params_t::conv_direct_mode,
-                                &sd_ctx_params_t::high_noise_diffusion_model_path, &sd_ctx_params_t::uncond_diffusion_model_path,
-                                &sd_ctx_params_t::embeddings_connectors_path, &sd_ctx_params_t::vae_path,
-                                &sd_ctx_params_t::audio_vae_path, &sd_ctx_params_t::taesd_path,
-                                &sd_ctx_params_t::control_net_path, &sd_ctx_params_t::ip_adapter_path,
-                                &sd_ctx_params_t::motion_module_path, &sd_ctx_params_t::photo_maker_path,
-                                &sd_ctx_params_t::pulid_weights_path, &sd_ctx_params_t::tensor_type_rules,
-                                &sd_ctx_params_t::max_vram, &sd_ctx_params_t::backend,
-                                &sd_ctx_params_t::params_backend, &sd_ctx_params_t::split_mode,
-                                &sd_ctx_params_t::rpc_servers, &sd_ctx_params_t::model_args}) {
+            for (auto member : {&sd::ContextConfig::model_path, &sd::ContextConfig::clip_l_path,
+                                &sd::ContextConfig::clip_g_path, &sd::ContextConfig::clip_vision_path,
+                                &sd::ContextConfig::t5xxl_path, &sd::ContextConfig::llm_path,
+                                &sd::ContextConfig::llm_vision_path, &sd::ContextConfig::diffusion_model_path,
+                                &sd::ContextConfig::tokenizer, &sd::ContextConfig::flash_attn_mode, &sd::ContextConfig::conv_direct_mode,
+                                &sd::ContextConfig::high_noise_diffusion_model_path, &sd::ContextConfig::uncond_diffusion_model_path,
+                                &sd::ContextConfig::embeddings_connectors_path, &sd::ContextConfig::vae_path,
+                                &sd::ContextConfig::audio_vae_path, &sd::ContextConfig::audio_encoder_path, &sd::ContextConfig::taesd_path,
+                                &sd::ContextConfig::control_net_path, &sd::ContextConfig::ip_adapter_path,
+                                &sd::ContextConfig::motion_module_path, &sd::ContextConfig::photo_maker_path,
+                                &sd::ContextConfig::pulid_weights_path, &sd::ContextConfig::tensor_type_rules,
+                                &sd::ContextConfig::max_vram, &sd::ContextConfig::backend,
+                                &sd::ContextConfig::params_backend, &sd::ContextConfig::split_mode,
+                                &sd::ContextConfig::rpc_servers, &sd::ContextConfig::model_args}) {
                 strings.emplace_back(SAFE_STR(initial.*member));
                 params.*member = strings.back().c_str();
             }
@@ -342,7 +347,7 @@ public:
 
     bool init_model_loader(ModelLoader& model_loader, ModelConfig& configuration);
 
-    bool init(const sd_ctx_params_t* sd_ctx_params);
+    bool init(const sd::ContextConfig* sd_ctx_params);
     bool set_sage_attention_enabled(bool enabled);
 
     bool uses_tae() const;
@@ -398,8 +403,8 @@ public:
 
     void reset_generation_extensions();
 
-    void prepare_generation_extensions(const sd_pm_params_t& pm_params,
-                                       const sd_pulid_params_t& pulid_params,
+    void prepare_generation_extensions(const sd::PhotoMakerConfig& pm_params,
+                                       const sd::PuLIDConfig& pulid_params,
                                        ConditionerParams& condition_params,
                                        int total_steps);
 
@@ -408,9 +413,9 @@ public:
                                              int clip_skip        = -1,
                                              bool zero_out_masked = false);
 
-    sd::Tensor<float> get_audio_embedding(const sd_audio_t& audio);
+    sd::Tensor<float> get_audio_embedding(const sd::Audio& audio);
 
-    void compute_ip_adapter_tokens(const sd_image_t& image, float strength);
+    void compute_ip_adapter_tokens(const sd::Image& image, float strength);
 
     std::vector<float> process_timesteps(const std::vector<float>& timesteps,
                                          const sd::Tensor<float>& init_latent,
@@ -425,7 +430,7 @@ public:
                        const sd::Tensor<float>& latents,
                        enum SDVersion version,
                        preview_t preview_mode,
-                       std::function<void(int, int, sd_image_t*, bool, void*)> step_callback,
+                       std::function<void(int, int, const sd_tensor_t* const*, bool, void*)> step_callback,
                        void* step_callback_data,
                        bool is_noisy);
 
@@ -470,7 +475,7 @@ public:
                              const SDCondition& img_uncond,
                              const sd::Tensor<float>& control_image,
                              float control_strength,
-                             const sd_guidance_params_t& guidance,
+                             const sd::GuidanceConfig& guidance,
                              float eta,
                              int shifted_timestep,
                              sample_method_t method,
@@ -484,7 +489,7 @@ public:
                              float vace_strength,
                              int audio_length,
                              float frame_rate,
-                             const sd_cache_params_t* cache_params,
+                             const sd::CacheConfig* cache_params,
                              bool preview_final_step,
                              const sd::Tensor<float>& video_positions = {});
 

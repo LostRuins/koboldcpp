@@ -1,4 +1,7 @@
 #include "pipeline/video_upscale.h"
+#include "api/options.h"
+#include "api/result.h"
+#include "generation_info.h"
 
 #include <climits>
 
@@ -66,7 +69,7 @@ namespace sd {
             model_.reset();
         }
 
-        bool VideoUpscaler::init(const sd_video_upscaler_ctx_params_t& params) {
+        bool VideoUpscaler::init(const sd::VideoUpscalerConfig& params) {
             if (!params.diffusion_model_path || !*params.diffusion_model_path ||
                 !params.vae_path || !*params.vae_path || params.upscale_factor <= 0) {
                 LOG_ERROR("video upscale requires diffusion and decoder model paths and a positive upscale factor");
@@ -110,7 +113,7 @@ namespace sd {
             return model_->init(runtime_, weights, upscale_factor_);
         }
 
-        bool VideoUpscaler::upscale(const sd_video_upscale_params_t& params, sd_video_generation_result_t** result_out) {
+        bool VideoUpscaler::upscale(const sd::VideoUpscaleConfig& params, sd::VideoGenerationResult** result_out) {
             if (!result_out)
                 return false;
             *result_out = nullptr;
@@ -130,11 +133,11 @@ namespace sd {
                 }
             }
             sd::ParallelScope scope(executor_.get());
-            auto result = std::unique_ptr<sd_video_generation_result_t, decltype(&free_sd_video_generation_result)>(
-                static_cast<sd_video_generation_result_t*>(calloc(1, sizeof(sd_video_generation_result_t))), free_sd_video_generation_result);
+            auto result = std::unique_ptr<sd::VideoGenerationResult, decltype(&sd::free_video_generation_result)>(
+                static_cast<sd::VideoGenerationResult*>(calloc(1, sizeof(sd::VideoGenerationResult))), sd::free_video_generation_result);
             if (!result)
                 return false;
-            result->frames = static_cast<sd_image_t*>(calloc(params.frame_count, sizeof(sd_image_t)));
+            result->frames = static_cast<sd::Image*>(calloc(params.frame_count, sizeof(sd::Image)));
             if (!result->frames)
                 return false;
             result->frame_count = params.frame_count;
@@ -148,55 +151,50 @@ namespace sd {
     }  // namespace pipeline
 }  // namespace sd
 
-struct video_upscaler_ctx_t {
+struct sd_vid_upscaler {
     sd::pipeline::VideoUpscaler upscaler;
 };
 
-void sd_video_upscaler_ctx_params_init(sd_video_upscaler_ctx_params_t* params) {
-    if (!params)
-        return;
-    *params           = {};
-    params->n_threads = sd_get_num_physical_cores();
+sd_status_t sd_vid_upscaler_create(const sd_vid_upscaler_opt_t* opt, sd_vid_upscaler_t** out) {
+    if (out)
+        *out = nullptr;
+    return sd::api::call([&] {
+        if (!out)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "out is required");
+        sd::OptConfig config;
+        auto status = sd::api::resolve(opt, sd::api::VidUpscaler, config);
+        if (status != SD_STATUS_OK)
+            return status;
+        auto result = std::make_unique<sd_vid_upscaler_t>();
+        if (!result->upscaler.init(config.post.video_upscaler))
+            return sd::api::error(SD_STATUS_LOAD_FAILED, nullptr, "could not load video upscaler");
+        *out = result.release();
+        return SD_STATUS_OK;
+    },
+                         SD_STATUS_LOAD_FAILED);
 }
 
-void sd_video_upscale_params_init(sd_video_upscale_params_t* params) {
-    if (!params)
-        return;
-    *params                     = {};
-    params->fps                 = 24;
-    params->seed                = 42;
-    params->window_size         = 16;
-    params->temporal_chunk_size = 5;
+void sd_vid_upscaler_free(sd_vid_upscaler_t* upscaler) {
+    delete upscaler;
 }
 
-video_upscaler_ctx_t* new_video_upscaler_ctx(const sd_video_upscaler_ctx_params_t* params) {
-    if (!params)
-        return nullptr;
-    try {
-        auto ctx = std::make_unique<video_upscaler_ctx_t>();
-        if (!ctx->upscaler.init(*params))
-            return nullptr;
-        return ctx.release();
-    } catch (const std::exception& error) {
-        LOG_ERROR("video upscaler initialization failed: %s", error.what());
-        return nullptr;
-    }
-}
-
-bool upscale_video(video_upscaler_ctx_t* ctx, const sd_video_upscale_params_t* params, sd_video_generation_result_t** result_out) {
-    if (!result_out)
-        return false;
-    *result_out = nullptr;
-    if (!ctx || !params)
-        return false;
-    try {
-        return ctx->upscaler.upscale(*params, result_out);
-    } catch (const std::exception& error) {
-        LOG_ERROR("video upscale failed: %s", error.what());
-        return false;
-    }
-}
-
-void free_video_upscaler_ctx(video_upscaler_ctx_t* ctx) {
-    delete ctx;
+sd_status_t sd_upscale_video(sd_vid_upscaler_t* upscaler, const sd_vid_upscale_opt_t* opt, sd_result_t** out) {
+    if (out)
+        *out = nullptr;
+    return sd::api::call([&] {
+        if (!out)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "out is required");
+        sd::OptConfig config;
+        auto status = sd::api::resolve(opt, sd::api::VidUpscale, config);
+        if (status != SD_STATUS_OK)
+            return status;
+        if (!upscaler)
+            return sd::api::error(SD_STATUS_INVALID_ARGUMENT, nullptr, "upscaler is required");
+        sd::VideoGenerationResult* video = nullptr;
+        if (!upscaler->upscaler.upscale(config.post.video_upscale, &video))
+            return sd::api::error(SD_STATUS_GENERATION_FAILED, nullptr, "video upscale failed");
+        return sd::make_video_result(video, out) ? SD_STATUS_OK
+                                                 : sd::api::error(SD_STATUS_OUT_OF_MEMORY, nullptr, "could not allocate result");
+    },
+                         SD_STATUS_GENERATION_FAILED);
 }
