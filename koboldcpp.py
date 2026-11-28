@@ -2907,6 +2907,7 @@ def sd_build_load_payload(model_filename,vae_filename,llm_filename,clip1_filenam
         lora_cache   = 1 << 4 if imglora_cached else 0 # cache the preloaded LoRAs
         lora_apply_mode = lora_dynamic | lora_cache
 
+    # None/"" means default value
     return {
         "model_filename": model_filename,
         "executable_path": getdirpath()+"/",
@@ -3344,7 +3345,9 @@ def sd_build_gen_payload(genparams):
     custom_sigmas = genparams.get("custom_sigmas") or cached_sd_custom_sigmas.get(scheduler)
     extra_sample_args = str(genparams.get("extra_sample_args") or "")
     ref_image_args = str(genparams.get("ref_image_args") or "").strip()
-    clip_skip = tryparseint(genparams.get("clip_skip", -1),-1)
+    clip_skip = tryparseint(genparams.get("clip_skip", None), None)
+    if clip_skip is not None and clip_skip <= 0:
+        clip_skip = None # 0/-1 mean "not set": omit the key
     eta = tryparsefloat(genparams.get("eta", None), None)
     vid_req_frames = tryparseint(genparams.get("frames", 1),1)
     vid_req_frames = 1 if (not vid_req_frames or vid_req_frames < 1) else vid_req_frames
@@ -3373,7 +3376,7 @@ def sd_build_gen_payload(genparams):
     if flow_shift is not None and flow_shift < 0:
         flow_shift = None # fall back to the default
     sample_steps = (1 if sample_steps < 1 else (forced_steplimit if sample_steps > forced_steplimit else sample_steps))
-    if custom_sigmas is not None:
+    if custom_sigmas:
         # custom sigmas fully determine the schedule; ignore the requested step count
         sample_steps = len(custom_sigmas) - 1
     vid_req_frames = (1 if vid_req_frames < 1 else (480 if vid_req_frames > 480 else vid_req_frames))
@@ -3386,10 +3389,10 @@ def sd_build_gen_payload(genparams):
         extra_images_arr = [init_images] + extra_images_arr
         init_images = ""
 
-    # natural values, no omission logic: the C++ end treats null / absent /
-    # empty string / empty array all as absent; the -1.0 / 0 sentinels are the
-    # IR defaults for the unset guidance/shift params
-    return {
+    sampler_cname = sd_sampler_canonical_name(sample_method)
+
+    # absent or None keys mean "use the default" in C++
+    payload = {
         "prompt": prompt,
         "negative_prompt": negative_prompt,
         "init_images": init_images,
@@ -3401,16 +3404,16 @@ def sd_build_gen_payload(genparams):
         "flip_mask": bool(flip_mask),
         "denoising_strength": (0 if denoising_strength < 0 else (1 if denoising_strength > 1 else denoising_strength)),
         "cfg_scale": cfg_scale,
-        "distilled_guidance": -1.0 if distilled_guidance is None else distilled_guidance,
-        "shifted_timestep": 0 if shifted_timestep is None else shifted_timestep,
-        "flow_shift": -1.0 if flow_shift is None else flow_shift,
+        "distilled_guidance": distilled_guidance,
+        "shifted_timestep": shifted_timestep,
+        "flow_shift": flow_shift,
         "sample_steps": sample_steps,
         "width": width,
         "height": height,
         "seed": seed,
-        "sample_method": sd_sampler_canonical_name(sample_method),
-        "scheduler": scheduler,
-        "eta": -1.0 if eta is None else eta,
+        "sample_method": sampler_cname if sampler_cname != "default" else None,
+        "scheduler": scheduler if scheduler != "default" else None,
+        "eta": eta,
         "extra_sample_args": extra_sample_args,
         "ref_image_args": ref_image_args,
         "clip_skip": clip_skip,
@@ -3418,8 +3421,8 @@ def sd_build_gen_payload(genparams):
         "vid_fps": vid_fps,
         "video_output_type": video_output_type,
         "remove_limits": bool(remove_limits),
-        "circular_x": bool(tryparseint(genparams.get("circular_x",0),0)),
-        "circular_y": bool(tryparseint(genparams.get("circular_y",0),0)),
+        "circular_x": bool(tryparseint(genparams.get("circular_x",0),0)) or None,
+        "circular_y": bool(tryparseint(genparams.get("circular_y",0),0)) or None,
         "cache_mode": cache_mode,
         "cache_options": cache_options,
         "upscale": bool(tryparseint(genparams.get("enable_hr", 0),0)),
@@ -3427,8 +3430,10 @@ def sd_build_gen_payload(genparams):
             {"path": path.decode("UTF-8"), "multiplier": multiplier}
             for path, multiplier in zip(lora_filenames, lora_multipliers)
         ],
-        "custom_sigmas": [] if custom_sigmas is None else list(custom_sigmas),
+        "custom_sigmas": None if not custom_sigmas else list(custom_sigmas),
     }
+
+    return payload
 
 def sd_generate(genparams):
     global maxctx, args, currentusergenkey, totalgens, pendingabortkey, chatcompl_adapter, cached_sd_custom_sigmas
