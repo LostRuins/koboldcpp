@@ -1127,8 +1127,8 @@ def init_library():
     handle.sd_load_model.restype = ctypes.c_bool
     handle.sd_generate.argtypes = [sd_generation_inputs]
     handle.sd_generate.restype = sd_generation_outputs
-    handle.sd_upscale.argtypes = [sd_upscale_inputs]
-    handle.sd_upscale.restype = sd_generation_outputs
+    handle.sd_upscale_image.argtypes = [sd_upscale_inputs]
+    handle.sd_upscale_image.restype = sd_generation_outputs
     handle.sd_get_info.argtypes = []
     handle.sd_get_info.restype = sd_info_outputs
     handle.sd_abort_generation.argtypes = []
@@ -3102,7 +3102,7 @@ def sd_upscale(genparams):
     payload["upscaling_resize"] = tryparseint(genparams.get("upscaling_resize", 2),2) # how many times to upscale
     inputs = sd_upscale_inputs()
     inputs.params_json = json.dumps(payload).encode("UTF-8")
-    ret = handle.sd_upscale(inputs)
+    ret = handle.sd_upscale_image(inputs)
     data_main = ""
     if ret.status==1:
         data_main = ret.data.decode("UTF-8","ignore")

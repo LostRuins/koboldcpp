@@ -210,7 +210,7 @@ extern "C"
     {
         return sdtype_generate(inputs);
     }
-    sd_generation_outputs sd_upscale(const sd_upscale_inputs inputs)
+    sd_generation_outputs sd_upscale_image(const sd_upscale_inputs inputs)
     {
         return sdtype_upscale(inputs);
     }
