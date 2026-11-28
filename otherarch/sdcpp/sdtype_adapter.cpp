@@ -36,6 +36,7 @@
 #include "src/conditioning/prompt_input.h"
 #include "sdcpp_gguf_tokenizer.h"
 #include "src/core/util.h"
+#include "src/core/option_types.h"
 #include "src/model.h"
 #include "src/model_definition.h"
 #include "src/model_loader.h"
@@ -330,6 +331,7 @@ static bool sdjson_int_value(const nlohmann::json& value, T& out)
 template <typename T>
 static bool sdjson_get(T& out, const char* key, const nlohmann::json& payload, SdErrors& errors)
 {
+    if (key == nullptr) return false;
     // copy the key to a non-dependent type so payload.find() resolves to a
     // concrete overload (GCC rejects member access through the dependent
     // iterator of the const char* overload)
@@ -601,7 +603,7 @@ struct model_info: public sd_model_info {
 };
 
 struct KcppLoadParams {
-    // tracks loading state that does not have a direct sd_ctx_params_t mapping
+    // tracks loading state that does not have a direct sd_opt_t mapping
 
     model_info info {};
 
@@ -624,7 +626,7 @@ struct KcppLoadParams {
 
 // local intermediate representation of a generation request: decoded from
 // sd_generation_inputs at the top of sdtype_generate, processed in place, then
-// settled into sd_img_gen_params_t / sd_vid_gen_params_t before the call.
+// settled into the sd_img_gen_opt_t / sd_vid_gen_opt_t option set before the call.
 struct SDGenParams {
     // prompts
     std::string prompt;
@@ -708,17 +710,17 @@ struct SDParams {
 
     // owned sd_* resources of the loaded model, released here
     sd_ctx_t* sd_ctx = nullptr;
-    upscaler_ctx_t* upscaler_ctx = nullptr;
+    sd_upscaler_t* upscaler_ctx = nullptr;
 
     ~SDParams() {
         // only runs on model reload: the sd_params global is a raw pointer,
         // so the model is intentionally leaked at process exit
         if (sd_ctx != nullptr) {
-            free_sd_ctx(sd_ctx);
+            sd_ctx_free(sd_ctx);
             sd_ctx = nullptr;
         }
         if (upscaler_ctx != nullptr) {
-            free_upscaler_ctx(upscaler_ctx);
+            sd_upscaler_free(upscaler_ctx);
             upscaler_ctx = nullptr;
         }
     }
@@ -730,7 +732,7 @@ int total_img_gens = 0;
 //global static vars for SD
 static std::mutex g_sd_params_mux;
 // raw pointer on purpose: a static unique_ptr would destroy the model during
-// process exit, when free_sd_ctx()/free_upscaler_ctx() may touch global state
+// process exit, when sd_ctx_free()/sd_upscaler_free() may touch global state
 // that is already gone (crashes, particularly on Windows). Leaking the model
 // at exit is harmless.
 static SDParams* sd_params = nullptr;
@@ -891,14 +893,14 @@ std::string load_umt5_tokenizer_json()
     }
     return load_embd_file(cache, "embd_res/umt5_tokenizer_json.embd");
 }
-static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data);
+static void step_callback(int step, int frame_count, const sd_tensor_t* const* frames, bool is_noisy, void* data);
 
 // 0 disable, 1 initial, 2 denoised
 // the first noisy call is used to detect the inference phase
 static void set_preview_images(int enable) {
     bool denoised = (enable == 2);
     bool noisy = (enable == 1);
-    sd_set_preview_callback(step_callback, PREVIEW_PROJ, 1, denoised, noisy, nullptr);
+    sd_set_preview_callback(step_callback, enable == 0 ? "none" : "proj", 1, denoised, noisy, nullptr);
 }
 
 static inline double get_time_delta(const std::chrono::steady_clock::time_point& start) {
@@ -1150,16 +1152,117 @@ static std::string strip_image_tags(const std::string& text, bool zero_based)
     }
 }
 
+// --- sdcpp media boundary -------------------------------------------------
+// Kcpp media cross the sdcpp boundary as tensor handles. The library reads
+// the tensor buffers as interleaved sd::Image/sd::Audio — exactly our own
+// storage layout — so the raw bytes are passed through unchanged.
+// sd_tensor_create copies the storage, and a successful setter retains the
+// tensor storage, so the handles may be released right after the setter.
+
+// a KcppImage as a U8 [C,W,H] tensor handle (interleaved HWC buffer);
+// nullptr for a null image
+static std::shared_ptr<sd_tensor_t> image_to_tensor(const KcppImage& image)
+{
+    if (!image.valid()) {
+        return nullptr;
+    }
+    const int64_t shape[3] = { image.c, image.w, image.h };
+    return std::shared_ptr<sd_tensor_t>(
+        sd_tensor_create(SD_TENSOR_U8, 3, shape, image.px->data(), image.px->size()),
+        sd_tensor_free);
+}
+
+// a KcppAudio as an interleaved F32 [C,N] tensor handle; nullptr for a null
+// audio
+static std::shared_ptr<sd_tensor_t> audio_to_tensor(const KcppAudio& audio)
+{
+    if (!audio.valid()) {
+        return nullptr;
+    }
+    const int64_t shape[2] = { audio.channels, (int)(audio.samples->size() / audio.channels) };
+    return std::shared_ptr<sd_tensor_t>(
+        sd_tensor_create(SD_TENSOR_F32, 2, shape, audio.samples->data(), audio.samples->size() * sizeof(float)),
+        sd_tensor_free);
+}
+
+// set a KcppImage on a tensor option key; the handle is released after the
+// setter (the option set retains the tensor storage)
+static void set_image_opt(sd_opt_t* opt, const char* key, const KcppImage& image)
+{
+    auto t = image_to_tensor(image);
+    if (t) {
+        sd_opt_set_tensor(opt, key, t.get());
+    }
+}
+
+// set a KcppImages list on a tensor option key (null images are skipped)
+static void set_images_opt(sd_opt_t* opt, const char* key, const KcppImages& images)
+{
+    if (images.empty()) {
+        return;
+    }
+    std::vector<std::shared_ptr<sd_tensor_t>> tensors;
+    tensors.reserve(images.size());
+    for (size_t i = 0; i < images.size(); ++i) {
+        tensors.push_back(image_to_tensor(images[i]));
+    }
+    std::vector<sd_tensor_t*> handles;
+    handles.reserve(tensors.size());
+    for (auto& t : tensors) {
+        if (t) {
+            handles.push_back(t.get());
+        }
+    }
+    if (!handles.empty()) {
+        sd_opt_set_tensors(opt, key, handles.data(), handles.size());
+    }
+}
+
+// set a KcppAudios list on an audio option key (null audios are skipped)
+static void set_audios_opt(sd_opt_t* opt, const char* key, const KcppAudios& audios)
+{
+    if (audios.empty()) {
+        return;
+    }
+    std::vector<std::shared_ptr<sd_tensor_t>> tensors;
+    tensors.reserve(audios.size());
+    for (size_t i = 0; i < audios.size(); ++i) {
+        tensors.push_back(audio_to_tensor(audios[i]));
+    }
+    std::vector<sd_audio_t> descriptors;
+    descriptors.reserve(tensors.size());
+    for (size_t i = 0; i < tensors.size(); ++i) {
+        if (tensors[i]) {
+            descriptors.push_back(sd_audio_t{audios[i].sample_rate, tensors[i].get()});
+        }
+    }
+    if (!descriptors.empty()) {
+        sd_opt_set_audios(opt, key, descriptors.data(), descriptors.size());
+    }
+}
+
 struct PromptImageRef {
     // per-request pool of reference images (original request order) served by
     // prompt_image_from_refs for <image:N> prompt tags
     std::vector<KcppImage> image_pool;
+    // lazily created tensor views of the pool: the sdcpp callback copies each
+    // served tensor before the next callback, so a pooled handle stays valid
+    std::vector<std::shared_ptr<sd_tensor_t>> image_views;
     bool zero_based = false;
+
+    void resize(size_t n) {
+        image_pool.resize(n);
+        image_views.assign(n, nullptr);
+    }
+    void set(size_t i, const KcppImage& image) {
+        image_pool[i] = image;
+        image_views[i].reset(); // invalidate the pooled tensor
+    }
 };
 
 // callback registered per-generation: resolves
 // <image:N> / <image:+N> prompt tags to the reference image pool
-static bool prompt_image_from_refs(const char* source, void* data, sd_image_t* image_out)
+static bool prompt_image_from_refs(const char* source, void* data, const sd_tensor_t** image_out)
 {
     PromptImageRef *rdata = reinterpret_cast<PromptImageRef*>(data);
     if (rdata == nullptr)
@@ -1177,7 +1280,14 @@ static bool prompt_image_from_refs(const char* source, void* data, sd_image_t* i
     if (!image.valid()) {
         return false;
     }
-    *image_out = image.view();
+    if (!rdata->image_views[idx]) {
+        auto t = image_to_tensor(image);
+        if (!t) {
+            return false;
+        }
+        rdata->image_views[idx] = t;
+    }
+    *image_out = rdata->image_views[idx].get();
     return true;
 }
 
@@ -1966,36 +2076,58 @@ static void kcpp_set_model_paths(SDLoadParams& lp, KcppLoadParams& klp)
 // helper to unify the loading table
 struct LoadParams: public SDLoadParams, public KcppLoadParams {};
 
-// field-row binding for the sd_load_model payload: one row per wire
-// parameter, binding the JSON key (in), the upstream sd_opt key (out, phase
-// 3; nullptr = kcpp-only, never forwarded) and the IR member. The decode loop
-// walks the rows with one strict sdjson_get each; converted fields (quant,
-// taesd, flash_attention, lora_apply_mode) name the upstream key they resolve
-// to in the QoL/routing step. Executable_path and loras stay explicit.
+static void sd_track_key(std::set<std::string>& present, const char* key)
+{
+    if (key != nullptr) {
+        present.insert(key);
+    }
+}
+
+static bool sd_check_key(const std::set<std::string>& present, const char* key)
+{
+    return key != nullptr && present.count(key) != 0;
+}
+
+// field-row binding for the sd_load_model payload: input JSON key, output
+// sd.cpp key, and the IR member. The decode
+// loop walks the rows with one strict sdjson_get each and records the tracking
+// key of the fields present in the request; the settle loop forwards the rows
+// with an sd_opt key to the context options, only for present fields.
+// Converted fields (quant, flash_attention) resolve to their upstream key in
+// the QoL/routing step and are settled there (settle=false). Executable_path
+// and loras stay explicit.
 struct LoadStr  { const char* in; const char* out; std::string LoadParams::*  p; };
-struct LoadI32  { const char* in; const char* out; int         LoadParams::*  p; };
-struct LoadBool { const char* in; const char* out; bool        LoadParams::*  p; };
+struct LoadI32  { const char* in; const char* out; int         LoadParams::*  p; bool settle = true; };
+struct LoadBool { const char* in; const char* out; bool        LoadParams::*  p; bool settle = true; };
 
 static const LoadStr load_str[] = {
-    // in key               out key (sd_opt)     IR member
-    {"model_filename",     "model_path",        &LoadParams::model_path},
-    {"vae_filename",       "vae_path",          &LoadParams::vae_path},
-    {"audio_vae_filename", "audio_vae_path",    &LoadParams::audio_vae_path},
-    {"llm_filename",       "t5xxl_path",        &LoadParams::t5xxl_path},
-    {"clip1_filename",     "clip_l_path",       &LoadParams::clip_l_path},
-    {"clip2_filename",     "clip_g_path",       &LoadParams::clip_g_path},
-    {"photomaker_filename","photo_maker_path",  &LoadParams::photo_maker_path},
-    {"backend",            "backend",           &LoadParams::backend},
-    {"params_backend",     "params_backend",    &LoadParams::params_backend},
-    {"split_mode",         "split_mode",        &LoadParams::split_mode},
-    {"conv_direct_mode",   "conv_direct_mode",  &LoadParams::conv_direct_mode},
-    {"max_vram",           "max_vram",          &LoadParams::max_vram},
-    {"upscaler_filename",  nullptr,             &LoadParams::upscaler_filename},
+    // in key               out key (sd_opt)              IR member
+    {"model_filename",     "model_path",                  &LoadParams::model_path},
+    {nullptr,              "diffusion_model_path",        &LoadParams::diffusion_model_path},
+    {nullptr,              "clip_vision_path",            &LoadParams::clip_vision_path},
+    {nullptr,              "llm_path",                    &LoadParams::llm_path},
+    {nullptr,              "llm_vision_path",             &LoadParams::llm_vision_path},
+    {nullptr,              "tokenizer",                   &LoadParams::tokenizer},
+    {nullptr,              "embeddings_connectors_path",  &LoadParams::embeddings_connectors_path},
+    {nullptr,              "uncond_diffusion_model_path", &LoadParams::uncond_diffusion_model_path},
+    {"vae_filename",       "vae_path",                    &LoadParams::vae_path},
+    {"audio_vae_filename", "audio_vae_path",              &LoadParams::audio_vae_path},
+    {"llm_filename",       "t5xxl_path",                  &LoadParams::t5xxl_path},
+    {"clip1_filename",     "clip_l_path",                 &LoadParams::clip_l_path},
+    {"clip2_filename",     "clip_g_path",                 &LoadParams::clip_g_path},
+    {"photomaker_filename","photo_maker_path",            &LoadParams::photo_maker_path},
+    {"backend",            "backend",                     &LoadParams::backend},
+    {"params_backend",     "params_backend",              &LoadParams::params_backend},
+    {"split_mode",         "split_mode",                  &LoadParams::split_mode},
+    {"conv_direct_mode",   "conv_direct_mode",            &LoadParams::conv_direct_mode},
+    {"max_vram",           "max_vram",                    &LoadParams::max_vram},
+    {"upscaler_filename",  nullptr,                       &LoadParams::upscaler_filename},
+    {nullptr,              "tensor_type_rules",           &LoadParams::tensor_type_rules},
 };
 static const LoadI32 load_i32[] = {
     {"threads",            "n_threads",         &LoadParams::n_threads},
     {"lora_apply_mode",    nullptr,             &LoadParams::kcpp_lora_apply_mode},
-    {"quant",              "wtype",             &LoadParams::quant},
+    {"quant",              "wtype",             &LoadParams::quant, false},
     {"tiled_vae_threshold",nullptr,             &LoadParams::tiled_vae_threshold},
     {"img_hard_limit",     nullptr,             &LoadParams::img_hard_limit},
     {"img_soft_limit",     nullptr,             &LoadParams::img_soft_limit},
@@ -2003,9 +2135,53 @@ static const LoadI32 load_i32[] = {
 static const LoadBool load_bool[] = {
     {"use_mmap",           "enable_mmap",       &LoadParams::enable_mmap},
     {"auto_fit",           "auto_fit",          &LoadParams::auto_fit},
-    {"flash_attention",    "flash_attn_mode",   &LoadParams::flash_attention},
-    {"taesd",              "taesd_path",        &LoadParams::taesd},
+    {"flash_attention",    "flash_attn_mode",   &LoadParams::flash_attention, false},
+    {"taesd",              nullptr,             &LoadParams::taesd},
 };
+
+// settle the load parameters into a context option set and create the
+// context; only members present in the request are set (absent = library
+// default). The kcpp policy (rng, eager load, model args, lora apply mode,
+// flash attention) is always set.
+static sd_ctx_t* create_sd_context(const LoadParams& lp, const std::set<std::string>& present)
+{
+    auto* opt = sd_ctx_opt_create();
+    if (opt == nullptr) {
+        return nullptr;
+    }
+    sd_opt_set_string(opt, "rng_type", sd_rng_type_name(CUDA_RNG));
+    sd_opt_set_string(opt, "model_args", "chroma_use_dit_mask=true");
+    sd_opt_set_bool(opt, "eager_load", true);
+    sd_opt_set_string(opt, "lora_apply_mode", sd_lora_apply_mode_name(lp.lora_apply_mode));
+    sd_opt_set_string(opt, "flash_attn_mode", lp.flash_attn_mode.c_str());
+    for (const auto& f : load_str) {
+        if (f.out != nullptr && !(lp.*f.p).empty()) {
+            sd_opt_set_string(opt, f.out, (lp.*f.p).c_str());
+        }
+    }
+    // set by the QoL/routing step, not by the payload decode
+    if (!lp.taesd_path.empty()) {
+        sd_opt_set_string(opt, "taesd_path", lp.taesd_path.c_str());
+    }
+    for (const auto& f : load_i32) {
+        if (f.settle && sd_check_key(present, f.out)) {
+            sd_opt_set_int(opt, f.out, lp.*f.p);
+        }
+    }
+    for (const auto& f : load_bool) {
+        if (f.settle && sd_check_key(present, f.out)) {
+            sd_opt_set_bool(opt, f.out, lp.*f.p);
+        }
+    }
+    // resolved from quant in the QoL/routing step
+    if (lp.wtype != SD_TYPE_COUNT) {
+        sd_opt_set_string(opt, "wtype", sd_type_name(lp.wtype));
+    }
+    sd_ctx_t* ctx = nullptr;
+    sd_ctx_create(opt, &ctx);
+    sd_opt_free(opt); // the context retains its own configuration
+    return ctx;
+}
 
 static void kcpp_resolve_load_parameters(SDLoadParams& lp, KcppLoadParams& klp)
 {
@@ -2150,6 +2326,9 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     SDLoadParams& lp = new_params->load_params;
     KcppLoadParams& klp = new_params->kcpp_load_params;
 
+    // tracking keys of the fields present in the request payload: the settle
+    // forwards only these (absent = library default)
+    std::set<std::string> present;
     {
         // assigned to the global before any QoL probe
         std::string executable_path;
@@ -2161,11 +2340,11 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
             // one strict getter per field row
             for (const auto& f : load_str)
-                sdjson_get(lptmp.*f.p, f.in, payload, errors);
+                if (sdjson_get(lptmp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : load_i32)
-                sdjson_get(lptmp.*f.p, f.in, payload, errors);
+                if (sdjson_get(lptmp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : load_bool)
-                sdjson_get(lptmp.*f.p, f.in, payload, errors);
+                if (sdjson_get(lptmp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
 
             sdjson_get_loras("loras", payload, errors, lptmp.lora_map);
 
@@ -2184,56 +2363,6 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
 
     kcpp_resolve_load_parameters(lp, klp);
 
-    sd_ctx_params_t params = {};
-    sd_ctx_params_init(&params);
-
-    params.rng_type = CUDA_RNG;
-    params.model_args = "chroma_use_dit_mask=true";
-    params.eager_load = true; //klp should preload everything
-
-    params.n_threads = lp.n_threads;
-    params.wtype = lp.wtype;
-    params.conv_direct_mode = lp.conv_direct_mode.c_str();
-    params.max_vram = lp.max_vram.c_str();
-    params.enable_mmap = lp.enable_mmap;
-    params.backend = lp.backend.c_str();
-    params.params_backend = lp.params_backend.c_str();
-    params.split_mode = lp.split_mode.c_str();
-    params.auto_fit = lp.auto_fit;
-    params.lora_apply_mode = lp.lora_apply_mode;
-    params.model_path = lp.model_path.c_str();
-    params.clip_l_path = lp.clip_l_path.c_str();
-    params.clip_g_path = lp.clip_g_path.c_str();
-    params.t5xxl_path = lp.t5xxl_path.c_str();
-    params.diffusion_model_path = lp.diffusion_model_path.c_str();
-    params.vae_path = lp.vae_path.c_str();
-    params.audio_vae_path = lp.audio_vae_path.c_str();
-    params.taesd_path = lp.taesd_path.c_str();
-    params.photo_maker_path = lp.photo_maker_path.c_str();
-    params.tokenizer = lp.tokenizer.c_str();
-    params.clip_vision_path = lp.clip_vision_path.c_str();
-    params.llm_path = lp.llm_path.c_str();
-    params.llm_vision_path = lp.llm_vision_path.c_str();
-    params.embeddings_connectors_path = lp.embeddings_connectors_path.c_str();
-    params.uncond_diffusion_model_path = lp.uncond_diffusion_model_path.c_str();
-    params.tensor_type_rules = lp.tensor_type_rules.c_str();
-    params.flash_attn_mode = lp.flash_attn_mode.c_str();
-
-    if(sddebugmode==1)
-    {
-        const char* tokenizer = params.tokenizer;
-        if (tokenizer != nullptr && *tokenizer == '{') {
-            params.tokenizer = "<in-memory tokenizer JSON>";
-        }
-        char* buf = sd_ctx_params_to_str(&params);
-        params.tokenizer = tokenizer;
-        if(buf)
-        {
-            printf("\n%s\n", buf);
-            free(buf);
-        }
-    }
-
     {
         // release the previous model (if any) to free resources, before building
         // the new one; we can't risk a failure to load the new one due to low VRAM
@@ -2247,9 +2376,13 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
         }
     }
 
-    new_params->sd_ctx = new_sd_ctx(&params);
+    {
+        // the full load aggregate, from the two stored halves
+        LoadParams load_agg{lp, klp};
+        new_params->sd_ctx = create_sd_context(load_agg, present);
+    }
 
-    if (new_params->sd_ctx == NULL) {
+    if (new_params->sd_ctx == nullptr) {
         printf("\nError: Image generation failed to setup!\nMake sure you have ALL files required (e.g. VAE, T5, Clip...) or baked into the model!\n");
         return false;
     }
@@ -2274,12 +2407,23 @@ bool sdtype_load_model(const sd_load_model_inputs inputs) {
     //load upscaler if provided
     if (klp.upscaler_filename!="") {
         const int upscale_tile_size = 128;
-        new_params->upscaler_ctx = new_upscaler_ctx(klp.upscaler_filename.c_str(),
-                                        lp.conv_direct_mode == "on",
-                                        params.n_threads,
-                                        upscale_tile_size,
-                                        params.backend,
-                                        params.params_backend);
+        auto* opt = sd_upscaler_opt_create();
+        sd_opt_set_string(opt, "model_path", klp.upscaler_filename.c_str());
+        sd_opt_set_bool(opt, "conv_direct", lp.conv_direct_mode == "on");
+        if (lp.n_threads > 0) {
+            sd_opt_set_int(opt, "n_threads", lp.n_threads);
+        }
+        sd_opt_set_int(opt, "tile_size", upscale_tile_size);
+        if (!lp.backend.empty()) {
+            sd_opt_set_string(opt, "backend", lp.backend.c_str());
+        }
+        if (!lp.params_backend.empty()) {
+            sd_opt_set_string(opt, "params_backend", lp.params_backend.c_str());
+        }
+        sd_upscaler_t* upscaler = nullptr;
+        sd_upscaler_create(opt, &upscaler);
+        sd_opt_free(opt); // the upscaler retains its own configuration
+        new_params->upscaler_ctx = upscaler;
 
         if (new_params->upscaler_ctx == nullptr) {
              printf("\nError: KCPP failed to load upscaler!\n");
@@ -2602,139 +2746,118 @@ static void sd_fix_resolution(int &width, int &height, int img_hard_limit, int i
     }
 }
 
-static enum sample_method_t sampler_from_name(const std::string& sampler)
-{
-    // all lowercase
-    enum sample_method_t result = str_to_sample_method(sampler.c_str());
-    if (result != sample_method_t::SAMPLE_METHOD_COUNT) {
-        return result;
-    } else {
-        return sample_method_t::SAMPLE_METHOD_COUNT;
-    }
-}
-
-static enum scheduler_t scheduler_from_name(const char * scheduler)
-{
-    if (scheduler) {
-        enum scheduler_t result = str_to_scheduler(scheduler);
-        if (result != scheduler_t::SCHEDULER_COUNT)
-        {
-            return result;
-        }
-    }
-    return scheduler_t::SCHEDULER_COUNT;
-}
-
-static void parse_cache_options(sd_cache_params_t & params, const std::string& cache_mode,
+// settle the parsed cache options onto the generation option set. The
+// cache_mode value is the sdcpp mode name (the kcpp "cache-dit" spelling is
+// converted on decode); the named-parameter wire format is the sdcpp one.
+// Only options present in the request are set (absent = library default).
+static void parse_cache_options(sd_opt_t* opt, const std::string& cache_mode,
     const std::string& cache_options) {
 
-    sd_cache_params_init(&params);
-    if (cache_mode == "easycache") {
-        params.mode = SD_CACHE_EASYCACHE;
-    } else if (cache_mode == "ucache") {
-        params.mode = SD_CACHE_UCACHE;
-    } else if (cache_mode == "dbcache") {
-        params.mode  = SD_CACHE_DBCACHE;
-    } else if (cache_mode == "taylorseer") {
-        params.mode  = SD_CACHE_TAYLORSEER;
-    } else if (cache_mode == "cache-dit") {
-        params.mode  = SD_CACHE_CACHE_DIT;
-    } else if (cache_mode == "spectrum") {
-        params.mode  = SD_CACHE_SPECTRUM;
-    } else if (cache_mode != "" && cache_mode != "disabled") {
-        printf("warning: unknown cache mode '%s'", cache_mode.c_str());
+    // the sdcpp mode names (cache.mode option values)
+    static const char* cache_modes[] = {
+        "disabled", "easycache", "ucache", "dbcache", "taylorseer", "cache_dit", "spectrum",
+    };
+    bool mode_known = false;
+    for (const char* m : cache_modes) {
+        if (cache_mode == m) {
+            mode_known = true;
+            break;
+        }
     }
-
-    if (params.mode == SD_CACHE_DISABLED)
+    if (!mode_known) {
+        if (!cache_mode.empty()) {
+            printf("warning: unknown cache mode '%s'", cache_mode.c_str());
+        }
         return;
+    }
+    if (cache_mode == "disabled")
+        return;
+
+    sd_opt_set_string(opt, "cache.mode", cache_mode.c_str());
 
     if (cache_options == "")
         return;
 
-    sd_cache_params_t cache_params = params;
-
-    // from examples/common/common.hpp
-    auto parse_named_params = [&](const std::string& opt_str) -> bool {
-        std::stringstream ss(opt_str);
-        std::string token;
-        while (std::getline(ss, token, ',')) {
-            size_t eq_pos = token.find('=');
-            if (eq_pos == std::string::npos) {
-                printf("error: cache option '%s' missing '=' separator", token.c_str());
-                return false;
-            }
-            std::string key = token.substr(0, eq_pos);
-            std::string val = token.substr(eq_pos + 1);
-            try {
-                if (key == "threshold") {
-                    if (cache_mode == "easycache" || cache_mode == "ucache") {
-                        cache_params.reuse_threshold = std::stof(val);
-                    } else {
-                        cache_params.residual_diff_threshold = std::stof(val);
-                    }
-                } else if (key == "start") {
-                    cache_params.start_percent = std::stof(val);
-                } else if (key == "end") {
-                    cache_params.end_percent = std::stof(val);
-                } else if (key == "decay") {
-                    cache_params.error_decay_rate = std::stof(val);
-                } else if (key == "relative") {
-                    cache_params.use_relative_threshold = (std::stof(val) != 0.0f);
-                } else if (key == "reset") {
-                    cache_params.reset_error_on_compute = (std::stof(val) != 0.0f);
-                } else if (key == "Fn" || key == "fn") {
-                    cache_params.Fn_compute_blocks = std::stoi(val);
-                } else if (key == "Bn" || key == "bn") {
-                    cache_params.Bn_compute_blocks = std::stoi(val);
-                } else if (key == "warmup") {
-                    if (cache_mode == "spectrum") {
-                        cache_params.spectrum_warmup_steps = std::stoi(val);
-                    } else {
-                        cache_params.max_warmup_steps = std::stoi(val);
-                    }
-                } else if (key == "w") {
-                    cache_params.spectrum_w = std::stof(val);
-                } else if (key == "m") {
-                    cache_params.spectrum_m = std::stoi(val);
-                } else if (key == "lam") {
-                    cache_params.spectrum_lam = std::stof(val);
-                } else if (key == "window") {
-                    cache_params.spectrum_window_size = std::stoi(val);
-                } else if (key == "flex") {
-                    cache_params.spectrum_flex_window = std::stof(val);
-                } else if (key == "stop") {
-                    cache_params.spectrum_stop_percent = std::stof(val);
-                } else {
-                    printf("error: unknown cache parameter '%s'", key.c_str());
-                    return false;
-                }
-            } catch (const std::exception&) {
-                printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key.c_str());
-                return false;
-            }
+    auto set_float = [&](const char* key, const std::string& val) -> bool {
+        try {
+            sd_opt_set_float(opt, key, std::stof(val));
+            return true;
+        } catch (const std::exception&) {
+            printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key);
+            return false;
         }
-
-        switch (cache_params.mode) {
-            case SD_CACHE_EASYCACHE:
-            case SD_CACHE_UCACHE:
-                if (cache_params.reuse_threshold < 0.0f) {
-                    printf("error: cache threshold must be non-negative");
-                    return false;
-                }
-                if (cache_params.start_percent < 0.0f || cache_params.start_percent >= 1.0f ||
-                    cache_params.end_percent <= 0.0f || cache_params.end_percent > 1.0f ||
-                    cache_params.start_percent >= cache_params.end_percent) {
-                    printf("error: cache start/end percents must satisfy 0.0 <= start < end <= 1.0");
-                    return false;
-                }
-                break;
-            default: ;
+    };
+    auto set_int = [&](const char* key, const std::string& val) -> bool {
+        try {
+            sd_opt_set_int(opt, key, std::stoi(val));
+            return true;
+        } catch (const std::exception&) {
+            printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key);
+            return false;
         }
-        return true;
+    };
+    auto set_flag = [&](const char* key, const std::string& val) -> bool {
+        try {
+            sd_opt_set_bool(opt, key, std::stof(val) != 0.0f);
+            return true;
+        } catch (const std::exception&) {
+            printf("error: invalid value '%s' for parameter '%s'", val.c_str(), key);
+            return false;
+        }
     };
 
-    if (parse_named_params(cache_options)) {
-        params = cache_params;
+    std::stringstream ss(cache_options);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        size_t eq_pos = token.find('=');
+        if (eq_pos == std::string::npos) {
+            printf("error: cache option '%s' missing '=' separator", token.c_str());
+            return;
+        }
+        std::string key = token.substr(0, eq_pos);
+        std::string val = token.substr(eq_pos + 1);
+        if (key == "threshold") {
+            if (cache_mode == "easycache" || cache_mode == "ucache") {
+                if (!set_float("cache.reuse_threshold", val)) return;
+            } else {
+                if (!set_float("cache.residual_diff_threshold", val)) return;
+            }
+        } else if (key == "start") {
+            if (!set_float("cache.start_percent", val)) return;
+        } else if (key == "end") {
+            if (!set_float("cache.end_percent", val)) return;
+        } else if (key == "decay") {
+            if (!set_float("cache.error_decay_rate", val)) return;
+        } else if (key == "relative") {
+            if (!set_flag("cache.use_relative_threshold", val)) return;
+        } else if (key == "reset") {
+            if (!set_flag("cache.reset_error_on_compute", val)) return;
+        } else if (key == "Fn" || key == "fn") {
+            if (!set_int("cache.fn_compute_blocks", val)) return;
+        } else if (key == "Bn" || key == "bn") {
+            if (!set_int("cache.bn_compute_blocks", val)) return;
+        } else if (key == "warmup") {
+            if (cache_mode == "spectrum") {
+                if (!set_int("cache.spectrum_warmup_steps", val)) return;
+            } else {
+                if (!set_int("cache.max_warmup_steps", val)) return;
+            }
+        } else if (key == "w") {
+            if (!set_float("cache.spectrum_w", val)) return;
+        } else if (key == "m") {
+            if (!set_int("cache.spectrum_m", val)) return;
+        } else if (key == "lam") {
+            if (!set_float("cache.spectrum_lam", val)) return;
+        } else if (key == "window") {
+            if (!set_int("cache.spectrum_window_size", val)) return;
+        } else if (key == "flex") {
+            if (!set_float("cache.spectrum_flex_window", val)) return;
+        } else if (key == "stop") {
+            if (!set_float("cache.spectrum_stop_percent", val)) return;
+        } else {
+            printf("error: unknown cache parameter '%s'", key.c_str());
+            return;
+        }
     }
 }
 
@@ -2752,13 +2875,26 @@ static std::string raw_image_to_png_base64(const KcppImage& img, std::string par
     return result;
 }
 
-static std::string upscale_image_to_png_base64(upscaler_ctx_t* upscaler_ctx, const KcppImage& input_image, int upscale_factor = 2, const std::string& meta_image_info = "")
+static std::string upscale_image_to_png_base64(sd_upscaler_t* upscaler_ctx, const KcppImage& input_image, const std::string& meta_image_info = "")
 {
     std::string gen_data;
-    sd_image_generation_result_t* upscaled = nullptr;
-    if (upscale(upscaler_ctx, input_image.view(), upscale_factor, &upscaled)) {
-        gen_data = raw_image_to_png_base64(KcppImage::from_sd_image(upscaled->items[0].image), meta_image_info);
-        free_sd_image_generation_result(upscaled);
+    sd_result_t* result = nullptr;
+    bool ok = false;
+    {
+        auto* opt = sd_upscale_opt_create();
+        auto t = image_to_tensor(input_image);
+        if (opt && t) {
+            ok = (sd_opt_set_tensor(opt, "image", t.get()) == SD_STATUS_OK);
+            if (ok) {
+                ok = (sd_upscale(upscaler_ctx, opt, &result) == SD_STATUS_OK) && (result != nullptr);
+            }
+        }
+        sd_opt_free(opt); // the option set retained the tensor storage
+        // t is released here
+    }
+    if (ok) {
+        gen_data = raw_image_to_png_base64(KcppImage::from_tensor(sd_result_get_image(result, 0)), meta_image_info);
+        sd_result_free(result);
     } else {
         printf("Upscaling failed!\n");
         gen_data = raw_image_to_png_base64(input_image, meta_image_info);
@@ -2787,8 +2923,14 @@ void sdtype_abort_generation() {
 // nullptr = kcpp-only, never forwarded) and the IR member. The
 // decode loop walks the rows with one strict sdjson_get each. Explicit:
 // sample_method/scheduler (string -> enum), images (base64 decode), loras
+// the kcpp wire format spells the DIT cache mode "cache-dit"; the sdcpp
+// option value is "cache_dit"
+static std::string dec_cache_mode(const std::string& s) {
+    return (s == "cache-dit") ? "cache_dit" : s;
+}
+
 // and custom_sigmas.
-struct GenStr   { const char* in; const char* out; std::string              SDGenParams::* p; };
+struct GenStr   { const char* in; const char* out; std::string              SDGenParams::* p; std::string (*dec)(const std::string&) = nullptr; };
 struct GenF32   { const char* in; const char* out; float                    SDGenParams::* p; };
 struct GenI32   { const char* in; const char* out; int                      SDGenParams::* p; };
 struct GenI64   { const char* in; const char* out; int64_t                  SDGenParams::* p; };
@@ -2801,9 +2943,9 @@ static const GenStr gen_str[] = {
     // in key             out key (sd_opt)                      IR member
     {"prompt",           "prompt",                              &SDGenParams::prompt},
     {"negative_prompt",  "negative_prompt",                     &SDGenParams::negative_prompt},
-    {"ref_image_args",   nullptr,                               &SDGenParams::ref_image_args},
+    {"ref_image_args",   "ref_image_args",                      &SDGenParams::ref_image_args},
     {"extra_sample_args","sample.args",                         &SDGenParams::extra_sample_args},
-    {"cache_mode",       "cache.mode",                          &SDGenParams::cache_mode},
+    {"cache_mode",       "cache.mode",                          &SDGenParams::cache_mode, dec_cache_mode},
     {"cache_options",    nullptr,                               &SDGenParams::cache_options},
 };
 static const GenF32 gen_f32[] = {
@@ -2846,6 +2988,46 @@ static const GenImages gen_images[] = {
     {"extra_images",     nullptr,                               &SDGenParams::img_extra_images},
 };
 
+// tracking keys of the rows rewritten/settled outside the table loops
+// (must match the `out` key of the row)
+static constexpr char TRACK_REF_IMAGE_ARGS[] = "ref_image_args";
+static constexpr char TRACK_CFG_SCALE[]      = "sample.guidance.txt_cfg";
+static constexpr char TRACK_SAMPLE_STEPS[]   = "sample.steps";
+static constexpr char TRACK_WIDTH[]          = "width";
+static constexpr char TRACK_HEIGHT[]         = "height";
+
+// settle the shared table fields onto a generation option set: only members
+// present in the request are set (absent = library default); rows without an
+// sd_opt key (kcpp-only) are skipped
+static void settle_gen_tables(sd_opt_t* opt, const SDGenParams& gp, const std::set<std::string>& present)
+{
+    for (const auto& f : gen_str) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_string(opt, f.out, (gp.*f.p).c_str());
+        }
+    }
+    for (const auto& f : gen_f32) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_float(opt, f.out, gp.*f.p);
+        }
+    }
+    for (const auto& f : gen_i32) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_int(opt, f.out, gp.*f.p);
+        }
+    }
+    for (const auto& f : gen_i64) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_int(opt, f.out, gp.*f.p);
+        }
+    }
+    for (const auto& f : gen_bool) {
+        if (sd_check_key(present, f.out)) {
+            sd_opt_set_bool(opt, f.out, gp.*f.p);
+        }
+    }
+}
+
 // resolve the decoded generation parameters in place: apply the model-aware
 // clamps, fix the resolution and tiling, decode/route/fit the media, and settle
 // the request kind (image vs video, img2img, passthrough). This is the generate
@@ -2854,7 +3036,8 @@ static const GenImages gen_images[] = {
 // upstream structs (the API transition tracks them as a set of defined keys).
 // Returns an empty string on success, otherwise the user-visible error.
 static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const KcppLoadParams& klp,
-                                                      PromptImageRef& prompt_image_ref)
+                                                      PromptImageRef& prompt_image_ref,
+                                                      std::set<std::string>& present)
 {
     // ref_image_args: auto-resize prefix, forced edit mode when a preset is given
     if (gp.ref_image_args.find("preset") != std::string::npos) {
@@ -2864,6 +3047,8 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
         }
     }
     gp.ref_image_args = "resize_before_vae=on" + ((gp.ref_image_args.empty() ? "" : ",") + gp.ref_image_args);
+    // always rewritten: settle it even when the request gave no value
+    present.insert(TRACK_REF_IMAGE_ARGS);
 
     gp.loras = gp.lora_map.get_lora_specs();
 
@@ -2912,6 +3097,7 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
                 printf("Flux: clamping CFG Scale to 1\n");
             }
             gp.cfg_scale = 1.0f;
+            present.insert(TRACK_CFG_SCALE);
         }
     }
 
@@ -2923,6 +3109,7 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
                 printf("Z-Image: clamping CFG Scale to 4.0 to preserve quality\n");
             }
             gp.cfg_scale = 4.0f;
+            present.insert(TRACK_CFG_SCALE);
         }
     }
 
@@ -2935,6 +3122,8 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
             }
             gp.cfg_scale = 1.0f;
             gp.sample_steps = 1;
+            present.insert(TRACK_CFG_SCALE);
+            present.insert(TRACK_SAMPLE_STEPS);
         }
         // A custom sigma list determines the real sampler iteration count and
         // would otherwise bypass the SDXS one-step restriction above. A
@@ -2998,6 +3187,8 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
     if (gp.req_width != gp.width || gp.req_height != gp.height) {
         printf("\nKCPP SD: Requested dimensions %dx%d changed to %dx%d\n",
             gp.req_width, gp.req_height, gp.width, gp.height);
+        present.insert(TRACK_WIDTH);
+        present.insert(TRACK_HEIGHT);
     }
 
     // trigger tiling by image area, the memory used for the VAE buffer is 6656 bytes per image pixel, default 768x768
@@ -3048,7 +3239,7 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
     if(!gp.img_extra_images.empty())
     {
         if (vision_tags_active) {
-            prompt_image_ref.image_pool.resize(std::min(gp.img_extra_images.size(), (size_t)max_extra_images));
+            prompt_image_ref.resize(std::min(gp.img_extra_images.size(), (size_t)max_extra_images));
         }
         for(size_t i=0;i<gp.img_extra_images.size() && i<(size_t)max_extra_images;++i)
         {
@@ -3095,7 +3286,7 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
                 continue;
             }
             if (vision_tags_active) {
-                prompt_image_ref.image_pool[i] = image;
+                prompt_image_ref.set(i, image);
                 if (image_tags.hidden.count(i)) {
                     continue; // used only as VLM context, kept out of the ref list
                 }
@@ -3204,17 +3395,6 @@ static std::string kcpp_resolve_generation_parameters(SDGenParams& gp, const Kcp
     return {};
 }
 
-// map the IR sampler choice to the final one: an absent sampler uses the
-// model's default. This is a final default resolve, kept next to the upstream
-// structs (the API transition will pass "auto" instead).
-static sample_method_t kcpp_resolve_sample_method(const SDGenParams& gp, sd_ctx_t* sd_ctx)
-{
-    if (gp.sample_method == sample_method_t::SAMPLE_METHOD_COUNT) {
-        return sd_get_default_sample_method(sd_ctx);
-    }
-    return gp.sample_method;
-}
-
 sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 {
     TryLocker no_concurrency{g_sd_op_mutex, std::try_to_lock};
@@ -3247,34 +3427,42 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     SDGenParams gp;
     gp.lora_map = klp.lora_map;
 
+    // tracking keys of the fields present in the request payload: the settle
+    // forwards only these (absent = library default)
+    std::set<std::string> present;
     {
         SdErrors errors;
         nlohmann::json payload = sdjson_parse_payload(inputs.params_json, errors);
         if (payload.is_object()) {
             // one strict getter per field row
-            for (const auto& f : gen_str)
-                sdjson_get(gp.*f.p, f.in, payload, errors);
+            for (const auto& f : gen_str) {
+                std::string s;
+                if (sdjson_get(s, f.in, payload, errors)) {
+                    gp.*f.p = f.dec ? f.dec(s) : s;
+                    sd_track_key(present, f.out);
+                }
+            }
             for (const auto& f : gen_f32)
-                sdjson_get(gp.*f.p, f.in, payload, errors);
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : gen_i32)
-                sdjson_get(gp.*f.p, f.in, payload, errors);
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : gen_i64)
-                sdjson_get(gp.*f.p, f.in, payload, errors);
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : gen_bool)
-                sdjson_get(gp.*f.p, f.in, payload, errors);
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : gen_vec_str)
-                sdjson_get(gp.*f.p, f.in, payload, errors);
+                if (sdjson_get(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : gen_image)
-                sdjson_get_image(gp.*f.p, f.in, payload, errors);
+                if (sdjson_get_image(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
             for (const auto& f : gen_images)
-                sdjson_get_images(gp.*f.p, f.in, payload, errors);
+                if (sdjson_get_images(gp.*f.p, f.in, payload, errors)) sd_track_key(present, f.out);
 
             // sample_method / scheduler: JSON string -> enum on decode
             std::string sample_method, scheduler;
             sdjson_get(sample_method, "sample_method", payload, errors);
             sdjson_get(scheduler, "scheduler", payload, errors);
-            gp.sample_method = sampler_from_name(sample_method);
-            gp.scheduler = scheduler_from_name(scheduler.c_str());
+            gp.sample_method = str_to_sample_method(sample_method.c_str());
+            gp.scheduler = str_to_scheduler(scheduler.c_str());
 
             if (klp.lora_dynamic) {
                 sdjson_get_loras("loras", payload, errors, gp.lora_map);
@@ -3311,10 +3499,14 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     sd_ctx_t* sd_ctx = sd_params->sd_ctx; // protected by no_concurrency mutex
 
     PromptImageRef prompt_image_ref;
-    std::string resolve_error = kcpp_resolve_generation_parameters(gp, klp, prompt_image_ref);
+    std::string resolve_error = kcpp_resolve_generation_parameters(gp, klp, prompt_image_ref, present);
     if (!resolve_error.empty()) {
         return sd_generation.error(resolve_error.c_str());
     }
+    // strength applies to image-to-image and to every video request; a txt2img
+    // request leaves it at the library default (as the per-kind settle gates did)
+    if (!gp.is_img2img && !gp.is_vidgen)
+        present.erase("strength");
 
     struct CleanupImageCallbackOnExit {
         sd_ctx_t* sd_ctx;
@@ -3361,87 +3553,68 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         fflush(stdout);
 
-        sd_vid_gen_params_t vid_gen_params = {};
-        sd_vid_gen_params_init (&vid_gen_params);
-
-        // settle the resolved parameters into the upstream video generation params.
-        // The sd_vid_gen_params_init defaults apply; only IR-provided values (plus the
-        // model-default sampler) override them.
+        // settle the resolved parameters into the video generation options;
+        // only request-present fields are set (absent = library default)
+        sd_result_t* vid_result = nullptr;
         {
-            // this is a local block because it'll have to be replaced whole on
-            // the upcoming sd.cpp API change anyway
-            vid_gen_params.prompt = gp.prompt.c_str();
-            vid_gen_params.negative_prompt = gp.negative_prompt.c_str();
-            vid_gen_params.clip_skip = gp.clip_skip;
-            vid_gen_params.width = gp.width;
-            vid_gen_params.height = gp.height;
-            vid_gen_params.sample_params.guidance.txt_cfg = gp.cfg_scale;
-            if (gp.distilled_guidance >= 0.f) {
-                vid_gen_params.sample_params.guidance.distilled_guidance = gp.distilled_guidance;
+            auto* opt = sd_vid_gen_opt_create();
+            settle_gen_tables(opt, gp, present);
+            if (gp.vid_req_frames > 0) {
+                sd_opt_set_int(opt, "video_frames", gp.vid_req_frames);
             }
-            vid_gen_params.sample_params.sample_method = kcpp_resolve_sample_method(gp, sd_ctx);
-            vid_gen_params.sample_params.scheduler = gp.scheduler;
-            vid_gen_params.sample_params.sample_steps = gp.sample_steps;
+            if (gp.vid_fps > 0) {
+                sd_opt_set_int(opt, "fps", gp.vid_fps);
+            }
             if (!gp.custom_sigmas.empty()) {
-                vid_gen_params.sample_params.custom_sigmas = gp.custom_sigmas.data();
-                vid_gen_params.sample_params.custom_sigmas_count = (int)gp.custom_sigmas.size();
+                sd_opt_set_floats(opt, "sample.sigmas", gp.custom_sigmas.data(), gp.custom_sigmas.size());
             }
-            vid_gen_params.sample_params.shifted_timestep = gp.shifted_timestep;
-            if (gp.eta >= 0.f && gp.eta <= 1.f) {
-                vid_gen_params.sample_params.eta = gp.eta;
+            if (gp.sample_method != sample_method_t::SAMPLE_METHOD_COUNT) {
+                sd_opt_set_string(opt, "sample.method", sd_sample_method_name(gp.sample_method));
             }
-            if (gp.flow_shift > 0.f && gp.flow_shift != INFINITY) {
-                vid_gen_params.sample_params.flow_shift = gp.flow_shift;
+            if (gp.scheduler != scheduler_t::SCHEDULER_COUNT) {
+                sd_opt_set_string(opt, "sample.scheduler", sd_scheduler_name(gp.scheduler));
             }
-            vid_gen_params.sample_params.extra_sample_args = gp.extra_sample_args.c_str();
-            vid_gen_params.strength = gp.strength;
-            vid_gen_params.seed = gp.seed;
-            vid_gen_params.video_frames = gp.vid_req_frames;
-            vid_gen_params.fps = gp.vid_fps;
-            vid_gen_params.vae_tiling_params.enabled = gp.dotile;
+            sd_opt_set_bool(opt, "vae_tiling.enabled", gp.dotile);
             if (gp.vae_tile_size > 0) {
-                vid_gen_params.vae_tiling_params.tile_size_w = gp.vae_tile_size;
-                vid_gen_params.vae_tiling_params.tile_size_h = gp.vae_tile_size;
+                sd_opt_set_int(opt, "vae_tiling.tile_size_w", gp.vae_tile_size);
+                sd_opt_set_int(opt, "vae_tiling.tile_size_h", gp.vae_tile_size);
             }
             if (gp.dotile) {
-                vid_gen_params.vae_tiling_params.temporal_tiling = true;
+                sd_opt_set_bool(opt, "vae_tiling.temporal_tiling", true);
             }
-            vid_gen_params.loras = gp.loras.data();
-            vid_gen_params.lora_count = gp.loras.size();
-            if (gp.reference_imgs.size() > 0) {
-                vid_gen_params.ref_images = gp.reference_imgs.views();
-                vid_gen_params.ref_images_count = (int)gp.reference_imgs.size();
+            parse_cache_options(opt, gp.cache_mode, gp.cache_options);
+            // the library tracks previously applied LoRAs and applies the
+            // difference at each gen: an empty list unapplies all
+            sd_opt_set_loras(opt, "loras", gp.loras.data(), gp.loras.size());
+            set_images_opt(opt, "ref_images", gp.reference_imgs);
+            set_audios_opt(opt, "ref_audios", gp.ref_audios);
+            set_image_opt(opt, "init_image", gp.vid_start_frame);
+            set_image_opt(opt, "end_image", gp.vid_end_frame);
+
+            sd_status_t status = sd_generate_video(sd_ctx, opt, &vid_result);
+            sd_opt_free(opt); // the option set is consumed (or rejected) by now
+            if (status != SD_STATUS_OK || vid_result == nullptr) {
+                if (vid_result != nullptr) {
+                    sd_result_free(vid_result);
+                    vid_result = nullptr;
+                }
             }
-            if (gp.ref_audios.size() > 0) {
-                vid_gen_params.ref_audios = gp.ref_audios.views();
-                vid_gen_params.ref_audios_count = (int)gp.ref_audios.size();
-            }
-            if (gp.vid_start_frame.valid()) {
-                vid_gen_params.init_image = gp.vid_start_frame.view();
-            }
-            if (gp.vid_end_frame.valid()) {
-                vid_gen_params.end_image = gp.vid_end_frame.view();
-            }
-            parse_cache_options(vid_gen_params.cache, gp.cache_mode, gp.cache_options);
-            vid_gen_params.circular_x = gp.circular_x;
-            vid_gen_params.circular_y = gp.circular_y;
         }
 
         if(!sd_is_quiet && sddebugmode==1)
         {
             std::stringstream ss;
-            ss  << "\nVID PROMPT:" << vid_gen_params.prompt
-                << "\nNPROMPT:"   << vid_gen_params.negative_prompt
-                << "\nCLPSKP:"   << vid_gen_params.clip_skip
-                << "\nSIZE:"     << vid_gen_params.width << "x" << vid_gen_params.height
-                << "\nSTEP:"     << vid_gen_params.sample_params.sample_steps
-                << "\nSEED:"     << vid_gen_params.seed
-                << "\nSTRENGTH:" << vid_gen_params.strength
-                << "\nFRAMES:"   << vid_gen_params.video_frames
-                << "\nCTRL_FRM:" << vid_gen_params.control_frames_size
-                << "\nINIT_IMGS:" << ((vid_gen_params.init_image.data ? 1 : 0) + (vid_gen_params.end_image.data ? 1 : 0))
-                << "\nREF_IMGS:" << vid_gen_params.ref_images_count
-                << "\nREF_AUDIOS:" << vid_gen_params.ref_audios_count
+            ss  << "\nVID PROMPT:" << gp.prompt
+                << "\nNPROMPT:"   << gp.negative_prompt
+                << "\nCLPSKP:"   << gp.clip_skip
+                << "\nSIZE:"     << gp.width << "x" << gp.height
+                << "\nSTEP:"     << gp.sample_steps
+                << "\nSEED:"     << gp.seed
+                << "\nSTRENGTH:" << gp.strength
+                << "\nFRAMES:"   << gp.vid_req_frames
+                << "\nINIT_IMGS:" << ((gp.vid_start_frame.valid() ? 1 : 0) + (gp.vid_end_frame.valid() ? 1 : 0))
+                << "\nREF_IMGS:" << gp.reference_imgs.size()
+                << "\nREF_AUDIOS:" << gp.ref_audios.size()
                 << "\n\n";
             printf("%s", ss.str().c_str());
         }
@@ -3450,16 +3623,18 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         generated_audio = KcppAudio{};
         int output_fps = gp.vid_fps;
-        sd_video_generation_result_t* vid_result = nullptr;
-        if (generate_video(sd_ctx, &vid_gen_params, &vid_result)) {
-            generated_num_results = vid_result->frame_count;
-            jsonresults.push_back(parse_generation_info(vid_result->generation_info));
-            generated_audio = vid_result->audio ? KcppAudio::from_sd_audio(*vid_result->audio) : KcppAudio{};
-            output_fps = vid_result->fps;
-            for (int i = 0; i < generated_num_results; ++i) {
-                result_images.push_back(KcppImage::from_sd_image(vid_result->frames[i]));
+        if (vid_result != nullptr) {
+            const sd_video_t* vid = sd_result_get_video(vid_result);
+            if (vid != nullptr && vid->data != nullptr) {
+                generated_num_results = (int) sd_tensor_dim(vid->data, 3);
+                for (int i = 0; i < generated_num_results; ++i) {
+                    result_images.push_back(KcppImage::from_tensor(vid->data, i));
+                }
+                output_fps = vid->fps;
+                generated_audio = (vid->audio.data != nullptr) ? KcppAudio::from_audio(&vid->audio) : KcppAudio{};
             }
-            free_sd_video_generation_result(vid_result);
+            jsonresults.push_back(parse_generation_info(sd_result_get_generation_info(vid_result, 0)));
+            sd_result_free(vid_result);
             if(!sd_is_quiet && sddebugmode==1)
             {
                 printf("\nRequested Vid Frames: %d, Generated Vid Frames: %d\n",gp.vid_req_frames, generated_num_results);
@@ -3472,74 +3647,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
     else
     {
-        // settle the resolved parameters into the upstream image params; the
-        // sd_*_gen_params defaults are resolved here, next to the struct
-        sd_img_gen_params_t params = {};
-        sd_img_gen_params_init (&params);
-
-        // Only values provided/resolved in the IR override the sd_img_gen_params_init defaults.
-        {
-            // this is a local block because it'll have to be replaced whole on the
-            // upcoming sd.cpp API transition anyway
-            params.batch_count = 1;
-            params.ref_image_args = gp.ref_image_args.c_str();
-            params.prompt = gp.prompt.c_str();
-            params.negative_prompt = gp.negative_prompt.c_str();
-            params.clip_skip = gp.clip_skip;
-            params.sample_params.guidance.txt_cfg = gp.cfg_scale;
-            // params.sample_params.guidance.img_cfg = gp.cfg_scale; //removed, breaks qwen img edit and more
-            if (gp.distilled_guidance >= 0.f) {
-                params.sample_params.guidance.distilled_guidance = gp.distilled_guidance;
-            }
-            params.width = gp.width;
-            params.height = gp.height;
-            params.sample_params.sample_method = kcpp_resolve_sample_method(gp, sd_ctx);
-            params.sample_params.scheduler = gp.scheduler;
-            params.sample_params.sample_steps = gp.sample_steps;
-            if (!gp.custom_sigmas.empty()) {
-                params.sample_params.custom_sigmas = gp.custom_sigmas.data();
-                params.sample_params.custom_sigmas_count = (int)gp.custom_sigmas.size();
-            }
-            params.sample_params.shifted_timestep = gp.shifted_timestep;
-            if (gp.eta >= 0.f && gp.eta <= 1.f) {
-                params.sample_params.eta = gp.eta;
-            }
-            if (gp.flow_shift > 0.f && gp.flow_shift != INFINITY) {
-                params.sample_params.flow_shift = gp.flow_shift;
-            }
-            params.sample_params.extra_sample_args = gp.extra_sample_args.c_str();
-            params.seed = gp.seed;
-            params.vae_tiling_params.enabled = gp.dotile;
-            if (gp.vae_tile_size > 0) {
-                params.vae_tiling_params.tile_size_w = gp.vae_tile_size;
-                params.vae_tiling_params.tile_size_h = gp.vae_tile_size;
-            }
-            if(gp.dotile)
-            {
-                params.vae_tiling_params.temporal_tiling = true;
-            }
-            parse_cache_options(params.cache, gp.cache_mode, gp.cache_options);
-            params.circular_x = gp.circular_x;
-            params.circular_y = gp.circular_y;
-
-            // note sdcpp tracks previously applied LoRAs and weights,
-            // and apply/unapply the differences at each gen
-            params.loras = gp.loras.data();
-            params.lora_count = gp.loras.size();
-
-            params.ref_images = gp.reference_imgs.views();
-            params.ref_images_count = (int)gp.reference_imgs.size();
-            params.pm_params.id_images = gp.photomaker_imgs.views();
-            params.pm_params.id_images_count = (int)gp.photomaker_imgs.size();
-            if (gp.is_img2img) {
-                // the input and mask were fitted (and the mask completed/flipped)
-                // while resolving the parameters
-                params.init_image = gp.img_init_image.view();
-                params.mask_image = gp.img_mask.view();
-                params.strength = gp.strength;
-            }
-        }
-
         std::string ts = get_timestamp_str();
         if(!sd_is_quiet)
         {
@@ -3550,28 +3657,61 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
 
         fflush(stdout);
 
-        // txt2img and img2img differ only by what the settle put in
-        // init_image/mask, so both use the same call
-        if(!sd_is_quiet && sddebugmode==1)
+        // settle the resolved parameters into the image generation options;
+        // only request-present fields are set (absent = library default)
+        sd_result_t* img_result = nullptr;
         {
-            char* buf = sd_img_gen_params_to_str(&params);
-            if(buf)
-            {
-                printf("\n%s\n", buf);
-                free(buf);
+            auto* opt = sd_img_gen_opt_create();
+            settle_gen_tables(opt, gp, present);
+            if (gp.is_img2img) {
+                // the input and mask were fitted (and the mask completed/flipped)
+                // while resolving the parameters
+                set_image_opt(opt, "init_image", gp.img_init_image);
+                set_image_opt(opt, "mask_image", gp.img_mask);
+            }
+            if (!gp.custom_sigmas.empty()) {
+                sd_opt_set_floats(opt, "sample.sigmas", gp.custom_sigmas.data(), gp.custom_sigmas.size());
+            }
+            if (gp.sample_method != sample_method_t::SAMPLE_METHOD_COUNT) {
+                sd_opt_set_string(opt, "sample.method", sd_sample_method_name(gp.sample_method));
+            }
+            if (gp.scheduler != scheduler_t::SCHEDULER_COUNT) {
+                sd_opt_set_string(opt, "sample.scheduler", sd_scheduler_name(gp.scheduler));
+            }
+            sd_opt_set_bool(opt, "vae_tiling.enabled", gp.dotile);
+            if (gp.vae_tile_size > 0) {
+                sd_opt_set_int(opt, "vae_tiling.tile_size_w", gp.vae_tile_size);
+                sd_opt_set_int(opt, "vae_tiling.tile_size_h", gp.vae_tile_size);
+            }
+            if (gp.dotile) {
+                sd_opt_set_bool(opt, "vae_tiling.temporal_tiling", true);
+            }
+            parse_cache_options(opt, gp.cache_mode, gp.cache_options);
+            // the library tracks previously applied LoRAs and applies the
+            // difference at each gen: an empty list unapplies all
+            sd_opt_set_loras(opt, "loras", gp.loras.data(), gp.loras.size());
+            set_images_opt(opt, "ref_images", gp.reference_imgs);
+            set_images_opt(opt, "photomaker.id_images", gp.photomaker_imgs);
+
+            sd_status_t status = sd_generate_image(sd_ctx, opt, &img_result);
+            sd_opt_free(opt); // the option set is consumed (or rejected) by now
+            if (status != SD_STATUS_OK || img_result == nullptr) {
+                if (img_result != nullptr) {
+                    sd_result_free(img_result);
+                    img_result = nullptr;
+                }
             }
         }
 
-        fflush(stdout);
-
-        sd_image_generation_result_t* img_result = nullptr;
-        if (generate_image(sd_ctx, &params, &img_result)) {
-            generated_num_results = img_result->count;
+        // txt2img and img2img differ only by what the settle put in
+        // init_image/mask, so both use the same call
+        if (img_result != nullptr) {
+            generated_num_results = (int) sd_result_get_image_count(img_result);
             for (int i = 0; i < generated_num_results; ++i) {
-                result_images.push_back(KcppImage::from_sd_image(img_result->items[i].image));
-                jsonresults.push_back(parse_generation_info(img_result->items[i].generation_info));
+                result_images.push_back(KcppImage::from_tensor(sd_result_get_image(img_result, i)));
+                jsonresults.push_back(parse_generation_info(sd_result_get_generation_info(img_result, i)));
             }
-            free_sd_image_generation_result(img_result);
+            sd_result_free(img_result);
         }
     }
 
@@ -3602,7 +3742,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
         if(upscaler_ctx != nullptr)
         {
             printf("Upscaling original image (passthrough)...\n");
-            gen_data = upscale_image_to_png_base64(upscaler_ctx, pimg, 2);
+            gen_data = upscale_image_to_png_base64(upscaler_ctx, pimg);
         }
         else {
             gen_data = raw_image_to_png_base64(pimg);
@@ -3688,7 +3828,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
             if(upscaler_ctx != nullptr && gp.upscale)
             {
                 printf("Upscaling output image...\n");
-                gen_data = upscale_image_to_png_base64(upscaler_ctx, result_image, 2, meta_image_info);
+                gen_data = upscale_image_to_png_base64(upscaler_ctx, result_image, meta_image_info);
             } else {
                 gen_data = raw_image_to_png_base64(result_image, meta_image_info);
             }
@@ -3714,7 +3854,7 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     return sd_generation.outputs(1);
 }
 
-static void step_callback(int step, int frame_count, sd_image_t* image, bool is_noisy, void* data)
+static void step_callback(int step, int frame_count, const sd_tensor_t* const* frames, bool is_noisy, void* data)
 {
     step = step < 0 ? -step : step;
     std::lock_guard<std::mutex> lock(geninfo.mux);
@@ -3744,41 +3884,46 @@ static void step_callback(int step, int frame_count, sd_image_t* image, bool is_
     }
 
     std::string preview;
-    if (image != nullptr && frame_count > 0) {
+    if (frames != nullptr && frame_count > 0) {
         constexpr uint32_t preview_max_dimension = 128;
         KcppImages preview_images;
         std::vector<std::vector<uint8_t>> resized_image_data(static_cast<size_t>(frame_count));
         bool resize_ok = true;
 
         for (int i = 0; i < frame_count; ++i) {
-            const sd_image_t& source = image[i];
-            if (source.width <= preview_max_dimension && source.height <= preview_max_dimension) {
-                preview_images.push_back(KcppImage::from_sd_image(source));
+            // copy the frame out of the borrowed tensor; the preview is
+            // encoded from the copy (the tensor is valid only in this call)
+            KcppImage source = KcppImage::from_tensor(frames[i]);
+            if (!source.valid()) {
+                resize_ok = false;
+                break;
+            }
+            if (source.w <= preview_max_dimension && source.h <= preview_max_dimension) {
+                preview_images.push_back(source);
                 continue;
             }
 
             uint32_t resized_width;
             uint32_t resized_height;
-            if (source.width >= source.height) {
+            if (source.w >= source.h) {
                 resized_width = preview_max_dimension;
                 resized_height = std::max(1u, static_cast<uint32_t>(
-                    static_cast<uint64_t>(source.height) * preview_max_dimension / source.width));
+                    static_cast<uint64_t>(source.h) * preview_max_dimension / source.w));
             } else {
                 resized_height = preview_max_dimension;
                 resized_width = std::max(1u, static_cast<uint32_t>(
-                    static_cast<uint64_t>(source.width) * preview_max_dimension / source.height));
+                    static_cast<uint64_t>(source.w) * preview_max_dimension / source.h));
             }
 
             auto& pixels = resized_image_data[static_cast<size_t>(i)];
-            pixels.resize(static_cast<size_t>(resized_width) * resized_height * source.channel);
-            if (source.data == nullptr || source.channel == 0 ||
-                !stbir_resize_uint8(source.data, source.width, source.height, 0,
-                                    pixels.data(), resized_width, resized_height, 0, source.channel)) {
+            pixels.resize(static_cast<size_t>(resized_width) * resized_height * source.c);
+            if (!stbir_resize_uint8(source.px->data(), source.w, source.h, 0,
+                                    pixels.data(), resized_width, resized_height, 0, source.c)) {
                 resize_ok = false;
                 break;
             }
             auto v = std::make_shared<std::vector<uint8_t>>(std::move(pixels));
-            preview_images.push_back(KcppImage{resized_width, resized_height, source.channel, std::move(v)});
+            preview_images.push_back(KcppImage{resized_width, resized_height, source.c, std::move(v)});
         }
 
         if (resize_ok) {
@@ -3851,7 +3996,7 @@ sd_generation_outputs sdtype_upscale(const sd_upscale_inputs inputs)
     std::string result;
     if(source_img.valid())
     {
-        result = upscale_image_to_png_base64(upscaler_ctx, source_img, params.upscaling_resize);
+        result = upscale_image_to_png_base64(upscaler_ctx, source_img);
     }
 
     if (result == "") {

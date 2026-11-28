@@ -1,12 +1,14 @@
-// kcpp_media.h — read-only media views over shared storage (pixels, audio
+// kcpp_media.h — read-only media over shared storage (pixels, audio
 // samples) for the sdcpp boundary. Owned by Koboldcpp.
 //
 // A KcppImage owns its pixels (HWC, interleaved uint8) and a KcppAudio owns
 // its samples (interleaved float) through a shared_ptr, and both hand out
-// plain sd_image_t / sd_audio_t views for the sdcpp boundary. All operations
-// are read-only: derived media (resize, flipped_mask) are new objects and
-// never mutate their source. Views borrow the storage; they are valid while
-// the owning media object is alive.
+// sd_tensor_t handles carrying that same interleaved storage for the sdcpp
+// boundary (the [C,W,H]/[C,N] tensor shape is metadata only — the library
+// reads the buffer as an interleaved sd::Image/sd::Audio), as well as copy
+// sdcpp result tensors back (from_tensor / from_audio). All operations are
+// read-only: derived media (resize, flipped_mask) are new objects and never
+// mutate their source.
 //
 // An image is either null (w/h/c == 0, px == nullptr — the default state and
 // the result of a failed decode) or valid (w,h,c > 0, px non-null with
@@ -40,9 +42,9 @@ struct KcppImage {
     // null image on failure
     static KcppImage from_b64(const std::string& b64);
 
-    // old API bridge: copy of a vendored sd_image_t (replaced by from_tensor
-    // once the sdcpp results move to tensors); null image on an invalid source
-    static KcppImage from_sd_image(const sd_image_t&);
+    // copy of a U8 [C,W,H] image tensor, or of frame `frame` of a U8 [C,W,H,T]
+    // video tensor; null image on an invalid source
+    static KcppImage from_tensor(const sd_tensor_t* tensor, int frame = 0);
 
     // center-crop to the target aspect, resize to exact w/h, convert to c
     // channels; short-circuits when the target already matches; null image
@@ -58,19 +60,11 @@ struct KcppImage {
     // true when dimensions and pixel content match (two null images match)
     bool same_as(const KcppImage& other) const;
 
-    // old API boundary: borrows the pixels; a null image views as {0,0,0,nullptr}
-    sd_image_t view() const;
-
     // copy count pixels, converting between channel counts (the vendored
     // stb_image_resize only handles a single channel count); false when the
     // conversion is unsupported
     static bool convert_pixels(const uint8_t* src, uint32_t src_c,
                                uint8_t* dst, uint32_t dst_c, size_t count);
-
-    /* future api
-    std::shared_ptr<const std::vector<uint8_t>> to_planar() const;  // sd_tensor_create
-    static KcppImage from_tensor(const sd_tensor_t*); // results/previews (copies)
-    */
 };
 
 inline KcppImage KcppImage::from_b64(const std::string& b64)
@@ -95,14 +89,36 @@ inline KcppImage KcppImage::from_b64(const std::string& b64)
     return KcppImage{(uint32_t)w, (uint32_t)h, channels, std::move(v)};
 }
 
-inline KcppImage KcppImage::from_sd_image(const sd_image_t& image)
+inline KcppImage KcppImage::from_tensor(const sd_tensor_t* tensor, int frame)
 {
-    if (image.width == 0 || image.height == 0 || image.channel == 0 || image.data == nullptr) {
+    if (tensor == nullptr) {
         return KcppImage{};
     }
+    const size_t rank = sd_tensor_rank(tensor);
+    if (rank != 3 && rank != 4) {
+        return KcppImage{};
+    }
+    if (sd_tensor_type(tensor) != SD_TENSOR_U8) {
+        return KcppImage{};
+    }
+    const int64_t C = sd_tensor_dim(tensor, 0);
+    const int64_t W = sd_tensor_dim(tensor, 1);
+    const int64_t H = sd_tensor_dim(tensor, 2);
+    const int64_t T = (rank == 4) ? sd_tensor_dim(tensor, 3) : 1;
+    if (C <= 0 || W <= 0 || H <= 0 || T <= 0 || frame < 0 || frame >= (int)T) {
+        return KcppImage{};
+    }
+    const uint8_t* data = static_cast<const uint8_t*>(sd_tensor_data(tensor));
+    if (data == nullptr) {
+        return KcppImage{};
+    }
+    const uint32_t c = (uint32_t)C, w = (uint32_t)W, h = (uint32_t)H;
+    const size_t plane = (size_t)w * h;
+    const size_t frame_offset = (size_t)frame * plane * c;
+    // the tensor buffer is interleaved HWC, same as our storage
     auto v = std::make_shared<std::vector<uint8_t>>(
-        image.data, image.data + (size_t)image.width * image.height * image.channel);
-    return KcppImage{image.width, image.height, image.channel, std::move(v)};
+        data + frame_offset, data + frame_offset + plane * c);
+    return KcppImage{w, h, c, std::move(v)};
 }
 
 inline KcppImage KcppImage::resize(uint32_t w, uint32_t h, uint32_t c) const
@@ -222,49 +238,17 @@ inline bool KcppImage::same_as(const KcppImage& other) const
     return w == other.w && h == other.h && c == other.c && *px == *other.px;
 }
 
-inline sd_image_t KcppImage::view() const
-{
-    if (!valid()) {
-        return sd_image_t{0, 0, 0, nullptr};
-    }
-    return sd_image_t{w, h, c, const_cast<uint8_t*>(px->data())};
-}
-
 // a list of KcppImages (e.g. reference images)
 struct KcppImages {
-    KcppImages() = default;
-    // copied views hold pointers into the source's pixel storage: rebuild
-    KcppImages(const KcppImages& other) : items_(other.items_), views_stale_(true) {}
-    KcppImages& operator=(const KcppImages& other) {
-        items_ = other.items_;
-        views_stale_ = true;
-        return *this;
-    }
-
     bool empty() const { return items_.empty(); }
     size_t size() const { return items_.size(); }
     const KcppImage& at(size_t i) const { return items_[i]; }
     const KcppImage& operator[](size_t i) const { return items_[i]; }
-    void push_back(const KcppImage& img) { items_.push_back(img); views_stale_ = true; }
-    void clear() { items_.clear(); views_stale_ = true; }
-
-    // old API boundary: views owned by *this, invalidated by push_back/clear
-    // (views are only needed while the sdcpp call is in flight)
-    sd_image_t* views() const {
-        if (views_stale_) {
-            views_.resize(items_.size());
-            for (size_t i = 0; i < items_.size(); ++i) {
-                views_[i] = items_[i].view();
-            }
-            views_stale_ = false;
-        }
-        return views_.data();
-    }
+    void push_back(const KcppImage& img) { items_.push_back(img); }
+    void clear() { items_.clear(); }
 
 private:
     std::vector<KcppImage> items_;
-    mutable std::vector<sd_image_t> views_;
-    mutable bool views_stale_ = true;
 };
 
 // an audio track: interleaved float PCM plus sample-rate/channel metadata
@@ -280,18 +264,9 @@ struct KcppAudio {
     // rate/channels, no resampling; null audio on failure
     static KcppAudio from_b64(const std::string& b64audio);
 
-    // old API bridge: copy of a vendored sd_audio_t (interleaved; replaced by
-    // from_audio once the sdcpp results move to tensors); null audio on an
-    // invalid source
-    static KcppAudio from_sd_audio(const sd_audio_t&);
-
-    // old API boundary: borrows the samples; a null audio views as {0,0,0,nullptr}
-    sd_audio_t view() const;
-
-    /* future api
-    std::shared_ptr<const std::vector<float>> to_planar() const;  // sd_tensor_create
-    static KcppAudio from_tensor(const sd_audio_t*);              // results (copies)
-    */
+    // copy of an interleaved sdcpp result audio (F32 [C,N]; the buffer is
+    // interleaved PCM, same as our storage); null audio on an invalid source
+    static KcppAudio from_audio(const sd_audio_t* audio);
 };
 
 inline KcppAudio KcppAudio::from_b64(const std::string& b64audio)
@@ -318,59 +293,40 @@ inline KcppAudio KcppAudio::from_b64(const std::string& b64audio)
     return KcppAudio{(uint32_t)sample_rate, (uint32_t)channels, std::move(v)};
 }
 
-inline KcppAudio KcppAudio::from_sd_audio(const sd_audio_t& audio)
+inline KcppAudio KcppAudio::from_audio(const sd_audio_t* audio)
 {
-    if (audio.sample_rate == 0 || audio.channels == 0 || audio.sample_count == 0 || audio.data == nullptr) {
+    if (audio == nullptr || audio->sample_rate == 0 || audio->data == nullptr) {
         return KcppAudio{};
     }
-    const size_t count = (size_t)audio.sample_count * audio.channels;
-    auto v = std::make_shared<std::vector<float>>(audio.data, audio.data + count);
-    return KcppAudio{audio.sample_rate, audio.channels, std::move(v)};
-}
-
-inline sd_audio_t KcppAudio::view() const
-{
-    if (!valid()) {
-        return sd_audio_t{0, 0, 0, nullptr};
+    const sd_tensor_t* data = audio->data;
+    if (sd_tensor_rank(data) != 2 || sd_tensor_type(data) != SD_TENSOR_F32) {
+        return KcppAudio{};
     }
-    return sd_audio_t{sample_rate, channels,
-                      (uint64_t)(samples->size() / channels),
-                      const_cast<float*>(samples->data())};
+    const int64_t C = sd_tensor_dim(data, 0);
+    const int64_t N = sd_tensor_dim(data, 1);
+    if (C <= 0 || N <= 0) {
+        return KcppAudio{};
+    }
+    const float* src = static_cast<const float*>(sd_tensor_data(data));
+    if (src == nullptr) {
+        return KcppAudio{};
+    }
+    const uint32_t channels = (uint32_t)C;
+    const size_t n = (size_t)N;
+    // the tensor buffer is interleaved PCM, same as our storage
+    auto v = std::make_shared<std::vector<float>>(src, src + n * channels);
+    return KcppAudio{audio->sample_rate, channels, std::move(v)};
 }
 
 // a list of KcppAudios (e.g. reference audios)
 struct KcppAudios {
-    KcppAudios() = default;
-    // copied views hold pointers into the source's sample storage: rebuild
-    KcppAudios(const KcppAudios& other) : items_(other.items_), views_stale_(true) {}
-    KcppAudios& operator=(const KcppAudios& other) {
-        items_ = other.items_;
-        views_stale_ = true;
-        return *this;
-    }
-
     bool empty() const { return items_.empty(); }
     size_t size() const { return items_.size(); }
     const KcppAudio& at(size_t i) const { return items_[i]; }
     const KcppAudio& operator[](size_t i) const { return items_[i]; }
-    void push_back(const KcppAudio& audio) { items_.push_back(audio); views_stale_ = true; }
-    void clear() { items_.clear(); views_stale_ = true; }
-
-    // old API boundary: views owned by *this, invalidated by push_back/clear
-    // (views are only needed while the sdcpp call is in flight)
-    sd_audio_t* views() const {
-        if (views_stale_) {
-            views_.resize(items_.size());
-            for (size_t i = 0; i < items_.size(); ++i) {
-                views_[i] = items_[i].view();
-            }
-            views_stale_ = false;
-        }
-        return views_.data();
-    }
+    void push_back(const KcppAudio& audio) { items_.push_back(audio); }
+    void clear() { items_.clear(); }
 
 private:
     std::vector<KcppAudio> items_;
-    mutable std::vector<sd_audio_t> views_;
-    mutable bool views_stale_ = true;
 };
