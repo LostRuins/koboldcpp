@@ -3324,78 +3324,6 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     } cleanup_image_callback_onexit{sd_ctx};
     sd_set_prompt_image_callback(sd_ctx, prompt_image_from_refs, &prompt_image_ref);
 
-    // settle the resolved parameters into the upstream image params; the
-    // sd_*_gen_params defaults are resolved here, next to the struct. These
-    // params also carry the effective values (including the sd.cpp-resolved ones,
-    // e.g. the model-default sampler) used by the response info and the image
-    // metadata on every path, so they are settled even when no image is generated
-    // (passthrough, video).
-    sd_img_gen_params_t params = {};
-    sd_img_gen_params_init (&params);
-
-    // Only values provided/resolved in the IR override the sd_img_gen_params_init defaults.
-    {
-        // this is a local block because it'll have to be replaced whole on the
-        // upcoming sd.cpp API transition anyway
-        params.batch_count = 1;
-        params.ref_image_args = gp.ref_image_args.c_str();
-        params.prompt = gp.prompt.c_str();
-        params.negative_prompt = gp.negative_prompt.c_str();
-        params.clip_skip = gp.clip_skip;
-        params.sample_params.guidance.txt_cfg = gp.cfg_scale;
-        // params.sample_params.guidance.img_cfg = gp.cfg_scale; //removed, breaks qwen img edit and more
-        if (gp.distilled_guidance >= 0.f) {
-            params.sample_params.guidance.distilled_guidance = gp.distilled_guidance;
-        }
-        params.width = gp.width;
-        params.height = gp.height;
-        params.sample_params.sample_method = kcpp_resolve_sample_method(gp, sd_ctx);
-        params.sample_params.scheduler = gp.scheduler;
-        params.sample_params.sample_steps = gp.sample_steps;
-        if (!gp.custom_sigmas.empty()) {
-            params.sample_params.custom_sigmas = gp.custom_sigmas.data();
-            params.sample_params.custom_sigmas_count = (int)gp.custom_sigmas.size();
-        }
-        params.sample_params.shifted_timestep = gp.shifted_timestep;
-        if (gp.eta >= 0.f && gp.eta <= 1.f) {
-            params.sample_params.eta = gp.eta;
-        }
-        if (gp.flow_shift > 0.f && gp.flow_shift != INFINITY) {
-            params.sample_params.flow_shift = gp.flow_shift;
-        }
-        params.sample_params.extra_sample_args = gp.extra_sample_args.c_str();
-        params.seed = gp.seed;
-        params.strength = gp.strength;
-        params.vae_tiling_params.enabled = gp.dotile;
-        if (gp.vae_tile_size > 0) {
-            params.vae_tiling_params.tile_size_w = gp.vae_tile_size;
-            params.vae_tiling_params.tile_size_h = gp.vae_tile_size;
-        }
-        if(gp.dotile)
-        {
-            params.vae_tiling_params.temporal_tiling = true;
-        }
-        parse_cache_options(params.cache, gp.cache_mode, gp.cache_options);
-        params.circular_x = gp.circular_x;
-        params.circular_y = gp.circular_y;
-
-        // note sdcpp tracks previously applied LoRAs and weights,
-        // and apply/unapply the differences at each gen
-        params.loras = gp.loras.data();
-        params.lora_count = gp.loras.size();
-
-        params.ref_images = gp.reference_imgs.views();
-        params.ref_images_count = (int)gp.reference_imgs.size();
-        params.pm_params.id_images = gp.photomaker_imgs.views();
-        params.pm_params.id_images_count = (int)gp.photomaker_imgs.size();
-        if (gp.is_img2img && !gp.is_vidgen) {
-            // the input and mask were fitted (and the mask completed/flipped)
-            // while resolving the parameters
-            params.init_image = gp.img_init_image.view();
-            params.mask_image = gp.img_mask.view();
-        }
-    }
-
     if(!gp.is_passthrough && !sd_is_quiet && sddebugmode==1) {
         if (gp.loras.size() > 0) {
             printf("Applying LoRAs:\n");
@@ -3544,6 +3472,74 @@ sd_generation_outputs sdtype_generate(const sd_generation_inputs inputs)
     }
     else
     {
+        // settle the resolved parameters into the upstream image params; the
+        // sd_*_gen_params defaults are resolved here, next to the struct
+        sd_img_gen_params_t params = {};
+        sd_img_gen_params_init (&params);
+
+        // Only values provided/resolved in the IR override the sd_img_gen_params_init defaults.
+        {
+            // this is a local block because it'll have to be replaced whole on the
+            // upcoming sd.cpp API transition anyway
+            params.batch_count = 1;
+            params.ref_image_args = gp.ref_image_args.c_str();
+            params.prompt = gp.prompt.c_str();
+            params.negative_prompt = gp.negative_prompt.c_str();
+            params.clip_skip = gp.clip_skip;
+            params.sample_params.guidance.txt_cfg = gp.cfg_scale;
+            // params.sample_params.guidance.img_cfg = gp.cfg_scale; //removed, breaks qwen img edit and more
+            if (gp.distilled_guidance >= 0.f) {
+                params.sample_params.guidance.distilled_guidance = gp.distilled_guidance;
+            }
+            params.width = gp.width;
+            params.height = gp.height;
+            params.sample_params.sample_method = kcpp_resolve_sample_method(gp, sd_ctx);
+            params.sample_params.scheduler = gp.scheduler;
+            params.sample_params.sample_steps = gp.sample_steps;
+            if (!gp.custom_sigmas.empty()) {
+                params.sample_params.custom_sigmas = gp.custom_sigmas.data();
+                params.sample_params.custom_sigmas_count = (int)gp.custom_sigmas.size();
+            }
+            params.sample_params.shifted_timestep = gp.shifted_timestep;
+            if (gp.eta >= 0.f && gp.eta <= 1.f) {
+                params.sample_params.eta = gp.eta;
+            }
+            if (gp.flow_shift > 0.f && gp.flow_shift != INFINITY) {
+                params.sample_params.flow_shift = gp.flow_shift;
+            }
+            params.sample_params.extra_sample_args = gp.extra_sample_args.c_str();
+            params.seed = gp.seed;
+            params.vae_tiling_params.enabled = gp.dotile;
+            if (gp.vae_tile_size > 0) {
+                params.vae_tiling_params.tile_size_w = gp.vae_tile_size;
+                params.vae_tiling_params.tile_size_h = gp.vae_tile_size;
+            }
+            if(gp.dotile)
+            {
+                params.vae_tiling_params.temporal_tiling = true;
+            }
+            parse_cache_options(params.cache, gp.cache_mode, gp.cache_options);
+            params.circular_x = gp.circular_x;
+            params.circular_y = gp.circular_y;
+
+            // note sdcpp tracks previously applied LoRAs and weights,
+            // and apply/unapply the differences at each gen
+            params.loras = gp.loras.data();
+            params.lora_count = gp.loras.size();
+
+            params.ref_images = gp.reference_imgs.views();
+            params.ref_images_count = (int)gp.reference_imgs.size();
+            params.pm_params.id_images = gp.photomaker_imgs.views();
+            params.pm_params.id_images_count = (int)gp.photomaker_imgs.size();
+            if (gp.is_img2img) {
+                // the input and mask were fitted (and the mask completed/flipped)
+                // while resolving the parameters
+                params.init_image = gp.img_init_image.view();
+                params.mask_image = gp.img_mask.view();
+                params.strength = gp.strength;
+            }
+        }
+
         std::string ts = get_timestamp_str();
         if(!sd_is_quiet)
         {
